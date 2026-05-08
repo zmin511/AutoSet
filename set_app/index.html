@@ -27,7 +27,19 @@
     main { width: min(1280px, calc(100vw - 32px)); margin: 0 auto; padding: 22px 0 38px; }
     header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-end; margin-bottom: 16px; }
     h1 { font-size: 28px; line-height: 1.1; margin: 0; font-weight: 720; }
-    .paths { color: var(--muted); font-size: 12px; text-align: right; line-height: 1.45; }
+    .paths {
+      color: var(--muted);
+      font-size: 11px;
+      text-align: right;
+      line-height: 1.35;
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 3px 14px;
+      align-items: baseline;
+    }
+    .paths span:nth-child(odd) { color: #c7d2da; }
+    .paths a { color: var(--accent); text-decoration: none; }
+    .paths a:hover { text-decoration: underline; }
     .grid { display: grid; grid-template-columns: minmax(560px, 1.2fr) minmax(380px, .8fr); gap: 18px; align-items: start; }
     section { border-top: 1px solid var(--line); padding-top: 14px; }
     label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 7px; }
@@ -213,7 +225,7 @@
     @media (max-width: 980px) {
       main { width: min(100vw - 20px, 1280px); padding-top: 16px; }
       header, .grid { display: block; }
-      .paths { text-align: left; margin-top: 10px; }
+      .paths { text-align: left; margin-top: 10px; grid-template-columns: auto 1fr; }
       .toolbar, .controls { grid-template-columns: 1fr; }
       .browser { max-height: 48vh; margin-bottom: 18px; }
       .item { grid-template-columns: 38px minmax(0, 1fr) 64px 50px 56px; }
@@ -610,8 +622,14 @@
       const cfg = await res.json();
       const provider = cfg.library_provider || {};
       const detected = (cfg.library_candidates || []).filter(item => item.status === 'detected_not_supported').length;
-      const extra = detected ? `<br>Detected other libraries: ${detected}` : '';
-      $('paths').innerHTML = `${esc(cfg.app_name || 'zmin_autoset')} · v${esc(cfg.version || '0.2.0')}<br>Library: ${esc(provider.name || 'Denon Engine DJ')} · ${esc(provider.status || '')}<br>Music: ${esc(cfg.music_root)}<br>Sets: ${esc(cfg.sets_dir)}<br>DB: ${esc(cfg.db_path)}${extra}`;
+      const repo = cfg.repository_url || 'https://github.com/zmin511/zmin_autoset';
+      $('paths').innerHTML = `
+        <span>Версия</span><span>${esc(cfg.app_name || 'zmin_autoset')} · v${esc(cfg.version || '0.2.0')}</span>
+        <span>Библиотека</span><span>${esc(provider.name || 'Denon Engine DJ')} · ${esc(provider.status || '')}</span>
+        <span>База</span><span title="${esc(cfg.db_path)}">${esc(cfg.db_path)}</span>
+        <span>Сеты</span><span title="${esc(cfg.sets_dir)}">${esc(cfg.sets_dir)}</span>
+        <span>GitHub</span><span><a href="${esc(repo)}" target="_blank" rel="noreferrer">zmin511/zmin_autoset</a>${detected ? ` · найдено других: ${detected}` : ''}</span>
+      `;
       $('status').className = cfg.ready ? 'status ok' : 'status bad';
       $('status').textContent = cfg.ready ? `Готово · ${cfg.startup_refresh || ''}` : 'Не найдена база или builder';
     }

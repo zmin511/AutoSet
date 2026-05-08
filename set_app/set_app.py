@@ -24,6 +24,7 @@ INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
 APP_VERSION = "0.2.0"
+APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
 
@@ -684,6 +685,7 @@ class Handler(BaseHTTPRequestHandler):
                 "builder": str(BUILDER),
                 "app_name": APP_NAME,
                 "version": APP_VERSION,
+                "repository_url": APP_REPOSITORY_URL,
                 "library_provider": active_library_provider(),
                 "library_candidates": library_candidates,
                 "ready": DB_PATH.exists() and BUILDER.exists(),
