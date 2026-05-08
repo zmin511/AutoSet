@@ -1,6 +1,6 @@
 zmin_autoset portable setup / портативная установка
 
-Version / версия: 0.1.1
+Version / версия: 0.1.2
 
 Recommended drive layout:
 

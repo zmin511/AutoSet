@@ -288,6 +288,12 @@ def safe_filename(text: str, fallback: str = "track") -> str:
     return (text[:140] or fallback)
 
 
+def debug_suffix(track: Track) -> str:
+    camelot = engine_key_to_camelot(track.key) or "key"
+    bitrate = f"{track.bitrate}kbps" if track.bitrate else "bitrate"
+    return safe_filename(f"{camelot}-{bitrate}", "meta")
+
+
 def resolve_track_path(track: Track, music_root: Path) -> Optional[Path]:
     if not track.path:
         return None
@@ -666,11 +672,13 @@ def write_outputs(playlist: Sequence[Track], set_dir: Path, music_root: Path) ->
         src = resolve_track_path(track, music_root)
         if not src or not src.exists():
             raise SystemExit(f"Track file was not found for copying: {label(track)} ({track.path})")
-        dst_name = f"{i:02d} - {safe_filename(label(track), track.filename)}{src.suffix.lower()}"
+        base_name = safe_filename(label(track), track.filename)
+        meta = debug_suffix(track)
+        dst_name = f"{i:02d} - {base_name} ({meta}){src.suffix.lower()}"
         dst = set_dir / dst_name
         copy_index = 2
         while dst.exists():
-            dst = set_dir / f"{i:02d} - {safe_filename(label(track), track.filename)} ({copy_index}){src.suffix.lower()}"
+            dst = set_dir / f"{i:02d} - {base_name} ({meta}) ({copy_index}){src.suffix.lower()}"
             copy_index += 1
         shutil.copy2(src, dst)
         copied_paths.append((track, src, dst))
