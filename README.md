@@ -1,23 +1,39 @@
-﻿# zmin_autoset
+# zmin_autoset
 
-Portable local web app for building harmonic DJ sets from an Engine DJ library.
+Portable local app for building harmonic DJ sets from an Engine DJ library.
 
-Version: 0.1.0
+Version: `0.1.1`
 
-## Layout
+- [Русское описание](README_RU.md)
+- [English documentation](README_EN.md)
 
-- `set_app/` - local web UI and Python server.
-- `tools/` - Engine DB utilities and set-generation scripts.
-- `install/` - portable setup notes.
+## Quick Start
 
-Generated reports, tag backups, Python caches, and local Engine/music databases are intentionally ignored.
+Place the folder next to your Engine DJ library and music folder:
 
-## Run
-
-Windows:
-
-```cmd
-zmin_autoset\set_app\run_windows.cmd
+```text
+<SSD or drive root>/
+  zmin_autoset/
+  Music/
+  Engine Library/
+    Database2/
+      m.db
 ```
 
-The app starts a local server at `http://127.0.0.1:8765/`.
+Run:
+
+- Windows: `zmin_autoset\run_windows.cmd`
+- macOS: `zmin_autoset/run_mac.command`
+
+The app opens a local browser UI at:
+
+```text
+http://127.0.0.1:8765/
+```
+
+The HTML page is served by a small local Python server. Opening `index.html`
+directly is not enough for set creation, because the browser needs the server
+to read the Engine database and copy audio files.
+
+Generated reports, tag backups, Python caches, and local Engine/music databases
+are intentionally ignored by git.

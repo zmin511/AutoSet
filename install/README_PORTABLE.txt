@@ -1,23 +1,49 @@
-﻿DJ Set Builder portable setup
+zmin_autoset portable setup / портативная установка
 
-What is already on this SSD:
-- zmin_autoset/set_app/index.html: the one-page interface
-- zmin_autoset/set_app/set_app.py: local server that reads Engine DJ and starts the builder
-- zmin_autoset/tools/engine_set_builder.py: set generator
-- Music/Sets: output folder
+Version / версия: 0.1.1
+
+Recommended drive layout:
+
+<drive root>/
+  zmin_autoset/
+  Music/
+  Engine Library/
+    Database2/
+      m.db
+
+Рекомендуемая структура:
+
+<корень диска>/
+  zmin_autoset/
+  Music/
+  Engine Library/
+    Database2/
+      m.db
 
 Windows:
-1. Install Python 3.11+ from https://www.python.org/downloads/windows/ if the computer does not have Python.
-2. Run zmin_autoset\set_app\run_windows.cmd.
+1. Install Python 3.11+ if needed.
+2. Run zmin_autoset\run_windows.cmd.
 3. The browser opens at http://127.0.0.1:8765/
 
 macOS:
-1. Install Python 3.11+ from https://www.python.org/downloads/macos/ if python3 is not available.
-2. In Terminal run:
+1. Install Python 3.11+ if needed.
+2. Run once:
+   chmod +x /Volumes/<SSD_NAME>/zmin_autoset/run_mac.command
    chmod +x /Volumes/<SSD_NAME>/zmin_autoset/set_app/run_mac.command
-3. Open zmin_autoset/set_app/run_mac.command.
+3. Open zmin_autoset/run_mac.command.
 
-Notes:
-- The browser page itself cannot create sets without the small local Python server.
-- No internet is needed after Python is installed.
-- Keep this SSD structure together: zmin_autoset, Music, and Engine Library at the SSD root.
+Русский:
+1. Если Python 3.11+ не установлен, установите его.
+2. Windows: запустите zmin_autoset\run_windows.cmd.
+3. macOS: дайте права chmod +x и запустите zmin_autoset/run_mac.command.
+4. Интерфейс откроется в браузере на http://127.0.0.1:8765/
+
+Important:
+- Do not open set_app/index.html directly for real work. It needs the local Python server.
+- Keep zmin_autoset, Music, and Engine Library together at the same level.
+- Read README_RU.md or README_EN.md for full documentation.
+
+Важно:
+- Для реальной работы не открывайте set_app/index.html напрямую. Нужен локальный Python-сервер.
+- Держите zmin_autoset, Music и Engine Library рядом, на одном уровне.
+- Полное описание: README_RU.md и README_EN.md.
