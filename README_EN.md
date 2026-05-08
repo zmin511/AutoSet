@@ -2,9 +2,13 @@
 
 `zmin_autoset` is a portable local app for building DJ sets from an Engine DJ library.
 
-Version: `0.1.3`
+Version: `0.2.0`
 
 The app reads the Engine DJ database, shows your music in a browser, lets you choose a reference track, and builds a harmonic set using BPM, Camelot/key, genre, bitrate, and track length. The finished set is copied into a dedicated output folder with `playlist.m3u` and `playlist.csv`.
+
+Current working provider: Denon Engine DJ.
+
+The app now includes a discovery layer for multiple DJ libraries. It can detect likely rekordbox and Traktor library files, but it fully parses and uses only Denon Engine DJ today. Pioneer rekordbox and Native Instruments Traktor need separate adapters because their files, schemas, and key/BPM/path fields are different.
 
 ## How It Works
 
@@ -24,6 +28,40 @@ Engine Library/Database2/m.db
 - bitrate;
 - length;
 - track availability.
+
+## Other DJ Libraries
+
+Current supported setup:
+
+```text
+Provider: Denon Engine DJ
+Database: Engine Library/Database2/m.db
+Status: supported
+```
+
+The app also checks common locations for other libraries:
+
+- Pioneer rekordbox: USB/export candidates such as `PIONEER/rekordbox/export.pdb`, plus local `master.db` candidates;
+- Native Instruments Traktor: `collection.nml` files in Traktor folders.
+
+If those files are found, the app can report them as `detected_not_supported`. That means the library was detected, but sets cannot be built from it directly yet.
+
+Why another database cannot simply be swapped in:
+
+- each product uses different table and field names;
+- Traktor often stores the collection as XML/NML rather than SQLite;
+- rekordbox may use different local and USB/export formats;
+- key/Camelot, path, availability, rating, and analysis values are stored differently.
+
+The right long-term design is an adapter layer:
+
+```text
+Denon Engine DB  -> common Track model -> zmin_autoset algorithm
+rekordbox DB/PDB -> common Track model -> zmin_autoset algorithm
+Traktor NML      -> common Track model -> zmin_autoset algorithm
+```
+
+This layer has been started: the UI and API now know which provider is active and can show detected library candidates. The next step is to implement dedicated rekordbox and Traktor parser/adapters.
 
 The actual audio files are touched only when the app needs to:
 

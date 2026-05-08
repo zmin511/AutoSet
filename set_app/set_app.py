@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import webbrowser
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
 from urllib.parse import parse_qs, urlparse
@@ -22,8 +23,86 @@ DB_PATH = SSD_ROOT / "Engine Library" / "Database2" / "m.db"
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.2.0"
+ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
+
+
+@dataclass(frozen=True)
+class LibraryProviderCandidate:
+    provider: str
+    name: str
+    path: Path
+    status: str
+    note: str
+
+    def to_dict(self):
+        return {
+            "provider": self.provider,
+            "name": self.name,
+            "path": str(self.path),
+            "status": self.status,
+            "note": self.note,
+        }
+
+
+def _home_candidates(*parts):
+    home = Path.home()
+    return [home.joinpath(*parts)] if str(home) else []
+
+
+def discover_library_candidates():
+    candidates = [
+        LibraryProviderCandidate(
+            "denon_engine",
+            "Denon Engine DJ",
+            DB_PATH,
+            "supported" if DB_PATH.exists() else "missing",
+            "Active provider. Reads Engine Library/Database2/m.db.",
+        )
+    ]
+
+    known = [
+        (
+            "rekordbox",
+            "Pioneer rekordbox",
+            "detected_not_supported",
+            "Detected candidate only. A rekordbox adapter is not implemented yet.",
+            [
+                SSD_ROOT / "PIONEER" / "rekordbox" / "export.pdb",
+                *(_home_candidates("AppData", "Roaming", "Pioneer", "rekordbox", "master.db")),
+            ],
+        ),
+        (
+            "traktor",
+            "Native Instruments Traktor",
+            "detected_not_supported",
+            "Detected candidate only. A Traktor collection.nml adapter is not implemented yet.",
+            [
+                SSD_ROOT / "Traktor" / "collection.nml",
+                *(_home_candidates("Documents", "Native Instruments")),
+            ],
+        ),
+    ]
+
+    for provider, name, status, note, paths in known:
+        for path in paths:
+            if path.is_file():
+                candidates.append(LibraryProviderCandidate(provider, name, path, status, note))
+            elif path.is_dir() and provider == "traktor":
+                for nml in sorted(path.glob("Traktor*/collection.nml")):
+                    candidates.append(LibraryProviderCandidate(provider, name, nml, status, note))
+    return candidates
+
+
+def active_library_provider():
+    return {
+        "provider": ACTIVE_LIBRARY_PROVIDER,
+        "name": "Denon Engine DJ",
+        "path": str(DB_PATH),
+        "status": "ready" if DB_PATH.exists() else "missing",
+        "note": "Current working adapter expects the Denon Engine Track table schema.",
+    }
 
 
 STYLE_GROUPS = [
@@ -424,6 +503,8 @@ def build_set(track_id, role, minutes, max_key_step, bpm_window, style_filter):
         style_filter,
         "--db-path",
         str(DB_PATH),
+        "--library-provider",
+        ACTIVE_LIBRARY_PROVIDER,
         "--music-root",
         str(MUSIC_ROOT),
         "--out-dir",
@@ -594,6 +675,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         if parsed.path == "/api/config":
+            library_candidates = [c.to_dict() for c in discover_library_candidates()]
             self.send_json({
                 "ssd_root": str(SSD_ROOT),
                 "music_root": str(MUSIC_ROOT),
@@ -602,6 +684,8 @@ class Handler(BaseHTTPRequestHandler):
                 "builder": str(BUILDER),
                 "app_name": APP_NAME,
                 "version": APP_VERSION,
+                "library_provider": active_library_provider(),
+                "library_candidates": library_candidates,
                 "ready": DB_PATH.exists() and BUILDER.exists(),
                 "startup_refresh": APP_STATE.get("startup_refresh", ""),
             })

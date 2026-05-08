@@ -2,7 +2,7 @@
 
 Portable local app for building harmonic DJ sets from an Engine DJ library.
 
-Version: `0.1.3`
+Version: `0.2.0`
 
 - [Русское описание](README_RU.md)
 - [English documentation](README_EN.md)
@@ -37,3 +37,9 @@ to read the Engine database and copy audio files.
 
 Generated reports, tag backups, Python caches, and local Engine/music databases
 are intentionally ignored by git.
+
+Current working library provider: Denon Engine DJ.
+
+The app now has a provider-discovery layer for future library adapters. It can
+detect likely rekordbox and Traktor library files, but those formats are not
+parsed yet.

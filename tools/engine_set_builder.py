@@ -725,6 +725,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--reference-id", type=int, help="Use an Engine DJ Track.id instead of matching by file path.")
     parser.add_argument("--role", choices=["start", "peak"], default="peak", help="Use reference as set opener or peak track.")
     parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
+    parser.add_argument("--library-provider", choices=["denon_engine"], default="denon_engine")
     parser.add_argument("--music-root", default=DEFAULT_MUSIC_ROOT)
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     parser.add_argument("--minutes", type=int, default=90)

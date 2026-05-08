@@ -608,7 +608,10 @@
     async function loadConfig() {
       const res = await fetch('/api/config');
       const cfg = await res.json();
-      $('paths').innerHTML = `${esc(cfg.app_name || 'zmin_autoset')} · v${esc(cfg.version || '0.1.3')}<br>Music: ${esc(cfg.music_root)}<br>Sets: ${esc(cfg.sets_dir)}<br>DB: ${esc(cfg.db_path)}`;
+      const provider = cfg.library_provider || {};
+      const detected = (cfg.library_candidates || []).filter(item => item.status === 'detected_not_supported').length;
+      const extra = detected ? `<br>Detected other libraries: ${detected}` : '';
+      $('paths').innerHTML = `${esc(cfg.app_name || 'zmin_autoset')} · v${esc(cfg.version || '0.2.0')}<br>Library: ${esc(provider.name || 'Denon Engine DJ')} · ${esc(provider.status || '')}<br>Music: ${esc(cfg.music_root)}<br>Sets: ${esc(cfg.sets_dir)}<br>DB: ${esc(cfg.db_path)}${extra}`;
       $('status').className = cfg.ready ? 'status ok' : 'status bad';
       $('status').textContent = cfg.ready ? `Готово · ${cfg.startup_refresh || ''}` : 'Не найдена база или builder';
     }

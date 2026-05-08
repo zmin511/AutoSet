@@ -2,9 +2,13 @@
 
 `zmin_autoset` - портативное локальное приложение для сборки DJ-сетов на основе библиотеки Engine DJ.
 
-Версия: `0.1.3`
+Версия: `0.2.0`
 
 Приложение читает базу Engine DJ, показывает музыку в браузере, помогает выбрать опорный трек и собирает гармонический сет по BPM, Camelot/key, жанрам, битрейту и длительности. Готовый сет копируется в отдельную папку вместе с `playlist.m3u` и `playlist.csv`.
+
+Текущий рабочий provider: Denon Engine DJ.
+
+В приложении заложен слой поиска разных DJ-библиотек. Сейчас оно умеет находить кандидаты rekordbox и Traktor, но полноценно парсит и использует только Denon Engine DJ. Для Pioneer rekordbox и Native Instruments Traktor нужен отдельный адаптер, потому что у них другие файлы, поля и формат хранения тональности/BPM/пути.
 
 ## Как Это Работает
 
@@ -24,6 +28,40 @@ Engine Library/Database2/m.db
 - bitrate;
 - length;
 - доступность трека.
+
+## Другие DJ-Библиотеки
+
+Сейчас рабочая схема такая:
+
+```text
+Provider: Denon Engine DJ
+Database: Engine Library/Database2/m.db
+Status: supported
+```
+
+Приложение также проверяет типовые места для других библиотек:
+
+- Pioneer rekordbox: USB/export-кандидаты вроде `PIONEER/rekordbox/export.pdb`, а также локальные `master.db`;
+- Native Instruments Traktor: `collection.nml` в папках Traktor.
+
+Если такие файлы найдены, приложение может показать их как `detected_not_supported`. Это значит: библиотека обнаружена, но сет пока нельзя строить из неё напрямую.
+
+Почему нельзя просто “подставить другую базу”:
+
+- у разных программ разные имена таблиц и полей;
+- Traktor часто хранит коллекцию как XML/NML, а не как SQLite;
+- rekordbox может использовать разные форматы локальной и USB-библиотеки;
+- по-разному записываются key/Camelot, пути, rating, availability и анализ.
+
+Правильный путь - adapter layer:
+
+```text
+Denon Engine DB  -> common Track model -> zmin_autoset algorithm
+rekordbox DB/PDB -> common Track model -> zmin_autoset algorithm
+Traktor NML      -> common Track model -> zmin_autoset algorithm
+```
+
+Этот слой уже начат: интерфейс и API теперь знают, какой provider активен, и могут показывать найденные библиотеки. Следующий шаг - добавить отдельные parser/adapter для rekordbox и Traktor.
 
 Реальные аудиофайлы приложение трогает только тогда, когда нужно:
 
