@@ -289,9 +289,9 @@ def safe_filename(text: str, fallback: str = "track") -> str:
 
 
 def debug_suffix(track: Track) -> str:
+    bpm = f"{round(track.bpm, 1):g}BPM" if track.bpm else "BPM"
     camelot = engine_key_to_camelot(track.key) or "key"
-    bitrate = f"{track.bitrate}kbps" if track.bitrate else "bitrate"
-    return safe_filename(f"{camelot}-{bitrate}", "meta")
+    return safe_filename(f"{bpm}-{camelot}", "meta")
 
 
 def resolve_track_path(track: Track, music_root: Path) -> Optional[Path]:

@@ -2,7 +2,7 @@
 
 Portable local app for building harmonic DJ sets from an Engine DJ library.
 
-Version: `0.1.2`
+Version: `0.1.3`
 
 - [Русское описание](README_RU.md)
 - [English documentation](README_EN.md)

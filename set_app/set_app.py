@@ -22,7 +22,7 @@ DB_PATH = SSD_ROOT / "Engine Library" / "Database2" / "m.db"
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 APP_STATE = {"startup_refresh": "waiting"}
 
 

@@ -2,7 +2,7 @@
 
 `zmin_autoset` is a portable local app for building DJ sets from an Engine DJ library.
 
-Version: `0.1.2`
+Version: `0.1.3`
 
 The app reads the Engine DJ database, shows your music in a browser, lets you choose a reference track, and builds a harmonic set using BPM, Camelot/key, genre, bitrate, and track length. The finished set is copied into a dedicated output folder with `playlist.m3u` and `playlist.csv`.
 
@@ -183,13 +183,13 @@ Each set gets its own folder:
 
 ```text
 Music/Sets/<timestamp>_<role>_<track-name>/
-  01 - Track Name (8A-320kbps).mp3
-  02 - Track Name (9A-320kbps).mp3
+  01 - Track Name (124BPM-8A).mp3
+  02 - Track Name (125BPM-9A).mp3
   playlist.m3u
   playlist.csv
 ```
 
-The copied filename includes Camelot key and bitrate in parentheses. This is intentional, so you can quickly inspect whether harmonic movement and file quality selection look correct.
+The copied filename includes BPM and Camelot key in parentheses. This is intentional, so you can quickly inspect whether tempo and harmonic movement look correct.
 
 `playlist.m3u` can be opened in a player.
 
