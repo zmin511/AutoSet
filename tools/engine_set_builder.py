@@ -10,10 +10,11 @@ from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Sequence, Tuple
 
+from engine_config import PATHS
 
-DEFAULT_DB_PATH = r"F:\Music\Engine Library\Database2\m.db"
-DEFAULT_MUSIC_ROOT = r"F:\Music"
-DEFAULT_OUT_DIR = r"F:\Music\Sets"
+DEFAULT_DB_PATH = PATHS["db_path"]
+DEFAULT_MUSIC_ROOT = PATHS["music_root"]
+DEFAULT_OUT_DIR = PATHS["out_dir"]
 DEFAULT_SET_SECONDS = 60 * 60
 BPM_WINDOW_DOWN = 4.0
 BPM_RISE_LIMIT = 5.0

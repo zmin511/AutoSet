@@ -10,11 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
+from engine_config import PATHS
 
-DEFAULT_DB_PATH = r"F:\Music\Engine Library\Database2\m.db"
-DEFAULT_MUSIC_ROOT = r"F:\Music"
-DEFAULT_REPORT_DIR = r"F:\Music\_tag_reports"
-DEFAULT_BACKUP_DIR = r"F:\Music\_tag_backups"
+DEFAULT_DB_PATH = PATHS["db_path"]
+DEFAULT_MUSIC_ROOT = PATHS["music_root"]
+DEFAULT_REPORT_DIR = str(Path(PATHS["report_dir"]) / "genres")
+DEFAULT_BACKUP_DIR = PATHS["backup_dir"]
 CONFIDENCE_ORDER = {"low": 1, "medium": 2, "high": 3}
 
 
@@ -385,7 +386,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     ap = argparse.ArgumentParser(description="Review and write DJ genre/style tags for a folder.")
-    ap.add_argument("target", nargs="?", default=r"F:\Music\New")
+    ap.add_argument("target", nargs="?", default=str(Path(PATHS["music_root"]) / "New"))
     ap.add_argument("--db-path", default=DEFAULT_DB_PATH)
     ap.add_argument("--music-root", default=DEFAULT_MUSIC_ROOT)
     ap.add_argument("--report-dir", default=DEFAULT_REPORT_DIR)

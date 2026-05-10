@@ -1,6 +1,7 @@
 ﻿# Runtime and generated data
 reports/
 tag_backups/
+set_app/paths.json
 **/__pycache__/
 *.py[cod]
 *$py.class

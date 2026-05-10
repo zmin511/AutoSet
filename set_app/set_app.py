@@ -2,6 +2,7 @@
 import mimetypes
 import os
 import re
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -17,16 +18,155 @@ APP_DIR = Path(__file__).resolve().parent
 SSD_ROOT = APP_DIR.parent.parent
 TOOLS_DIR = SSD_ROOT / "zmin_autoset" / "tools"
 BUILDER = TOOLS_DIR / "engine_set_builder.py"
-MUSIC_ROOT = SSD_ROOT / "Music"
-SETS_DIR = MUSIC_ROOT / "Sets"
-DB_PATH = SSD_ROOT / "Engine Library" / "Database2" / "m.db"
+CONFIG_PATH = APP_DIR / "paths.json"
+DEFAULT_MUSIC_ROOT = SSD_ROOT / "Music" if (SSD_ROOT / "Music").exists() else SSD_ROOT
+DEFAULT_SETS_DIR = DEFAULT_MUSIC_ROOT / "Sets"
+DEFAULT_DB_PATH = SSD_ROOT / "Engine Library" / "Database2" / "m.db"
+MUSIC_ROOT = DEFAULT_MUSIC_ROOT
+SETS_DIR = DEFAULT_SETS_DIR
+DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
+
+
+def _path_text(value):
+    return str(value or "").strip().strip('"')
+
+
+def _find_engine_db(path):
+    root = Path(_path_text(path))
+    if root.is_file() and root.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
+        return root
+    candidates = [
+        root / "Database2" / "m.db",
+        root / "Database" / "m.db",
+        root / "Engine Library" / "Database2" / "m.db",
+        root / "Engine" / "Database2" / "m.db",
+        root / "m.db",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    try:
+        matches = sorted(root.glob("**/m.db"))
+    except OSError:
+        matches = []
+    return matches[0] if matches else root
+
+
+def _default_config():
+    music_root = DEFAULT_MUSIC_ROOT
+    db_path = SSD_ROOT / "Engine Library" / "Database2" / "m.db"
+    for candidate in (
+        SSD_ROOT / "Engine Library" / "Database2" / "m.db",
+        SSD_ROOT / "Engine" / "Database2" / "m.db",
+        SSD_ROOT / "Engine Library" / "Database" / "m.db",
+        SSD_ROOT / "Engine" / "Database" / "m.db",
+        music_root / "Engine Library" / "Database2" / "m.db",
+        music_root / "Engine" / "Database2" / "m.db",
+    ):
+        if candidate.exists():
+            db_path = candidate
+            break
+    return {
+        "music_root": str(music_root),
+        "db_path": str(db_path),
+        "sets_dir": str(music_root / "Sets"),
+    }
+
+
+def load_path_config():
+    config = _default_config()
+    if CONFIG_PATH.exists():
+        try:
+            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for key in config:
+                    value = _path_text(data.get(key))
+                    if value:
+                        config[key] = value
+        except Exception:
+            pass
+    return config
+
+
+def apply_path_config(config):
+    global MUSIC_ROOT, SETS_DIR, DB_PATH
+    MUSIC_ROOT = Path(config["music_root"])
+    DB_PATH = Path(config["db_path"])
+    SETS_DIR = Path(config.get("sets_dir") or (MUSIC_ROOT / "Sets"))
+
+
+def save_path_config(data):
+    config = load_path_config()
+    music_root = _path_text(data.get("music_root"))
+    db_path = _path_text(data.get("db_path"))
+    sets_dir = _path_text(data.get("sets_dir"))
+    if music_root:
+        config["music_root"] = str(Path(music_root))
+    if db_path:
+        config["db_path"] = str(_find_engine_db(db_path))
+    if sets_dir:
+        config["sets_dir"] = str(Path(sets_dir))
+    elif music_root:
+        config["sets_dir"] = str(Path(music_root) / "Sets")
+    CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    apply_path_config(config)
+    return config
+
+
+apply_path_config(load_path_config())
+
+
+def _safe_disk_path(value):
+    text = _path_text(value)
+    candidate = Path(text) if text else SSD_ROOT
+    if not candidate.is_absolute():
+        candidate = SSD_ROOT / candidate
+    candidate = candidate.resolve()
+    root = SSD_ROOT.resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError("Path is outside the startup disk")
+    return candidate
+
+
+def browse_disk(path, kind):
+    current = _safe_disk_path(path)
+    if current.is_file():
+        current = current.parent
+    if not current.exists() or not current.is_dir():
+        current = SSD_ROOT
+
+    dirs = []
+    files = []
+    try:
+        children = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold()))
+    except OSError:
+        children = []
+    for child in children:
+        if child.name.startswith("$") or child.name in {"System Volume Information", "Recovery"}:
+            continue
+        if child.is_dir():
+            dirs.append({"name": child.name, "path": str(child)})
+        elif kind == "db" and child.is_file() and child.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
+            files.append({"name": child.name, "path": str(child)})
+
+    parent = ""
+    root = SSD_ROOT.resolve()
+    if current.resolve() != root:
+        parent = str(current.parent)
+    return {
+        "root": str(SSD_ROOT),
+        "path": str(current),
+        "parent": parent,
+        "dirs": dirs,
+        "files": files,
+    }
 
 
 @dataclass(frozen=True)
@@ -682,13 +822,16 @@ class Handler(BaseHTTPRequestHandler):
                 "music_root": str(MUSIC_ROOT),
                 "sets_dir": str(SETS_DIR),
                 "db_path": str(DB_PATH),
+                "config_path": str(CONFIG_PATH),
                 "builder": str(BUILDER),
                 "app_name": APP_NAME,
                 "version": APP_VERSION,
                 "repository_url": APP_REPOSITORY_URL,
                 "library_provider": active_library_provider(),
                 "library_candidates": library_candidates,
-                "ready": DB_PATH.exists() and BUILDER.exists(),
+                "music_ready": MUSIC_ROOT.exists(),
+                "db_ready": DB_PATH.exists(),
+                "ready": DB_PATH.exists() and MUSIC_ROOT.exists() and BUILDER.exists(),
                 "startup_refresh": APP_STATE.get("startup_refresh", ""),
             })
             return
@@ -703,6 +846,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/genres":
             self.send_json({"genres": genre_options()})
+            return
+        if parsed.path == "/api/disk-tree":
+            qs = parse_qs(parsed.query)
+            kind = qs.get("kind", ["folder"])[0]
+            path = qs.get("path", [""])[0]
+            try:
+                self.send_json(browse_disk(path, kind))
+            except Exception as exc:
+                self.send_json({"error": repr(exc)}, status=400)
             return
         if parsed.path == "/api/browse":
             qs = parse_qs(parsed.query)
@@ -723,13 +875,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/refresh-tags", "/api/update-genre"}:
+        if parsed_path not in {"/api/build", "/api/refresh-tags", "/api/update-genre", "/api/config"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
         data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
         try:
-            if parsed_path == "/api/build":
+            if parsed_path == "/api/config":
+                config = save_path_config(data)
+                self.send_json({
+                    "ok": True,
+                    "config": config,
+                    "music_ready": MUSIC_ROOT.exists(),
+                    "db_ready": DB_PATH.exists(),
+                    "ready": DB_PATH.exists() and MUSIC_ROOT.exists() and BUILDER.exists(),
+                })
+            elif parsed_path == "/api/build":
                 self.send_json(build_set(data["track_id"], data.get("role", "start"), data.get("minutes", 90), data.get("max_key_step", 5), data.get("bpm_window", 5), data.get("style_filter", [])))
             elif parsed_path == "/api/refresh-tags":
                 self.send_json(refresh_tags(data.get("path", "")))
@@ -744,8 +905,22 @@ def main():
         print(f"Engine DB not found: {DB_PATH}")
     if not BUILDER.exists():
         print(f"Set builder not found: {BUILDER}")
-    server = ThreadingHTTPServer(("127.0.0.1", 8765), Handler)
-    url = "http://127.0.0.1:8765/"
+    server = None
+    port = 8765
+    for candidate in range(8765, 8780):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.2)
+            if probe.connect_ex(("127.0.0.1", candidate)) == 0:
+                continue
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", candidate), Handler)
+            port = candidate
+            break
+        except OSError:
+            continue
+    if server is None:
+        raise SystemExit("No free local port found in 8765..8779")
+    url = f"http://127.0.0.1:{port}/"
     print(f"Set Builder UI: {url}")
     threading.Thread(target=startup_refresh_new, daemon=True).start()
     threading.Timer(0.8, lambda: webbrowser.open(url)).start()

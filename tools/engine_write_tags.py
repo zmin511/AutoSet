@@ -9,11 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from engine_config import PATHS
 
-DEFAULT_DB_PATH = r"F:\Music\Engine Library\Database2\m.db"
-DEFAULT_MUSIC_ROOT = r"F:\Music"
-DEFAULT_REPORT_DIR = r"F:\Music\_tag_reports"
-DEFAULT_BACKUP_DIR = r"F:\Music\_tag_backups"
+DEFAULT_DB_PATH = PATHS["db_path"]
+DEFAULT_MUSIC_ROOT = PATHS["music_root"]
+DEFAULT_REPORT_DIR = PATHS["report_dir"]
+DEFAULT_BACKUP_DIR = PATHS["backup_dir"]
 
 
 @dataclass(frozen=True)

@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from engine_config import PATHS
 
-DEFAULT_DB_PATH = r"F:\Music\Engine Library\Database2\m.db"
-DEFAULT_MUSIC_ROOT = r"F:\Music"
+DEFAULT_DB_PATH = PATHS["db_path"]
+DEFAULT_MUSIC_ROOT = PATHS["music_root"]
 
 
 @dataclass(frozen=True)
