@@ -2,7 +2,15 @@
 
 Портативное локальное приложение для сборки гармонических DJ-сетов из библиотеки Denon Engine DJ.
 
-Версия: `0.3.0`
+Версия: `0.4.1`
+
+## Новое в 0.4.0
+
+- Кнопка **«Создать плейлист Engine»**: создаёт плейлист в Engine DB (`m.db`) ссылками на исходные файлы (без копирования); папка в Engine задаётся рядом с кнопкой.
+
+## Новое в 0.4.1
+
+- Убраны подписи над кнопками; добавлены подсказки при наведении (tooltip) для кнопок и поля расположения плейлиста.
 
 - [Полное описание на русском](README_RU.md)
 - [Full English documentation](README_EN.md)
@@ -43,7 +51,15 @@ HTML-страница работает через маленький локал�
 
 Portable local app for building harmonic DJ sets from a Denon Engine DJ library.
 
-Version: `0.3.0`
+Version: `0.4.1`
+
+## What's new in 0.4.0
+
+- **Create Engine playlist** button: creates an Engine DB (`m.db`) playlist using links to original tracks (no file copy/rename); target Engine folder is set next to the button.
+
+## What's new in 0.4.1
+
+- Removed redundant labels above the build controls; added hover tooltips for both buttons and the playlist location field.
 
 - [Full Russian documentation](README_RU.md)
 - [Full English documentation](README_EN.md)

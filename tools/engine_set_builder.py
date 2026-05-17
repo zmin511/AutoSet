@@ -1,5 +1,6 @@
 import argparse
 import csv
+import math
 import os
 import re
 import shutil
@@ -118,6 +119,23 @@ def camelot_score(a_key: Optional[int], b_key: Optional[int], max_step: int) -> 
     return float(num_dist) + mode_penalty
 
 
+def camelot_relation(a_key: Optional[int], b_key: Optional[int]) -> Tuple[Optional[int], str]:
+    a = parse_camelot(engine_key_to_camelot(a_key))
+    b = parse_camelot(engine_key_to_camelot(b_key))
+    if not a or not b:
+        return None, "unknown"
+    num_dist = number_distance(a[0], b[0])
+    if a == b:
+        return 0, "same key"
+    if a[0] == b[0]:
+        return 1, "relative major/minor"
+    if a[1] == b[1] and num_dist == 1:
+        return 1, "neighbor key"
+    if a[1] == b[1]:
+        return num_dist, f"{num_dist} wheel steps"
+    return num_dist + 1, f"{num_dist} steps + mode shift"
+
+
 def genre_tokens(genre: str) -> set:
     return {
         p.strip().lower()
@@ -188,6 +206,74 @@ def same_genre_family(reference: Track, candidate: Track) -> bool:
     if ref & cand:
         return True
     return False
+
+
+def genre_distance(a: Track, b: Track) -> float:
+    af = genre_family(a)
+    bf = genre_family(b)
+    if af and bf and af & bf:
+        return 0.15
+    at = genre_tokens(a.genre) | genre_words(a)
+    bt = genre_tokens(b.genre) | genre_words(b)
+    if not at or not bt:
+        return 0.65
+    overlap = len(at & bt)
+    union = len(at | bt)
+    return max(0.2, 1.0 - (overlap / union)) if overlap else 1.0
+
+
+def energy_score(track: Track) -> float:
+    words = genre_words(track)
+    base = 0.5
+    if {"ambient", "downtempo", "chill", "chillout"} & words:
+        base = 0.28
+    elif {"deep", "organic"} & words and "house" in words:
+        base = 0.48
+    elif {"afro", "disco", "funky", "funk"} & words and "house" in words:
+        base = 0.62
+    elif "house" in words:
+        base = 0.66
+    elif {"minimal", "deep_tech"} & words:
+        base = 0.64
+    elif "techno" in words:
+        base = 0.8
+    elif {"dnb", "drum"} & words:
+        base = 0.9
+    elif {"dance", "edm"} & words:
+        base = 0.72
+    if track.bpm:
+        base += max(-0.12, min(0.16, (track.bpm - 120.0) / 90.0))
+    if track.length < 180:
+        base -= 0.04
+    if "radio" in words or "edit" in words:
+        base -= 0.03
+    if "extended" in words or "remix" in words:
+        base += 0.03
+    return max(0.05, min(0.98, base))
+
+
+def transition_score(previous: Optional[Track], candidate: Track) -> Tuple[float, str]:
+    if previous is None:
+        return 1.0, "opening track"
+    bpm_delta = abs((previous.bpm or candidate.bpm or 0.0) - (candidate.bpm or previous.bpm or 0.0))
+    cdist, relation = camelot_relation(previous.key, candidate.key)
+    gdist = genre_distance(previous, candidate)
+    edelta = abs(energy_score(previous) - energy_score(candidate))
+    score = 1.0
+    score -= min(0.35, bpm_delta / 18.0)
+    score -= min(0.3, (cdist if cdist is not None else 4) / 10.0)
+    score -= min(0.2, gdist * 0.2)
+    score -= min(0.2, edelta * 0.45)
+    reason = f"BPM delta {bpm_delta:.1f}; {relation}; genre distance {gdist:.2f}; energy delta {edelta:.2f}"
+    return max(0.0, round(score, 4)), reason
+
+
+def track_identity(track: Track) -> Tuple[str, str]:
+    artist = re.split(r"\s*(?:,|&|feat\.?|ft\.?|/)\s*", (track.artist or "").casefold())[0].strip()
+    title = (track.title or track.filename or "").casefold()
+    title = re.sub(r"\([^)]*(?:mix|edit|remix|radio|extended|original)[^)]*\)", "", title)
+    title = re.sub(r"\[[^]]*(?:mix|edit|remix|radio|extended|original)[^]]*\]", "", title)
+    return re.sub(r"\W+", "", artist), re.sub(r"\W+", "", title)
 
 
 STYLE_ALIASES = {
@@ -411,11 +497,7 @@ def dedupe_tracks(tracks: Sequence[Track], keep_id: int) -> List[Track]:
     seen_songs = set()
     for track in tracks:
         path_key = (track.path or track.filename).strip().lower().replace("/", "\\")
-        song_key = (
-            (track.artist or "").strip().lower(),
-            (track.title or track.filename).strip().lower(),
-            round(track.bpm or 0.0),
-        )
+        song_key = (*track_identity(track), round(track.bpm or 0.0))
         if track.id != keep_id and (path_key in seen_paths or song_key in seen_songs):
             continue
         kept.append(track)
@@ -475,6 +557,7 @@ def score_candidate(
     min_bpm: float,
     max_bpm: float,
     allowed_styles: set,
+    selected: Optional[Sequence[Track]] = None,
 ) -> float:
     cand_bpm = candidate.bpm or target_bpm
     if cand_bpm < min_bpm or cand_bpm > max_bpm:
@@ -498,6 +581,31 @@ def score_candidate(
     score += abs(cand_bpm - target_bpm) * 4.0
     score -= 5.0
 
+    selected = selected or []
+    selected_count = len(selected)
+    exact_key_count = sum(1 for t in selected if engine_key_to_camelot(t.key) == engine_key_to_camelot(reference.key))
+    exact_bpm_count = sum(1 for t in selected if t.bpm is not None and reference.bpm is not None and abs(t.bpm - reference.bpm) < 0.25)
+    exact_key_limit = max(2, math.ceil((selected_count + 1) * 0.55))
+    exact_bpm_limit = max(2, math.ceil((selected_count + 1) * 0.55))
+    same_ref_key = engine_key_to_camelot(candidate.key) == engine_key_to_camelot(reference.key)
+    same_ref_bpm = reference.bpm is not None and abs(cand_bpm - reference.bpm) < 0.25
+    if same_ref_key and exact_key_count >= exact_key_limit:
+        score += 14.0
+    elif not same_ref_key:
+        score -= 3.0
+    if same_ref_bpm and exact_bpm_count >= exact_bpm_limit:
+        score += 9.0
+    elif not same_ref_bpm:
+        score -= 2.0
+
+    target_energy = energy_score(reference)
+    if previous:
+        prev_energy = energy_score(previous)
+        target_energy = min(0.95, max(0.1, (prev_energy * 0.65) + (energy_score(reference) * 0.35)))
+    score += abs(energy_score(candidate) - target_energy) * 8.0
+    if previous and track_identity(previous) == track_identity(candidate):
+        score += 18.0
+
     if candidate.bitrate is not None and candidate.bitrate < 256:
         score += 8.0
     if candidate.length < 150 or candidate.length > 420:
@@ -519,6 +627,7 @@ def pick_next(
     min_bpm: float,
     max_bpm: float,
     allowed_styles: set,
+    selected: Optional[Sequence[Track]] = None,
 ) -> Optional[Track]:
     best_i = None
     best_score = 1e9
@@ -533,6 +642,7 @@ def pick_next(
             min_bpm,
             max_bpm,
             allowed_styles,
+            selected,
         )
         if s < best_score:
             best_i = i
@@ -569,6 +679,7 @@ def extend_forward(
             min_bpm,
             max_bpm,
             allowed_styles,
+            sequence,
         )
         if not pick:
             break
@@ -647,6 +758,7 @@ def build_peak_set(
             min_bpm,
             max_bpm,
             allowed_styles,
+            reverse_pre,
         )
         if not pick:
             break
@@ -691,8 +803,32 @@ def write_outputs(playlist: Sequence[Track], set_dir: Path, music_root: Path) ->
             f.write(f"{dst.name}\n")
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["#", "artist", "title", "length", "bpm", "camelot", "genre", "bitrate", "copied_file", "source_path"])
+        w.writerow([
+            "position",
+            "artist",
+            "title",
+            "length",
+            "bpm",
+            "camelot",
+            "genre",
+            "family",
+            "energy",
+            "bpm_delta",
+            "camelot_distance",
+            "camelot_relation",
+            "genre_distance",
+            "transition_score",
+            "transition_reason",
+            "bitrate",
+            "copied_file",
+            "source_path",
+        ])
         for i, (t, src, dst) in enumerate(copied_paths, 1):
+            previous = copied_paths[i - 2][0] if i > 1 else None
+            bpm_delta = 0.0 if previous is None else abs((previous.bpm or t.bpm or 0.0) - (t.bpm or previous.bpm or 0.0))
+            cdist, relation = camelot_relation(previous.key if previous else t.key, t.key)
+            gdist = 0.0 if previous is None else genre_distance(previous, t)
+            tscore, treason = transition_score(previous, t)
             w.writerow(
                 [
                     i,
@@ -702,11 +838,27 @@ def write_outputs(playlist: Sequence[Track], set_dir: Path, music_root: Path) ->
                     round(t.bpm or 0, 1),
                     engine_key_to_camelot(t.key),
                     t.genre,
+                    ", ".join(sorted(genre_family(t))),
+                    round(energy_score(t), 2),
+                    round(bpm_delta, 1),
+                    "" if cdist is None else cdist,
+                    "anchor" if previous is None else relation,
+                    round(gdist, 2),
+                    tscore,
+                    treason,
                     t.bitrate or "",
                     dst.name,
                     str(src),
                 ]
             )
+    methodology_path = set_dir / "methodology.txt"
+    with methodology_path.open("w", encoding="utf-8") as f:
+        f.write("Selection methodology\n")
+        f.write("- Reads Denon Engine DJ metadata: BPM, key, genre, bitrate, length, path.\n")
+        f.write("- Filters candidates by selected style bucket, BPM corridor, and Camelot step limit.\n")
+        f.write("- Scores neighboring transitions by BPM delta, Camelot relation, genre distance, and estimated energy.\n")
+        f.write("- Adds diversity pressure so exact reference BPM/key do not crowd out compatible neighbors.\n")
+        f.write("- Writes generated set folders under Music/Sets.\n")
     return set_dir, m3u_path, csv_path
 
 
@@ -733,6 +885,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--max-key-step", type=int, default=5)
     parser.add_argument("--bpm-window", type=float, default=5.0, help="Allowed BPM distance from reference. Use 0 for no BPM limit.")
     parser.add_argument("--style-filter", default="", help="Comma-separated style buckets to allow. Empty keeps reference-family behavior.")
+    parser.add_argument("--no-copy", action="store_true", help="Do not copy files / write set outputs (build playlist only).")
+    parser.add_argument("--emit-playlist-json", action="store_true", help="Print playlist as JSON to stdout (implies --no-copy).")
     args = parser.parse_args(argv)
 
     music_root = Path(args.music_root)
@@ -753,6 +907,38 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ref_slug = slug(label(ref))[:64]
     base_name = f"{reference_genre_slug(ref)}_{stamp}_{args.role}_{ref_slug}"
+    if args.emit_playlist_json:
+        args.no_copy = True
+
+    if args.no_copy:
+        payload = {
+            "role": args.role,
+            "reference_id": ref.id,
+            "tracks": [
+                {
+                    "id": t.id,
+                    "path": (str(resolve_track_path(t, music_root).resolve()) if resolve_track_path(t, music_root) else ""),
+                    "artist": t.artist,
+                    "title": t.title,
+                    "filename": t.filename,
+                    "bpm": t.bpm,
+                    "key": t.key,
+                    "genre": t.genre,
+                    "length": t.length,
+                }
+                for t in playlist
+            ],
+        }
+        if args.emit_playlist_json:
+            import json as _json
+            print(_json.dumps(payload, ensure_ascii=False))
+        else:
+            print(f"Role: {args.role}")
+            print(f"Reference: {label(ref)} | bpm={ref.bpm:.1f} | camelot={engine_key_to_camelot(ref.key)}")
+            print(f"Tracks: {len(playlist)}")
+            print(f"Total: {format_time(total)}")
+        return 0
+
     set_dir, m3u_path, csv_path = write_outputs(playlist, Path(args.out_dir) / base_name, music_root)
 
     print(f"Role: {args.role}")

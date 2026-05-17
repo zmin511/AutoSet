@@ -9,6 +9,7 @@ import sys
 import threading
 import webbrowser
 from dataclasses import dataclass
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
 from urllib.parse import parse_qs, urlparse
@@ -28,7 +29,7 @@ DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.1"
 APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -670,6 +671,296 @@ def build_set(track_id, role, minutes, max_key_step, bpm_window, style_filter):
     return {"ok": result.returncode == 0, "code": result.returncode, "output": output, "set_folder": set_folder}
 
 
+def _engine_now_str():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _get_engine_database_uuid(con):
+    row = con.execute(
+        """
+        SELECT databaseUuid, COUNT(*) AS c
+        FROM PlaylistEntity
+        WHERE databaseUuid IS NOT NULL AND databaseUuid != ''
+        GROUP BY databaseUuid
+        ORDER BY c DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row and row[0]:
+        return str(row[0])
+    row = con.execute("SELECT uuid FROM Information LIMIT 1").fetchone()
+    if row and row[0]:
+        return str(row[0])
+    raise ValueError("Cannot determine Engine databaseUuid")
+
+
+def _find_playlist(con, parent_list_id, title):
+    return con.execute(
+        "SELECT id, title, parentListId, nextListId FROM Playlist WHERE parentListId=? AND title=?",
+        (int(parent_list_id), str(title)),
+    ).fetchone()
+
+
+def _find_last_child_list_id(con, parent_list_id):
+    row = con.execute(
+        "SELECT id FROM Playlist WHERE parentListId=? AND nextListId=0",
+        (int(parent_list_id),),
+    ).fetchone()
+    return (None if not row else int(row[0]))
+
+
+def _insert_playlist(con, parent_list_id, title):
+    now = _engine_now_str()
+    cur = con.execute(
+        """
+        INSERT INTO Playlist(title, parentListId, isPersisted, nextListId, lastEditTime, isExplicitlyExported)
+        VALUES (?, ?, 1, 0, ?, 1)
+        """,
+        (str(title), int(parent_list_id), now),
+    )
+    new_id = int(cur.lastrowid)
+    last_child = _find_last_child_list_id(con, parent_list_id)
+    if last_child is not None and last_child != new_id:
+        con.execute("UPDATE Playlist SET nextListId=? WHERE id=?", (new_id, last_child))
+    return new_id
+
+
+def _ensure_folder_path(con, folder_path):
+    parts = [p.strip() for p in str(folder_path).replace("\\", "/").split("/") if p.strip()]
+    parent_id = 0
+    for part in parts:
+        row = _find_playlist(con, parent_id, part)
+        if row:
+            parent_id = int(row[0])
+            continue
+        parent_id = _insert_playlist(con, parent_id, part)
+    return parent_id
+
+
+def _engine_track_path_for_abs(abs_path):
+    abs_path = Path(abs_path).resolve()
+    rel = abs_path.relative_to(MUSIC_ROOT.resolve()).as_posix()
+    return f"../Music/{rel}"
+
+
+def _read_set_source_paths(set_folder):
+    set_folder = Path(set_folder)
+    csv_path = set_folder / "playlist.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"playlist.csv not found: {csv_path}")
+    import csv
+
+    paths = []
+    with csv_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as f:
+        reader = csv.DictReader(f)
+        if not reader.fieldnames:
+            raise ValueError(f"playlist.csv has no header: {csv_path}")
+        header = {h.strip() for h in reader.fieldnames if h}
+        if "source_path" not in header:
+            raise ValueError(f"playlist.csv missing 'source_path' column: {csv_path}")
+        for row in reader:
+            src = (row.get("source_path") or "").strip()
+            if src:
+                paths.append(src)
+    seen = set()
+    out = []
+    for p in paths:
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def create_engine_playlist_from_set(set_folder, folder_path, title):
+    set_folder = str(set_folder or "").strip()
+    folder_path = str(folder_path or "").strip()
+    title = str(title or "").strip()
+    if not set_folder or not folder_path or not title:
+        raise ValueError("set_folder, folder and title are required")
+
+    source_paths = _read_set_source_paths(set_folder)
+    if not source_paths:
+        raise ValueError("No source tracks found in playlist.csv")
+
+    con = sqlite3.connect(str(DB_PATH))
+    try:
+        con.execute("PRAGMA foreign_keys=ON;")
+        database_uuid = _get_engine_database_uuid(con)
+        with con:
+            parent_id = _ensure_folder_path(con, folder_path)
+            if _find_playlist(con, parent_id, title):
+                raise ValueError(f"Playlist already exists: {folder_path}/{title}")
+
+            list_id = _insert_playlist(con, parent_id, title)
+
+            missing = []
+            track_ids = []
+            for p in source_paths:
+                abs_path = str(Path(p).resolve())
+                try:
+                    engine_path = _engine_track_path_for_abs(abs_path)
+                except Exception:
+                    engine_path = abs_path
+                row = con.execute("SELECT id FROM Track WHERE path=?", (engine_path,)).fetchone()
+                if not row:
+                    row = con.execute("SELECT id FROM Track WHERE path=?", (abs_path,)).fetchone()
+                if not row:
+                    missing.append((abs_path, engine_path))
+                    continue
+                track_ids.append(int(row[0]))
+
+            if missing:
+                lines = ["Some tracks are not imported in Engine DB (Track.path not found):"]
+                for abs_path, engine_path in missing[:30]:
+                    lines.append(f"- {abs_path} (expected: {engine_path})")
+                if len(missing) > 30:
+                    lines.append(f"... and {len(missing) - 30} more")
+                raise ValueError("\n".join(lines))
+
+            next_entity_id = 0
+            for track_id in reversed(track_ids):
+                cur = con.execute(
+                    """
+                    INSERT INTO PlaylistEntity(listId, trackId, databaseUuid, nextEntityId, membershipReference)
+                    VALUES (?, ?, ?, ?, 0)
+                    """,
+                    (int(list_id), int(track_id), database_uuid, int(next_entity_id)),
+                )
+                next_entity_id = int(cur.lastrowid)
+
+            con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (_engine_now_str(), int(list_id)))
+
+        return {
+            "ok": True,
+            "playlist_id": list_id,
+            "track_count": len(source_paths),
+            "output": f"Engine playlist created: {folder_path}/{title} (id={list_id}), tracks: {len(source_paths)}",
+        }
+    finally:
+        con.close()
+
+
+def _build_playlist_only(track_id, role, minutes, max_key_step, bpm_window, style_filter):
+    minutes = max(15, min(360, int(minutes)))
+    max_key_step = max(0, min(12, int(max_key_step)))
+    bpm_window = max(0, min(80, float(bpm_window)))
+    style_filter = ",".join(
+        p.strip().lower()
+        for p in (style_filter or [])
+        if isinstance(p, str) and p.strip()
+    )
+    cmd = [
+        sys.executable,
+        "-B",
+        str(BUILDER),
+        ".",
+        "--reference-id",
+        str(int(track_id)),
+        "--role",
+        role,
+        "--minutes",
+        str(minutes),
+        "--max-key-step",
+        str(max_key_step),
+        "--bpm-window",
+        str(bpm_window),
+        "--db-path",
+        str(DB_PATH),
+        "--library-provider",
+        ACTIVE_LIBRARY_PROVIDER,
+        "--music-root",
+        str(MUSIC_ROOT),
+        "--no-copy",
+        "--emit-playlist-json",
+    ]
+    if style_filter:
+        cmd += ["--style-filter", style_filter]
+    result = subprocess.run(
+        cmd,
+        cwd=str(TOOLS_DIR),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=60 * 20,
+    )
+    output = result.stdout or ""
+    if result.returncode != 0:
+        raise ValueError(output.strip() or "Failed to build playlist")
+    try:
+        return json.loads(output.strip().splitlines()[0])
+    except Exception as exc:
+        raise ValueError(f"Failed to parse playlist json: {exc}\n\nOutput:\n{output}") from exc
+
+
+def create_engine_playlist_from_paths(track_paths, folder_path, title):
+    folder_path = str(folder_path or "").strip()
+    title = str(title or "").strip()
+    if not folder_path or not title:
+        raise ValueError("folder and title are required")
+    track_paths = [str(Path(p).resolve()) for p in (track_paths or []) if str(p).strip()]
+    if not track_paths:
+        raise ValueError("Empty track list")
+
+    con = sqlite3.connect(str(DB_PATH))
+    try:
+        con.execute("PRAGMA foreign_keys=ON;")
+        database_uuid = _get_engine_database_uuid(con)
+        with con:
+            parent_id = _ensure_folder_path(con, folder_path)
+            if _find_playlist(con, parent_id, title):
+                raise ValueError(f"Playlist already exists: {folder_path}/{title}")
+
+            list_id = _insert_playlist(con, parent_id, title)
+
+            missing = []
+            track_ids = []
+            for abs_path in track_paths:
+                try:
+                    engine_path = _engine_track_path_for_abs(abs_path)
+                except Exception:
+                    engine_path = abs_path
+                row = con.execute("SELECT id FROM Track WHERE path=?", (engine_path,)).fetchone()
+                if not row:
+                    row = con.execute("SELECT id FROM Track WHERE path=?", (abs_path,)).fetchone()
+                if not row:
+                    missing.append((abs_path, engine_path))
+                    continue
+                track_ids.append(int(row[0]))
+
+            if missing:
+                lines = ["Some tracks are not imported in Engine DB (Track.path not found):"]
+                for abs_path, engine_path in missing[:30]:
+                    lines.append(f"- {abs_path} (expected: {engine_path})")
+                if len(missing) > 30:
+                    lines.append(f"... and {len(missing) - 30} more")
+                raise ValueError("\n".join(lines))
+
+            next_entity_id = 0
+            for track_id in reversed(track_ids):
+                cur = con.execute(
+                    """
+                    INSERT INTO PlaylistEntity(listId, trackId, databaseUuid, nextEntityId, membershipReference)
+                    VALUES (?, ?, ?, ?, 0)
+                    """,
+                    (int(list_id), int(track_id), database_uuid, int(next_entity_id)),
+                )
+                next_entity_id = int(cur.lastrowid)
+
+            con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (_engine_now_str(), int(list_id)))
+
+        return {
+            "ok": True,
+            "playlist_id": list_id,
+            "track_count": len(track_ids),
+            "output": f"Engine playlist created: {folder_path}/{title} (id={list_id}), tracks: {len(track_ids)}",
+        }
+    finally:
+        con.close()
+
+
 def refresh_tags(rel):
     target = safe_music_path(rel)
     rel_norm = rel_to_music(target).replace("\\", "/").casefold()
@@ -875,7 +1166,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/refresh-tags", "/api/update-genre", "/api/config"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/update-genre", "/api/config"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -892,6 +1183,17 @@ class Handler(BaseHTTPRequestHandler):
                 })
             elif parsed_path == "/api/build":
                 self.send_json(build_set(data["track_id"], data.get("role", "start"), data.get("minutes", 90), data.get("max_key_step", 5), data.get("bpm_window", 5), data.get("style_filter", [])))
+            elif parsed_path == "/api/engine-playlist":
+                playlist = _build_playlist_only(
+                    data["track_id"],
+                    data.get("role", "start"),
+                    data.get("minutes", 90),
+                    data.get("max_key_step", 5),
+                    data.get("bpm_window", 5),
+                    data.get("style_filter", []),
+                )
+                paths = [t.get("path") for t in (playlist.get("tracks") or []) if isinstance(t, dict)]
+                self.send_json(create_engine_playlist_from_paths(paths, data.get("folder", ""), data.get("title", "")))
             elif parsed_path == "/api/refresh-tags":
                 self.send_json(refresh_tags(data.get("path", "")))
             else:

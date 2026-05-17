@@ -253,6 +253,11 @@
     audio { width: 100%; margin: 0 0 13px; }
     .controls { display: grid; grid-template-columns: 1fr 110px 110px 110px; gap: 9px; margin-bottom: 12px; }
     .buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .build-controls { display: grid; grid-template-columns: 1fr 1fr 220px; gap: 9px; margin-bottom: 12px; align-items: center; }
+    .build-controls button { width: 100%; white-space: nowrap; }
+    @media (max-width: 900px) {
+      .build-controls { grid-template-columns: 1fr; }
+    }
     .maintenance { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
     .maintenance label { font-size: 12px; }
     .maintenance .buttons { margin-bottom: 0; }
@@ -379,8 +384,16 @@
           </div>
         </div>
 
-        <div class="buttons">
-          <button class="primary" id="build" disabled>Создать сет</button>
+        <div class="build-controls">
+          <div>
+            <button class="primary" id="build" disabled title="Создает set с копированием треков в папку Music/Sets на этом SSD.">Создать сет</button>
+          </div>
+          <div>
+            <button class="primary" id="enginePlaylist" disabled title="Создает плейлист в базе данных Engine (ссылками на треки, без копирования файлов).">Создать плейлист</button>
+          </div>
+          <div>
+            <input id="engineFolder" type="text" value="Event" placeholder="Расположение плейлиста" title="Куда будет создан плейлист в базе Engine: папка (например Event или Event/Sub). Плейлист создаётся с указанным названием." aria-label="Расположение плейлиста (папка в Engine)">
+          </div>
         </div>
 
         <pre id="output">Готовый сет появится в папке Music/Sets на этом SSD.</pre>
@@ -410,6 +423,7 @@
     let currentPath = '';
     let timer = null;
     let playingPath = '';
+    let lastBuiltSetFolder = '';
     let styleGroups = [];
     let genreOptions = [];
     let currentRows = { dirs: [], tracks: [], rel: '', parent: '' };
@@ -880,6 +894,8 @@
     function selectTrack(track) {
       selectedTrack = track;
       $('build').disabled = !track.id;
+      $('enginePlaylist').disabled = !track.id;
+      lastBuiltSetFolder = '';
       applyInferredStyles(track);
       $('selected').innerHTML = selectedMarkup(track);
       wireGenreSelect();
@@ -901,12 +917,16 @@
       $('selected').innerHTML = selectedMarkup(track, false);
       wireGenreSelect();
       $('build').disabled = !track.id;
+      $('enginePlaylist').disabled = !track.id;
+      lastBuiltSetFolder = '';
       if ($('search').value.trim()) search(); else browse(currentPath);
     }
 
     async function build() {
       if (!selectedTrack?.id) return;
       $('build').disabled = true;
+      $('enginePlaylist').disabled = true;
+      lastBuiltSetFolder = '';
       $('output').textContent = 'Создаю сет...';
       $('status').className = 'status';
       $('status').textContent = 'Копирую треки и пишу плейлисты...';
@@ -927,12 +947,55 @@
         $('output').textContent = data.output || data.error || 'Нет вывода.';
         $('status').className = data.ok ? 'status ok' : 'status bad';
         $('status').textContent = data.ok ? `Сет создан: ${data.set_folder}` : 'Сборка завершилась с ошибкой';
+        if (data.ok && data.set_folder) {
+          lastBuiltSetFolder = data.set_folder;
+          $('enginePlaylist').disabled = !selectedTrack?.id;
+        }
       } catch (err) {
         $('output').textContent = String(err);
         $('status').className = 'status bad';
         $('status').textContent = 'Ошибка запуска';
       } finally {
         $('build').disabled = false;
+      }
+    }
+
+    async function createEnginePlaylist() {
+      if (!selectedTrack?.id) return;
+      const folder = ($('engineFolder')?.value || '').trim() || 'Event';
+      const defaultTitle = `${selectedTrack.artist || 'Artist'} - ${selectedTrack.title || selectedTrack.filename || 'Playlist'}`.slice(0, 120);
+      const title = (prompt('Название плейлиста:', defaultTitle) || '').trim();
+      if (!title) return;
+
+      $('enginePlaylist').disabled = true;
+      $('output').textContent = 'Создаю плейлист в Engine DB (ссылками, без копирования файлов)...';
+      $('status').className = 'status';
+      $('status').textContent = 'Пишу плейлист в Engine DB...';
+      try {
+        const res = await fetch('/api/engine-playlist', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            track_id: selectedTrack.id,
+            role: $('role').value,
+            minutes: Number($('minutes').value),
+            max_key_step: Number($('keyStep').value),
+            bpm_window: Number($('bpmWindow').value),
+            style_filter: selectedStyles(),
+            folder,
+            title
+          })
+        });
+        const data = await res.json();
+        $('output').textContent = data.output || data.error || 'Нет вывода.';
+        $('status').className = data.ok ? 'status ok' : 'status bad';
+        $('status').textContent = data.ok ? `Плейлист Engine создан: ${folder}/${title}` : 'Не удалось создать плейлист Engine';
+      } catch (err) {
+        $('output').textContent = String(err);
+        $('status').className = 'status bad';
+        $('status').textContent = 'Ошибка создания плейлиста Engine';
+      } finally {
+        $('enginePlaylist').disabled = !selectedTrack?.id;
       }
     }
 
@@ -977,6 +1040,7 @@
       if (event.target === $('pickerModal')) closePicker();
     });
     $('build').addEventListener('click', build);
+    $('enginePlaylist').addEventListener('click', createEnginePlaylist);
     loadStyles().then(() => loadConfig()).then(() => browse(''));
   </script>
 </body>
