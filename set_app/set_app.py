@@ -29,7 +29,7 @@ DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.5"
 APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -895,6 +895,81 @@ def _build_playlist_only(track_id, role, minutes, max_key_step, bpm_window, styl
         raise ValueError(f"Failed to parse playlist json: {exc}\n\nOutput:\n{output}") from exc
 
 
+def _safe_slug(value, max_len=64):
+    value = str(value or "").strip()
+    value = re.sub(r"[\\/:*?\"<>|]+", "_", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"[^0-9A-Za-zА-Яа-я _\\-.,()\\[\\]]+", "", value)
+    value = value.replace(" ", "_")
+    return value[:max_len] if len(value) > max_len else value
+
+
+def _engine_playlist_local_folder_name(playlist, role):
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ref_id = playlist.get("reference_id")
+    base = f"engine_playlist_{stamp}_{role}_{ref_id or ''}"
+    return _safe_slug(base, 96) or f"engine_playlist_{stamp}"
+
+
+def write_local_playlist_no_copy(playlist, out_dir):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    m3u_path = out_dir / "playlist.m3u"
+    csv_path = out_dir / "playlist.csv"
+
+    tracks = playlist.get("tracks") or []
+    with m3u_path.open("w", encoding="utf-8") as f:
+        f.write("#EXTM3U\n")
+        for t in tracks:
+            if not isinstance(t, dict):
+                continue
+            length = int(t.get("length") or 0)
+            artist = str(t.get("artist") or "").strip()
+            title = str(t.get("title") or t.get("filename") or "").strip()
+            label = f"{artist} - {title}".strip(" -") if (artist or title) else str(t.get("filename") or "")
+            path = str(t.get("path") or "").strip()
+            f.write(f"#EXTINF:{length},{label}\n")
+            f.write(f"{path}\n")
+
+    import csv
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow([
+            "position",
+            "artist",
+            "title",
+            "length",
+            "bpm",
+            "key",
+            "genre",
+            "track_id",
+            "source_path",
+        ])
+        for i, t in enumerate(tracks, 1):
+            if not isinstance(t, dict):
+                continue
+            w.writerow([
+                i,
+                t.get("artist") or "",
+                t.get("title") or "",
+                t.get("length") or "",
+                t.get("bpm") or "",
+                t.get("key") or "",
+                t.get("genre") or "",
+                t.get("id") or "",
+                t.get("path") or "",
+            ])
+
+    methodology_path = out_dir / "methodology.txt"
+    with methodology_path.open("w", encoding="utf-8") as f:
+        f.write("Playlist (no-copy) methodology\n")
+        f.write("- Uses Engine DJ metadata (BPM/key/genre/length/path).\n")
+        f.write("- Builds a harmonic playlist with the same algorithm as set builder.\n")
+        f.write("- Does NOT copy or rename files; playlist.m3u points to original tracks.\n")
+
+    return {"folder": str(out_dir), "m3u": str(m3u_path), "csv": str(csv_path)}
+
+
 def create_engine_playlist_from_paths(track_paths, folder_path, title):
     folder_path = str(folder_path or "").strip()
     title = str(title or "").strip()
@@ -1192,8 +1267,14 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("bpm_window", 5),
                     data.get("style_filter", []),
                 )
+                local_name = _engine_playlist_local_folder_name(playlist, data.get("role", "start"))
+                local_out = write_local_playlist_no_copy(playlist, SETS_DIR / local_name)
                 paths = [t.get("path") for t in (playlist.get("tracks") or []) if isinstance(t, dict)]
-                self.send_json(create_engine_playlist_from_paths(paths, data.get("folder", ""), data.get("title", "")))
+                result = create_engine_playlist_from_paths(paths, data.get("folder", ""), data.get("title", ""))
+                result["local_playlist_folder"] = local_out["folder"]
+                result["local_m3u"] = local_out["m3u"]
+                result["local_csv"] = local_out["csv"]
+                self.send_json(result)
             elif parsed_path == "/api/refresh-tags":
                 self.send_json(refresh_tags(data.get("path", "")))
             else:

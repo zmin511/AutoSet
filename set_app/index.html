@@ -990,6 +990,9 @@
         $('output').textContent = data.output || data.error || 'Нет вывода.';
         $('status').className = data.ok ? 'status ok' : 'status bad';
         $('status').textContent = data.ok ? `Плейлист Engine создан: ${folder}/${title}` : 'Не удалось создать плейлист Engine';
+        if (data.ok && data.local_playlist_folder) {
+          $('output').textContent += `\n\nLocal playlist folder: ${data.local_playlist_folder}\nM3U: ${data.local_m3u}\nCSV: ${data.local_csv}`;
+        }
       } catch (err) {
         $('output').textContent = String(err);
         $('status').className = 'status bad';
