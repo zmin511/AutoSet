@@ -2,7 +2,7 @@
 
 `zmin_autoset` is a portable local app for building DJ sets from an Engine DJ library.
 
-Version: `0.4.6`
+Version: `0.4.7`
 
 The app reads the Engine DJ database, shows your music in a browser, lets you choose a reference track, and builds a harmonic set using BPM, Camelot/key, genre, bitrate, and track length. The finished set is copied into a dedicated output folder with `playlist.m3u` and `playlist.csv`.
 

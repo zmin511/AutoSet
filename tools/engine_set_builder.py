@@ -905,7 +905,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     total = sum(t.length for t in playlist)
     date_str = datetime.now().strftime("%d.%m.%y")
-    ref_slug = slug(label(ref))
+    ref_title = (ref.title or "").strip() or ref.filename
+    ref_slug = slug(ref_title)
     base_name = safe_filename(f"{reference_genre_slug(ref)}_{date_str}_{ref_slug}", "set")
     if args.emit_playlist_json:
         args.no_copy = True

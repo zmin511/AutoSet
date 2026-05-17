@@ -1,6 +1,6 @@
 # zmin_autoset
 
-Версия: `0.4.6`
+Версия: `0.4.7`
 
 `zmin_autoset` — портативное локальное приложение для:
 
@@ -47,7 +47,7 @@ http://127.0.0.1:8765/
 
 # zmin_autoset
 
-Version: `0.4.6`
+Version: `0.4.7`
 
 `zmin_autoset` is a portable local app for:
 
@@ -89,4 +89,3 @@ Outputs:
 - Sets and local playlists are written to `Music/Sets` (one folder per run).
 - **Create set** copies tracks into the output folder and writes `playlist.m3u` / `playlist.csv`.
 - **Create playlist** creates an Engine DB playlist and also writes local `playlist.m3u` / `playlist.csv` **without copying** (for previewing outside Engine).
-

@@ -29,7 +29,7 @@ DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
-APP_VERSION = "0.4.6"
+APP_VERSION = "0.4.7"
 APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -933,19 +933,17 @@ def _engine_playlist_local_folder_name(playlist, role):
             break
     if not ref:
         ref = next((t for t in (playlist.get("tracks") or []) if isinstance(t, dict)), {}) or {}
-    ref_label = (
-        f"{ref.get('artist') or ''} - {ref.get('title') or ref.get('filename') or ''}".strip(" -")
-        or str(ref.get("filename") or "playlist")
-    )
-    name = unified_set_or_playlist_name(ref.get("genre") or "", ref_label)
+    ref_title = str(ref.get("title") or "").strip() or str(ref.get("filename") or "playlist")
+    name = unified_set_or_playlist_name(ref.get("genre") or "", ref_title)
     return _safe_slug(name, 120) or _safe_slug(f"engine_playlist_{datetime.now().strftime('%d.%m.%y')}", 96)
 
 
-def write_local_playlist_no_copy(playlist, out_dir):
+def write_local_playlist_no_copy(playlist, out_dir, playlist_name):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    m3u_path = out_dir / "playlist.m3u"
-    csv_path = out_dir / "playlist.csv"
+    playlist_name = str(playlist_name or "").strip() or "playlist"
+    m3u_path = out_dir / f"{playlist_name}.m3u"
+    csv_path = out_dir / f"{playlist_name}.csv"
 
     tracks = playlist.get("tracks") or []
     with m3u_path.open("w", encoding="utf-8") as f:
@@ -1298,7 +1296,7 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("style_filter", []),
                 )
                 local_name = _engine_playlist_local_folder_name(playlist, data.get("role", "start"))
-                local_out = write_local_playlist_no_copy(playlist, SETS_DIR / local_name)
+                local_out = write_local_playlist_no_copy(playlist, SETS_DIR / local_name, local_name)
                 paths = [t.get("path") for t in (playlist.get("tracks") or []) if isinstance(t, dict)]
                 # Название плейлиста (и локальной папки) должно быть одинаковым для set/playlist/Engine.
                 result = create_engine_playlist_from_paths(paths, data.get("folder", ""), local_name)
