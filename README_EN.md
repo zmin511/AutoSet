@@ -4,10 +4,6 @@
 
 Version: `0.4.6`
 
-## What's new in 0.4.0
-
-- **Create Engine playlist** button: creates an Engine DB (`m.db`) playlist using links to original tracks (no file copy/rename); target Engine folder is set next to the button.
-
 The app reads the Engine DJ database, shows your music in a browser, lets you choose a reference track, and builds a harmonic set using BPM, Camelot/key, genre, bitrate, and track length. The finished set is copied into a dedicated output folder with `playlist.m3u` and `playlist.csv`.
 
 Current working provider: Denon Engine DJ.

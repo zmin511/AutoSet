@@ -1,19 +1,21 @@
 # zmin_autoset
 
-Портативное локальное приложение для сборки гармонических DJ-сетов из библиотеки Denon Engine DJ.
-
 Версия: `0.4.6`
 
-## Новое в 0.4.0
+`zmin_autoset` — портативное локальное приложение для:
 
-- Кнопка **«Создать плейлист Engine»**: создаёт плейлист в Engine DB (`m.db`) ссылками на исходные файлы (без копирования); папка в Engine задаётся рядом с кнопкой.
+- сборки гармонических DJ-сетов из библиотеки **Denon Engine DJ** (по BPM, Camelot/key, жанрам, длине);
+- создания плейлистов **в базе Engine** (без копирования файлов);
+- быстрого предпрослушивания результата через локальный `playlist.m3u` (ссылки на оригинальные треки).
 
-- [Полное описание на русском](README_RU.md)
-- [Full English documentation](README_EN.md)
+Сервер и UI работают локально, без облака: приложение читает Engine DB (`m.db`), показывает треки в браузере и запускает сборку по выбранному опорному треку.
 
-## Быстрый Старт
+- Полное описание на русском: `README_RU.md`
+- Full English documentation: `README_EN.md`
 
-Положите папку рядом с музыкальной библиотекой и базой Engine DJ:
+## Быстрый старт
+
+Рекомендуемая структура на диске:
 
 ```text
 <корень SSD или диска>/
@@ -29,36 +31,38 @@
 - Windows: `zmin_autoset\run_windows.cmd`
 - macOS: `zmin_autoset/run_mac.command`
 
-После запуска откроется локальная страница:
+UI откроется в браузере, обычно:
 
 ```text
 http://127.0.0.1:8765/
 ```
 
-HTML-страница работает через маленький локальный Python-сервер. Просто открыть `index.html` недостаточно: сервер нужен, чтобы читать базу Engine, запускать генератор и копировать аудиофайлы.
+Результаты:
 
-Готовые сеты складываются в `Music/Sets`. Служебные отчеты, backups, Python cache и локальные базы данных не публикуются в git.
-
-Текущий рабочий provider: Denon Engine DJ. В приложении уже есть слой поиска других DJ-библиотек: rekordbox и Traktor могут определяться как кандидаты, но пока не парсятся.
+- Сеты и локальные плейлисты пишутся в `Music/Sets` (каждый запуск — отдельная папка).
+- Кнопка **«Создать сет»** копирует треки в папку результата и пишет `playlist.m3u` / `playlist.csv`.
+- Кнопка **«Создать плейлист»** создаёт плейлист в Engine DB и дополнительно пишет локальные `playlist.m3u` / `playlist.csv` **без копирования** (можно открыть и прослушать вне Engine).
 
 ---
 
 # zmin_autoset
 
-Portable local app for building harmonic DJ sets from a Denon Engine DJ library.
-
 Version: `0.4.6`
 
-## What's new in 0.4.0
+`zmin_autoset` is a portable local app for:
 
-- **Create Engine playlist** button: creates an Engine DB (`m.db`) playlist using links to original tracks (no file copy/rename); target Engine folder is set next to the button.
+- building harmonic DJ sets from a **Denon Engine DJ** library (BPM, Camelot/key, genre, duration);
+- creating playlists **inside Engine DB** (no file copy/rename);
+- previewing results via a local `playlist.m3u` that links to the original tracks.
 
-- [Full Russian documentation](README_RU.md)
-- [Full English documentation](README_EN.md)
+Everything runs locally (no cloud): the app reads the Engine DB (`m.db`), shows your library in a browser UI, and builds results from the selected reference track.
 
-## Quick Start
+- Full Russian documentation: `README_RU.md`
+- Full English documentation: `README_EN.md`
 
-Place the folder next to your music library and Engine DJ database:
+## Quick start
+
+Recommended layout:
 
 ```text
 <SSD or drive root>/
@@ -74,14 +78,15 @@ Run:
 - Windows: `zmin_autoset\run_windows.cmd`
 - macOS: `zmin_autoset/run_mac.command`
 
-The app opens a local browser UI at:
+The UI opens in your browser (typically):
 
 ```text
 http://127.0.0.1:8765/
 ```
 
-The HTML page is served by a small local Python server. Opening `index.html` directly is not enough: the server reads the Engine database, starts the set builder, and copies audio files.
+Outputs:
 
-Generated sets are written to `Music/Sets`. Runtime reports, backups, Python caches, and local databases are intentionally ignored by git.
+- Sets and local playlists are written to `Music/Sets` (one folder per run).
+- **Create set** copies tracks into the output folder and writes `playlist.m3u` / `playlist.csv`.
+- **Create playlist** creates an Engine DB playlist and also writes local `playlist.m3u` / `playlist.csv` **without copying** (for previewing outside Engine).
 
-Current working provider: Denon Engine DJ. The app already has a discovery layer for other DJ libraries: rekordbox and Traktor can be detected as candidates, but they are not parsed yet.
