@@ -1,6 +1,6 @@
 # zmin_autoset
 
-Версия: `0.4.7`
+Версия: `0.4.8`
 
 `zmin_autoset` — портативное локальное приложение для:
 
@@ -47,7 +47,7 @@ http://127.0.0.1:8765/
 
 # zmin_autoset
 
-Version: `0.4.7`
+Version: `0.4.8`
 
 `zmin_autoset` is a portable local app for:
 

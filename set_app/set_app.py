@@ -29,7 +29,7 @@ DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
-APP_VERSION = "0.4.7"
+APP_VERSION = "0.4.8"
 APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -919,7 +919,8 @@ def _safe_slug(value, max_len=64):
     value = str(value or "").strip()
     value = re.sub(r"[\\/:*?\"<>|]+", "_", value)
     value = re.sub(r"\s+", " ", value).strip()
-    value = re.sub(r"[^0-9A-Za-zА-Яа-я _\\-.,()\\[\\]]+", "", value)
+    # Важно: '-' внутри [] должен быть экранирован или стоять в конце, иначе regex падает ("bad character range").
+    value = re.sub(r"[^0-9A-Za-zА-Яа-я _.,()\[\]\\-]+", "", value)
     value = value.replace(" ", "_")
     return value[:max_len] if len(value) > max_len else value
 
