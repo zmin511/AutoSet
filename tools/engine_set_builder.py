@@ -904,9 +904,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         playlist = build_peak_set(ref, tracks, target_seconds, args.max_key_step, bpm_window, allowed_styles)
 
     total = sum(t.length for t in playlist)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    ref_slug = slug(label(ref))[:64]
-    base_name = f"{reference_genre_slug(ref)}_{stamp}_{args.role}_{ref_slug}"
+    date_str = datetime.now().strftime("%d.%m.%y")
+    ref_slug = slug(label(ref))
+    base_name = safe_filename(f"{reference_genre_slug(ref)}_{date_str}_{ref_slug}", "set")
     if args.emit_playlist_json:
         args.no_copy = True
 

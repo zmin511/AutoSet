@@ -392,7 +392,7 @@
             <button class="primary" id="enginePlaylist" disabled title="Создает плейлист в базе данных Engine (ссылками на треки, без копирования файлов).">Создать плейлист</button>
           </div>
           <div>
-            <input id="engineFolder" type="text" value="Event" placeholder="Расположение плейлиста" title="Куда будет создан плейлист в базе Engine: папка (например Event или Event/Sub). Плейлист создаётся с указанным названием." aria-label="Расположение плейлиста (папка в Engine)">
+            <input id="engineFolder" type="text" value="Event" placeholder="Расположение плейлиста" title="Куда будет создан плейлист в базе Engine: папка (например Event или Event/Sub). Название плейлиста формируется автоматически." aria-label="Расположение плейлиста (папка в Engine)">
           </div>
         </div>
 
@@ -963,9 +963,6 @@
     async function createEnginePlaylist() {
       if (!selectedTrack?.id) return;
       const folder = ($('engineFolder')?.value || '').trim() || 'Event';
-      const defaultTitle = `${selectedTrack.artist || 'Artist'} - ${selectedTrack.title || selectedTrack.filename || 'Playlist'}`.slice(0, 120);
-      const title = (prompt('Название плейлиста:', defaultTitle) || '').trim();
-      if (!title) return;
 
       $('enginePlaylist').disabled = true;
       $('output').textContent = 'Создаю плейлист в Engine DB (ссылками, без копирования файлов)...';
@@ -982,14 +979,14 @@
             max_key_step: Number($('keyStep').value),
             bpm_window: Number($('bpmWindow').value),
             style_filter: selectedStyles(),
-            folder,
-            title
+            folder
           })
         });
         const data = await res.json();
         $('output').textContent = data.output || data.error || 'Нет вывода.';
         $('status').className = data.ok ? 'status ok' : 'status bad';
-        $('status').textContent = data.ok ? `Плейлист Engine создан: ${folder}/${title}` : 'Не удалось создать плейлист Engine';
+        const createdTitle = data.engine_playlist_title || '';
+        $('status').textContent = data.ok ? `Плейлист Engine создан: ${folder}/${createdTitle}` : 'Не удалось создать плейлист Engine';
         if (data.ok && data.local_playlist_folder) {
           $('output').textContent += `\n\nLocal playlist folder: ${data.local_playlist_folder}\nM3U: ${data.local_m3u}\nCSV: ${data.local_csv}`;
         }

@@ -2,7 +2,7 @@
 
 `zmin_autoset` is a portable local app for building DJ sets from an Engine DJ library.
 
-Version: `0.4.5`
+Version: `0.4.6`
 
 ## What's new in 0.4.0
 

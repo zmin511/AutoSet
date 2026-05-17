@@ -29,7 +29,7 @@ DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
-APP_VERSION = "0.4.5"
+APP_VERSION = "0.4.6"
 APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -675,6 +675,26 @@ def _engine_now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _engine_slug(text):
+    text = re.sub(r"[^\w\- ]+", "", str(text or ""), flags=re.U).strip()
+    text = re.sub(r"\s+", "_", text)
+    return (text[:80] or "playlist")
+
+
+def _engine_reference_genre_slug(genre_text):
+    parts = [p.strip() for p in re.split(r"[,;/|<>]+", str(genre_text or "")) if p.strip()]
+    base = parts[0] if parts else str(genre_text or "")
+    return (_engine_slug(base).lower() or "mixed")
+
+
+def unified_set_or_playlist_name(reference_genre, reference_label):
+    date_str = datetime.now().strftime("%d.%m.%y")
+    genre_slug = _engine_reference_genre_slug(reference_genre)
+    label_slug = _engine_slug(reference_label)
+    # Требование: genre_dd.mm.yy_reference (одинаково для set/playlist/Engine)
+    return f"{genre_slug}_{date_str}_{label_slug}"
+
+
 def _get_engine_database_uuid(con):
     row = con.execute(
         """
@@ -905,10 +925,20 @@ def _safe_slug(value, max_len=64):
 
 
 def _engine_playlist_local_folder_name(playlist, role):
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ref_id = playlist.get("reference_id")
-    base = f"engine_playlist_{stamp}_{role}_{ref_id or ''}"
-    return _safe_slug(base, 96) or f"engine_playlist_{stamp}"
+    ref = None
+    for t in (playlist.get("tracks") or []):
+        if isinstance(t, dict) and t.get("id") == ref_id:
+            ref = t
+            break
+    if not ref:
+        ref = next((t for t in (playlist.get("tracks") or []) if isinstance(t, dict)), {}) or {}
+    ref_label = (
+        f"{ref.get('artist') or ''} - {ref.get('title') or ref.get('filename') or ''}".strip(" -")
+        or str(ref.get("filename") or "playlist")
+    )
+    name = unified_set_or_playlist_name(ref.get("genre") or "", ref_label)
+    return _safe_slug(name, 120) or _safe_slug(f"engine_playlist_{datetime.now().strftime('%d.%m.%y')}", 96)
 
 
 def write_local_playlist_no_copy(playlist, out_dir):
@@ -1270,10 +1300,12 @@ class Handler(BaseHTTPRequestHandler):
                 local_name = _engine_playlist_local_folder_name(playlist, data.get("role", "start"))
                 local_out = write_local_playlist_no_copy(playlist, SETS_DIR / local_name)
                 paths = [t.get("path") for t in (playlist.get("tracks") or []) if isinstance(t, dict)]
-                result = create_engine_playlist_from_paths(paths, data.get("folder", ""), data.get("title", ""))
+                # Название плейлиста (и локальной папки) должно быть одинаковым для set/playlist/Engine.
+                result = create_engine_playlist_from_paths(paths, data.get("folder", ""), local_name)
                 result["local_playlist_folder"] = local_out["folder"]
                 result["local_m3u"] = local_out["m3u"]
                 result["local_csv"] = local_out["csv"]
+                result["engine_playlist_title"] = local_name
                 self.send_json(result)
             elif parsed_path == "/api/refresh-tags":
                 self.send_json(refresh_tags(data.get("path", "")))

@@ -2,7 +2,7 @@
 
 Портативное локальное приложение для сборки гармонических DJ-сетов из библиотеки Denon Engine DJ.
 
-Версия: `0.4.5`
+Версия: `0.4.6`
 
 ## Новое в 0.4.0
 
@@ -47,7 +47,7 @@ HTML-страница работает через маленький локал�
 
 Portable local app for building harmonic DJ sets from a Denon Engine DJ library.
 
-Version: `0.4.5`
+Version: `0.4.6`
 
 ## What's new in 0.4.0
 
