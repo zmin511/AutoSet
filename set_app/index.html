@@ -800,14 +800,13 @@
       $('musicRoot').value = cfg.music_root || '';
       $('dbPath').value = cfg.db_path || '';
       const provider = cfg.library_provider || {};
-      const detected = (cfg.library_candidates || []).filter(item => item.status === 'detected_not_supported').length;
       const repo = cfg.repository_url || 'https://github.com/zmin511/zmin_autoset';
       $('paths').innerHTML = `
         <span>Версия</span><span>${esc(cfg.app_name || 'zmin_autoset')} · v${esc(cfg.version || '0.3.0')}</span>
         <span>Библиотека</span><span>${esc(provider.name || 'Denon Engine DJ')} · ${esc(provider.status || '')}</span>
         <span>База</span><span title="${esc(cfg.db_path)}">${esc(cfg.db_path)}</span>
         <span>Сеты</span><span title="${esc(cfg.sets_dir)}">${esc(cfg.sets_dir)}</span>
-        <span>GitHub</span><span><a href="${esc(repo)}" target="_blank" rel="noreferrer">zmin511/zmin_autoset</a>${detected ? ` · найдено других: ${detected}` : ''}</span>
+        <span>GitHub</span><span><a href="${esc(repo)}" target="_blank" rel="noreferrer">zmin511/zmin_autoset</a></span>
       `;
       $('status').className = cfg.ready ? 'status ok' : 'status bad';
       $('status').textContent = cfg.ready ? `Готово · ${cfg.startup_refresh || ''}` : 'Не найдена база или builder';

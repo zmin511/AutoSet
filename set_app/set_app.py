@@ -10,7 +10,6 @@ import sys
 import threading
 import webbrowser
 import zlib
-from dataclasses import dataclass
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
@@ -170,73 +169,6 @@ def browse_disk(path, kind):
         "dirs": dirs,
         "files": files,
     }
-
-
-@dataclass(frozen=True)
-class LibraryProviderCandidate:
-    provider: str
-    name: str
-    path: Path
-    status: str
-    note: str
-
-    def to_dict(self):
-        return {
-            "provider": self.provider,
-            "name": self.name,
-            "path": str(self.path),
-            "status": self.status,
-            "note": self.note,
-        }
-
-
-def _home_candidates(*parts):
-    home = Path.home()
-    return [home.joinpath(*parts)] if str(home) else []
-
-
-def discover_library_candidates():
-    candidates = [
-        LibraryProviderCandidate(
-            "denon_engine",
-            "Denon Engine DJ",
-            DB_PATH,
-            "supported" if DB_PATH.exists() else "missing",
-            "Active provider. Reads Engine Library/Database2/m.db.",
-        )
-    ]
-
-    known = [
-        (
-            "rekordbox",
-            "Pioneer rekordbox",
-            "detected_not_supported",
-            "Detected candidate only. A rekordbox adapter is not implemented yet.",
-            [
-                SSD_ROOT / "PIONEER" / "rekordbox" / "export.pdb",
-                *(_home_candidates("AppData", "Roaming", "Pioneer", "rekordbox", "master.db")),
-            ],
-        ),
-        (
-            "traktor",
-            "Native Instruments Traktor",
-            "detected_not_supported",
-            "Detected candidate only. A Traktor collection.nml adapter is not implemented yet.",
-            [
-                SSD_ROOT / "Traktor" / "collection.nml",
-                *(_home_candidates("Documents", "Native Instruments")),
-            ],
-        ),
-    ]
-
-    for provider, name, status, note, paths in known:
-        for path in paths:
-            if path.is_file():
-                candidates.append(LibraryProviderCandidate(provider, name, path, status, note))
-            elif path.is_dir() and provider == "traktor":
-                for nml in sorted(path.glob("Traktor*/collection.nml")):
-                    candidates.append(LibraryProviderCandidate(provider, name, nml, status, note))
-    return candidates
 
 
 def active_library_provider():
@@ -1186,104 +1118,6 @@ def _engine_track_path_for_abs(abs_path):
     return f"../Music/{rel}"
 
 
-def _read_set_source_paths(set_folder):
-    set_folder = Path(set_folder)
-    csv_path = set_folder / "playlist.csv"
-    if not csv_path.exists():
-        raise FileNotFoundError(f"playlist.csv not found: {csv_path}")
-    import csv
-
-    paths = []
-    with csv_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            raise ValueError(f"playlist.csv has no header: {csv_path}")
-        header = {h.strip() for h in reader.fieldnames if h}
-        if "source_path" not in header:
-            raise ValueError(f"playlist.csv missing 'source_path' column: {csv_path}")
-        for row in reader:
-            src = (row.get("source_path") or "").strip()
-            if src:
-                paths.append(src)
-    seen = set()
-    out = []
-    for p in paths:
-        if p in seen:
-            continue
-        seen.add(p)
-        out.append(p)
-    return out
-
-
-def create_engine_playlist_from_set(set_folder, folder_path, title):
-    set_folder = str(set_folder or "").strip()
-    folder_path = str(folder_path or "").strip()
-    title = str(title or "").strip()
-    if not set_folder or not folder_path or not title:
-        raise ValueError("set_folder, folder and title are required")
-
-    source_paths = _read_set_source_paths(set_folder)
-    if not source_paths:
-        raise ValueError("No source tracks found in playlist.csv")
-
-    con = sqlite3.connect(str(DB_PATH))
-    try:
-        con.execute("PRAGMA foreign_keys=ON;")
-        database_uuid = _get_engine_database_uuid(con)
-        with con:
-            parent_id = _ensure_folder_path(con, folder_path)
-            if _find_playlist(con, parent_id, title):
-                raise ValueError(f"Playlist already exists: {folder_path}/{title}")
-
-            list_id = _insert_playlist(con, parent_id, title)
-
-            missing = []
-            track_ids = []
-            for p in source_paths:
-                abs_path = str(Path(p).resolve())
-                try:
-                    engine_path = _engine_track_path_for_abs(abs_path)
-                except Exception:
-                    engine_path = abs_path
-                row = con.execute("SELECT id FROM Track WHERE path=?", (engine_path,)).fetchone()
-                if not row:
-                    row = con.execute("SELECT id FROM Track WHERE path=?", (abs_path,)).fetchone()
-                if not row:
-                    missing.append((abs_path, engine_path))
-                    continue
-                track_ids.append(int(row[0]))
-
-            if missing:
-                lines = ["Some tracks are not imported in Engine DB (Track.path not found):"]
-                for abs_path, engine_path in missing[:30]:
-                    lines.append(f"- {abs_path} (expected: {engine_path})")
-                if len(missing) > 30:
-                    lines.append(f"... and {len(missing) - 30} more")
-                raise ValueError("\n".join(lines))
-
-            next_entity_id = 0
-            for track_id in reversed(track_ids):
-                cur = con.execute(
-                    """
-                    INSERT INTO PlaylistEntity(listId, trackId, databaseUuid, nextEntityId, membershipReference)
-                    VALUES (?, ?, ?, ?, 0)
-                    """,
-                    (int(list_id), int(track_id), database_uuid, int(next_entity_id)),
-                )
-                next_entity_id = int(cur.lastrowid)
-
-            con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (_engine_now_str(), int(list_id)))
-
-        return {
-            "ok": True,
-            "playlist_id": list_id,
-            "track_count": len(source_paths),
-            "output": f"Engine playlist created: {folder_path}/{title} (id={list_id}), tracks: {len(source_paths)}",
-        }
-    finally:
-        con.close()
-
-
 def _build_playlist_only(track_id, role, minutes, max_key_step, bpm_window, style_filter):
     minutes = max(15, min(360, int(minutes)))
     max_key_step = max(0, min(12, int(max_key_step)))
@@ -1634,7 +1468,6 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         if parsed.path == "/api/config":
-            library_candidates = [c.to_dict() for c in discover_library_candidates()]
             self.send_json({
                 "ssd_root": str(SSD_ROOT),
                 "music_root": str(MUSIC_ROOT),
@@ -1646,7 +1479,6 @@ class Handler(BaseHTTPRequestHandler):
                 "version": APP_VERSION,
                 "repository_url": APP_REPOSITORY_URL,
                 "library_provider": active_library_provider(),
-                "library_candidates": library_candidates,
                 "music_ready": MUSIC_ROOT.exists(),
                 "db_ready": DB_PATH.exists(),
                 "ready": DB_PATH.exists() and MUSIC_ROOT.exists() and BUILDER.exists(),

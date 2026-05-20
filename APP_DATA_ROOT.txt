@@ -1,5 +1,0 @@
-﻿Application root: F:\zmin_autoset
-
-Code, configs, reports, backups, and app internals stay under F:\zmin_autoset.
-The generated DJ set output folder is F:\Music\Sets.
-F:\Music is the music library and set-output location.
