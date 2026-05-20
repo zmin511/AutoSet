@@ -8,4 +8,4 @@
 - Cue/Loop: чтение `PerformanceData.quickCues` / `PerformanceData.loops`, отображение маркеров и времени.
 - Плеер: скраб по waveform, playhead, компактный UI.
 - Сборка сета: добавлена “энергия” трека из waveform и базовая energy‑кривая при подборе.
-
+- Camelot: `±N` считается по числам круга в обе стороны; A/B не увеличивает расстояние.

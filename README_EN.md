@@ -34,7 +34,7 @@ The app reads:
 The builder scores adjacent transitions by:
 
 - BPM delta;
-- Camelot distance;
+- Camelot number distance: `+/-3` from `5A/5B` allows 5, 6, 7, 8 and 4, 3, 2; A/B does not increase distance;
 - genre and selected style similarity;
 - estimated waveform energy;
 - track length and bitrate;

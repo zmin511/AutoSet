@@ -1549,13 +1549,13 @@ class Handler(BaseHTTPRequestHandler):
                     "ready": DB_PATH.exists() and MUSIC_ROOT.exists() and BUILDER.exists(),
                 })
             elif parsed_path == "/api/build":
-                self.send_json(build_set(data["track_id"], data.get("role", "start"), data.get("minutes", 90), data.get("max_key_step", 5), data.get("bpm_window", 5), data.get("style_filter", [])))
+                self.send_json(build_set(data["track_id"], data.get("role", "start"), data.get("minutes", 90), data.get("max_key_step", 3), data.get("bpm_window", 5), data.get("style_filter", [])))
             elif parsed_path == "/api/engine-playlist":
                 playlist = _build_playlist_only(
                     data["track_id"],
                     data.get("role", "start"),
                     data.get("minutes", 90),
-                    data.get("max_key_step", 5),
+                    data.get("max_key_step", 3),
                     data.get("bpm_window", 5),
                     data.get("style_filter", []),
                 )

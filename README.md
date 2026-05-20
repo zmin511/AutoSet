@@ -36,8 +36,8 @@ Engine Library/Database2/m.db
 - `PerformanceData.loops` - Loop 1..8.
 
 Алгоритм подбора оценивает соседние переходы: разницу BPM, расстояние по
-Camelot, близость жанров, энергию waveform, длину, битрейт и похожие версии
-одного трека.
+числам Camelot, близость жанров, энергию waveform, длину, битрейт и похожие
+версии одного трека. A/B не увеличивает Camelot-расстояние.
 
 ### Запуск
 
@@ -114,8 +114,8 @@ The app reads:
 - `PerformanceData.loops` - Loop 1..8.
 
 The builder scores adjacent transitions by BPM delta, Camelot distance, genre
-distance, waveform energy, track length, bitrate, and near-duplicate versions of
-the same song.
+distance by number, genre distance, waveform energy, track length, bitrate, and
+near-duplicate versions of the same song. A/B does not increase Camelot distance.
 
 ### Run
 

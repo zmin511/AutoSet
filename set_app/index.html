@@ -1456,7 +1456,10 @@
       const chunks = [];
       chunks.push(String(center));
       for (let d = 1; d <= max; d++) {
-        chunks.push(`${wrapCamelotNumber(center - d)}/${wrapCamelotNumber(center + d)}`);
+        chunks.push(String(wrapCamelotNumber(center + d)));
+      }
+      for (let d = 1; d <= max; d++) {
+        chunks.push(String(wrapCamelotNumber(center - d)));
       }
       return chunks.join(', ');
     }
@@ -1468,7 +1471,7 @@
       const camelot = selectedTrack?.camelot || '';
       const parsed = parseCamelot(camelot);
       if (!parsed) {
-        input.title = `±${step} считается по кругу Camelot (1–12). A↔B (мажор/минор) разрешается, но даёт небольшой штраф.`;
+        input.title = `±${step} считается только по числам Camelot (1–12) в обе стороны по кругу. A/B не увеличивает расстояние.`;
         return;
       }
       const allowedNums = allowedCamelotNumbers(parsed.num, step);
@@ -1479,7 +1482,7 @@
       const forbiddenText = forbiddenNums.length
         ? ` Запрещены: ${forbiddenNums.map(n => `${n}A/${n}B`).join(', ')}.`
         : ' Запрещённых нет.';
-      input.title = `От ${parsed.num}${parsed.mode} при ±${step}: числа ${formatCamelotRange(parsed.num, step)} (каждое в A и B).${forbiddenText} A↔B разрешается, но даёт небольшой штраф.`;
+      input.title = `От ${parsed.num}${parsed.mode} при ±${step}: числа ${formatCamelotRange(parsed.num, step)} (каждое в A и B).${forbiddenText} A/B не увеличивает расстояние.`;
     }
 
     async function build() {

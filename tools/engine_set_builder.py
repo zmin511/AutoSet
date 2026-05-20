@@ -110,17 +110,14 @@ def number_distance(a: int, b: int) -> int:
 
 
 def camelot_score(a_key: Optional[int], b_key: Optional[int], max_step: int) -> float:
-    if max_step <= 0:
-        return 0.0
     a = parse_camelot(engine_key_to_camelot(a_key))
     b = parse_camelot(engine_key_to_camelot(b_key))
     if not a or not b:
         return 999.0
     num_dist = number_distance(a[0], b[0])
-    if num_dist > max_step:
+    if num_dist > max(0, max_step):
         return 999.0
-    mode_penalty = 0.0 if a[1] == b[1] else 0.6
-    return float(num_dist) + mode_penalty
+    return float(num_dist)
 
 
 def camelot_relation(a_key: Optional[int], b_key: Optional[int]) -> Tuple[Optional[int], str]:
@@ -132,12 +129,12 @@ def camelot_relation(a_key: Optional[int], b_key: Optional[int]) -> Tuple[Option
     if a == b:
         return 0, "same key"
     if a[0] == b[0]:
-        return 1, "relative major/minor"
+        return 0, "same Camelot number (A/B allowed)"
     if a[1] == b[1] and num_dist == 1:
         return 1, "neighbor key"
     if a[1] == b[1]:
         return num_dist, f"{num_dist} wheel steps"
-    return num_dist + 1, f"{num_dist} steps + mode shift"
+    return num_dist, f"{num_dist} wheel steps (A/B allowed)"
 
 
 def genre_tokens(genre: str) -> set:
@@ -976,7 +973,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--music-root", default=DEFAULT_MUSIC_ROOT)
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     parser.add_argument("--minutes", type=int, default=90)
-    parser.add_argument("--max-key-step", type=int, default=5)
+    parser.add_argument("--max-key-step", type=int, default=3)
     parser.add_argument("--bpm-window", type=float, default=5.0, help="Allowed BPM distance from reference. Use 0 for no BPM limit.")
     parser.add_argument("--style-filter", default="", help="Comma-separated style buckets to allow. Empty keeps reference-family behavior.")
     parser.add_argument("--no-copy", action="store_true", help="Do not copy files / write set outputs (build playlist only).")
