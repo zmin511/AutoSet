@@ -11,6 +11,9 @@ from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Sequence, Tuple
 
+import struct
+import zlib
+
 from engine_config import PATHS
 
 DEFAULT_DB_PATH = PATHS["db_path"]
@@ -34,6 +37,7 @@ class Track:
     artist: str
     title: str
     path: str
+    wave_energy: Optional[float] = None
     dj_style: str = ""
     dj_family: str = ""
     dj_set_ok: bool = True
@@ -222,7 +226,59 @@ def genre_distance(a: Track, b: Track) -> float:
     return max(0.2, 1.0 - (overlap / union)) if overlap else 1.0
 
 
+def _decode_engine_zlib_blob(blob: Optional[bytes]) -> Optional[bytes]:
+    if not blob:
+        return None
+    if len(blob) < 6:
+        return None
+    try:
+        expected = struct.unpack(">I", blob[:4])[0]
+        raw = zlib.decompress(blob[4:])
+        if expected != len(raw):
+            # Length mismatch happens rarely; still accept.
+            pass
+        return raw
+    except Exception:
+        return None
+
+
+def _overview_peaks_from_raw(raw: Optional[bytes]) -> Optional[List[int]]:
+    if not raw or len(raw) < 16:
+        return None
+    # Observed header: 4 x u32be; the 2nd value looks like "points" (typically 1024).
+    try:
+        _a, points, _c, _d = struct.unpack(">4I", raw[:16])
+    except Exception:
+        return None
+    if not points or points > 8192:
+        return None
+    payload = raw[16:]
+    need = points * 3
+    if len(payload) < need:
+        return None
+    peaks: List[int] = []
+    for i in range(0, need, 3):
+        r = payload[i]
+        g = payload[i + 1]
+        b = payload[i + 2]
+        peaks.append(max(r, g, b))
+    return peaks
+
+
+def _energy_from_overview_blob(blob: Optional[bytes]) -> Optional[float]:
+    raw = _decode_engine_zlib_blob(blob)
+    peaks = _overview_peaks_from_raw(raw)
+    if not peaks:
+        return None
+    avg = sum(peaks) / (len(peaks) * 255.0)
+    # Slightly emphasize differences in the mid-range.
+    energy = max(0.0, min(1.0, avg ** 0.85))
+    return max(0.05, min(0.98, float(energy)))
+
+
 def energy_score(track: Track) -> float:
+    if track.wave_energy is not None:
+        return float(track.wave_energy)
     words = genre_words(track)
     base = 0.5
     if {"ambient", "downtempo", "chill", "chillout"} & words:
@@ -442,8 +498,20 @@ def _should_read_dj_tags(track_path: str) -> bool:
 def load_tracks(con: sqlite3.Connection, music_root: Path) -> List[Track]:
     rows = con.execute(
         """
-        SELECT id, filename, length, bitrate, bpmAnalyzed, key, genre, artist, title, path
+        SELECT
+          Track.id,
+          Track.filename,
+          Track.length,
+          Track.bitrate,
+          Track.bpmAnalyzed,
+          Track.key,
+          Track.genre,
+          Track.artist,
+          Track.title,
+          Track.path,
+          PerformanceData.overviewWaveFormData AS overviewWaveFormData
         FROM Track
+        LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
         WHERE isAvailable = 1
           AND bpmAnalyzed IS NOT NULL
           AND key IS NOT NULL
@@ -454,6 +522,7 @@ def load_tracks(con: sqlite3.Connection, music_root: Path) -> List[Track]:
     ).fetchall()
     tracks: List[Track] = []
     for r in rows:
+        wave_energy = _energy_from_overview_blob(r["overviewWaveFormData"])
         base_track = Track(
             id=int(r["id"]),
             filename=str(r["filename"] or ""),
@@ -465,6 +534,7 @@ def load_tracks(con: sqlite3.Connection, music_root: Path) -> List[Track]:
             artist=str(r["artist"] or ""),
             title=str(r["title"] or ""),
             path=str(r["path"] or ""),
+            wave_energy=wave_energy,
         )
         resolved = resolve_track_path(base_track, music_root)
         if _should_read_dj_tags(base_track.path):
@@ -483,6 +553,7 @@ def load_tracks(con: sqlite3.Connection, music_root: Path) -> List[Track]:
                 artist=base_track.artist,
                 title=base_track.title,
                 path=base_track.path,
+                wave_energy=base_track.wave_energy,
                 dj_style=dj_style,
                 dj_family=dj_family,
                 dj_set_ok=True if dj_set_ok is None else dj_set_ok,
@@ -552,6 +623,7 @@ def score_candidate(
     previous: Optional[Track],
     reference: Track,
     target_bpm: float,
+    target_energy: Optional[float],
     target_remaining: Optional[int],
     max_key_step: int,
     min_bpm: float,
@@ -599,9 +671,11 @@ def score_candidate(
         score -= 2.0
 
     target_energy = energy_score(reference)
-    if previous:
+    if target_energy is None and previous:
         prev_energy = energy_score(previous)
         target_energy = min(0.95, max(0.1, (prev_energy * 0.65) + (energy_score(reference) * 0.35)))
+    if target_energy is None:
+        target_energy = energy_score(reference)
     score += abs(energy_score(candidate) - target_energy) * 8.0
     if previous and track_identity(previous) == track_identity(candidate):
         score += 18.0
@@ -622,6 +696,7 @@ def pick_next(
     previous: Optional[Track],
     reference: Track,
     target_bpm: float,
+    target_energy: Optional[float],
     target_remaining: Optional[int],
     max_key_step: int,
     min_bpm: float,
@@ -637,6 +712,7 @@ def pick_next(
             previous,
             reference,
             target_bpm,
+            target_energy,
             target_remaining,
             max_key_step,
             min_bpm,
@@ -659,6 +735,7 @@ def extend_forward(
     target_total: int,
     max_key_step: int,
     bpm_curve,
+    energy_curve,
     min_bpm: float,
     max_bpm: float,
     allowed_styles: set,
@@ -667,6 +744,7 @@ def extend_forward(
     while elapsed < target_total - 120 and remaining:
         frac = min(1.0, elapsed / max(1, target_total))
         target_bpm = bpm_curve(frac)
+        target_energy = (None if energy_curve is None else energy_curve(frac))
         target_remaining = target_total - elapsed
         previous = sequence[-1] if sequence else None
         pick = pick_next(
@@ -674,6 +752,7 @@ def extend_forward(
             previous,
             reference,
             target_bpm,
+            target_energy,
             target_remaining,
             max_key_step,
             min_bpm,
@@ -714,7 +793,16 @@ def build_start_set(
         rise = bpm_window if bpm_window > 0 else BPM_RISE_LIMIT
         return ref_bpm + rise * min(1.0, frac / 0.78)
 
-    return extend_forward([reference], remaining, reference, target_seconds, max_key_step, curve, min_bpm, max_bpm, allowed_styles)
+    ref_e = energy_score(reference)
+
+    def energy(frac: float) -> float:
+        # Warmup -> build: gradually climb, but avoid pushing too hard.
+        start = max(0.1, ref_e - 0.10)
+        end = min(0.95, ref_e + 0.14)
+        t = min(1.0, frac / 0.78)
+        return start + (end - start) * t
+
+    return extend_forward([reference], remaining, reference, target_seconds, max_key_step, curve, energy, min_bpm, max_bpm, allowed_styles)
 
 
 def build_peak_set(
@@ -772,7 +860,13 @@ def build_peak_set(
         fall = bpm_window if bpm_window > 0 else min(BPM_WINDOW_DOWN, BPM_RISE_LIMIT)
         return ref_bpm - fall * frac
 
-    return extend_forward(sequence, remaining, reference, target_seconds, max_key_step, curve, min_bpm, max_bpm, allowed_styles)
+    ref_e = energy_score(reference)
+
+    def energy(frac: float) -> float:
+        # After the peak: slight release; keep it energetic but easing.
+        return max(0.1, min(0.95, ref_e - 0.12 * frac))
+
+    return extend_forward(sequence, remaining, reference, target_seconds, max_key_step, curve, energy, min_bpm, max_bpm, allowed_styles)
 
 
 def write_outputs(playlist: Sequence[Track], set_dir: Path, music_root: Path) -> Tuple[Path, Path, Path]:

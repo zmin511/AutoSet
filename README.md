@@ -1,17 +1,18 @@
 # zmin_autoset
 
-Версия: `0.4.8`
+Версия: `1.5.2`
 
-`zmin_autoset` — портативное локальное приложение для:
+`zmin_autoset` — локальное приложение для **Denon Engine DJ**: быстро отобрать опорный трек, собрать гармоничный сет и/или создать плейлист прямо в базе Engine.
 
-- сборки гармонических DJ-сетов из библиотеки **Denon Engine DJ** (по BPM, Camelot/key, жанрам, длине);
-- создания плейлистов **в базе Engine** (без копирования файлов);
-- быстрого предпрослушивания результата через локальный `playlist.m3u` (ссылки на оригинальные треки).
+**Что умеет**
+- Список треков из `Engine Library/Database2/m.db` + просмотр папок `Music/` (без облака).
+- Сборка сета по BPM/Camelot/жанру/длине + учёт “энергии” из `overviewWaveFormData`.
+- Создание плейлиста в Engine DB (ссылками, без копирования файлов) и локальный `playlist.m3u`/`playlist.csv`.
+- Встроенный плеер + waveform “как в Engine”: цветная overview‑вейвформа, cue/loop метки, скраб мышью.
 
-Сервер и UI работают локально, без облака: приложение читает Engine DB (`m.db`), показывает треки в браузере и запускает сборку по выбранному опорному треку.
-
-- Полное описание на русском: `README_RU.md`
-- Full English documentation: `README_EN.md`
+Документация:
+- Русский: `README_RU.md`
+- English: `README_EN.md`
 
 ## Быстрый старт
 
@@ -27,45 +28,41 @@
 ```
 
 Запуск:
-
 - Windows: `zmin_autoset\run_windows.cmd`
 - macOS: `zmin_autoset/run_mac.command`
 
-UI откроется в браузере, обычно:
-
+UI откроется в браузере (обычно):
 ```text
 http://127.0.0.1:8765/
 ```
 
 Результаты:
-
 - Сеты и локальные плейлисты пишутся в `Music/Sets` (каждый запуск — отдельная папка).
-- Кнопка **«Создать сет»** копирует треки в папку результата и пишет `playlist.m3u` / `playlist.csv`.
-- Кнопка **«Создать плейлист»** создаёт плейлист в Engine DB и дополнительно пишет локальные `playlist.m3u` / `playlist.csv` **без копирования** (можно открыть и прослушать вне Engine).
 
 ---
 
 # zmin_autoset
 
-Version: `0.4.8`
+Version: `1.5.2`
 
-`zmin_autoset` is a portable local app for:
+`zmin_autoset` is a local app for **Denon Engine DJ**: pick a reference track, build a harmonic set and/or create an Engine playlist.
 
-- building harmonic DJ sets from a **Denon Engine DJ** library (BPM, Camelot/key, genre, duration);
-- creating playlists **inside Engine DB** (no file copy/rename);
-- previewing results via a local `playlist.m3u` that links to the original tracks.
+**Features**
+- Browse tracks from `Engine Library/Database2/m.db` + browse `Music/` folders (no cloud).
+- Build sets using BPM/Camelot/genre/duration + “energy” from `overviewWaveFormData`.
+- Create playlists inside Engine DB (links only, no file copy) + local `playlist.m3u`/`playlist.csv`.
+- Built-in player + Engine-like waveform: RGB overview waveform, cue/loop markers, mouse scrubbing.
 
-Everything runs locally (no cloud): the app reads the Engine DB (`m.db`), shows your library in a browser UI, and builds results from the selected reference track.
-
-- Full Russian documentation: `README_RU.md`
-- Full English documentation: `README_EN.md`
+Docs:
+- Русский: `README_RU.md`
+- English: `README_EN.md`
 
 ## Quick start
 
 Recommended layout:
 
 ```text
-<SSD or drive root>/
+<drive root>/
   zmin_autoset/
   Music/
   Engine Library/
@@ -74,18 +71,14 @@ Recommended layout:
 ```
 
 Run:
-
 - Windows: `zmin_autoset\run_windows.cmd`
 - macOS: `zmin_autoset/run_mac.command`
 
-The UI opens in your browser (typically):
-
+Open UI (usually):
 ```text
 http://127.0.0.1:8765/
 ```
 
 Outputs:
-
 - Sets and local playlists are written to `Music/Sets` (one folder per run).
-- **Create set** copies tracks into the output folder and writes `playlist.m3u` / `playlist.csv`.
-- **Create playlist** creates an Engine DB playlist and also writes local `playlist.m3u` / `playlist.csv` **without copying** (for previewing outside Engine).
+

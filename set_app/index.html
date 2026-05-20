@@ -13,6 +13,7 @@
       --text: #eef2f5;
       --muted: #9aa7b2;
       --accent: #37c58f;
+      --accent2: #49a0ec;
       --bad: #ef6b73;
       --soft: #20262b;
     }
@@ -55,6 +56,7 @@
     button.primary { background: var(--accent); color: #07110d; border-color: var(--accent); font-weight: 700; }
     button:disabled { opacity: .45; cursor: default; }
     .toolbar { display: grid; grid-template-columns: 1fr 92px 120px; gap: 8px; margin-bottom: 10px; }
+    .toolbar.compact { margin: 10px 0 0; }
     .path-config {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) auto;
@@ -120,14 +122,14 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       overflow: hidden;
-      max-height: 68vh;
+      max-height: 58vh;
       overflow-y: auto;
       background: var(--panel);
     }
     .item {
       width: 100%;
       display: grid;
-      grid-template-columns: 42px minmax(0, 1fr) 104px 62px 66px 58px;
+      grid-template-columns: 42px minmax(0, 1fr) 20px 104px 62px 66px 58px;
       gap: 8px;
       align-items: center;
       padding: 9px 11px;
@@ -138,7 +140,11 @@
       text-align: left;
       cursor: pointer;
     }
-    .item:hover, .item.selected { background: var(--soft); }
+    .item:hover { background: rgba(255,255,255,.04); }
+    .item.selected {
+      background: linear-gradient(90deg, rgba(73,160,236,.18), rgba(73,160,236,0) 42%), var(--soft);
+      box-shadow: inset 3px 0 0 0 var(--accent2);
+    }
     .folder { color: #d7e9ff; font-weight: 680; }
     .name { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .title {
@@ -157,6 +163,10 @@
     .cell { color: #dbe7ee; font-size: 12px; white-space: normal; overflow-wrap: anywhere; text-align: right; justify-self: end; }
     .genre-cell { font-size: 11px; line-height: 1.2; color: #f0f5f8; }
     .tag { border: 1px solid var(--line); border-radius: 999px; padding: 3px 7px; text-align: center; min-width: 58px; }
+    .marks { justify-self: center; display: flex; flex-direction: column; gap: 3px; align-items: center; }
+    .dot { width: 7px; height: 7px; border-radius: 999px; box-shadow: 0 0 0 1px rgba(0,0,0,.55) inset; }
+    .dot.cue { background: var(--accent2); }
+    .dot.loop { background: #ff8a3d; }
     .head {
       position: sticky;
       top: 0;
@@ -178,7 +188,7 @@
       padding: 0;
       text-transform: uppercase;
     }
-    .sort-head.active { color: var(--accent); }
+    .sort-head.active { color: var(--accent2); }
     .play {
       width: 28px;
       height: 28px;
@@ -187,7 +197,7 @@
       text-align: center;
       color: var(--text);
     }
-    .play.active { background: var(--accent); color: #07110d; border-color: var(--accent); }
+    .play.active { background: var(--accent2); color: #07110d; border-color: var(--accent2); }
     .selected-box, pre {
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -225,7 +235,7 @@
       background: var(--panel);
       padding: 10px;
       margin-bottom: 8px;
-      max-height: 315px;
+      max-height: 28vh;
       overflow-y: auto;
     }
     .style-group { margin-bottom: 6px; }
@@ -253,14 +263,49 @@
     audio { width: 100%; margin: 0 0 13px; }
     .controls { display: grid; grid-template-columns: 1fr 110px 110px 110px; gap: 9px; margin-bottom: 12px; }
     .buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-    .build-controls { display: grid; grid-template-columns: 1fr 1fr 220px; gap: 9px; margin-bottom: 12px; align-items: center; }
+    .build-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 220px); gap: 9px; margin-bottom: 12px; align-items: stretch; }
     .build-controls button { width: 100%; white-space: nowrap; }
+    .build-controls input { width: 100%; min-width: 0; box-sizing: border-box; }
+    .build-controls button, .build-controls input { height: 42px; }
     @media (max-width: 900px) {
       .build-controls { grid-template-columns: 1fr; }
     }
     .maintenance { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
     .maintenance label { font-size: 12px; }
     .maintenance .buttons { margin-bottom: 0; }
+    .waveform { border: 1px solid var(--line); border-radius: 10px; background: #0b0d0f; padding: 10px; margin: 10px 0 14px; }
+    .waveform-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+    .waveform-head .title { font-size: 12px; color: var(--muted); }
+    .waveform-head .meta { font-size: 11px; color: var(--muted); }
+    canvas#waveCanvas { width: 100%; height: 84px; display: block; cursor: pointer; }
+    .playerbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      margin: 12px 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(10, 12, 14, 0.75);
+      backdrop-filter: blur(8px);
+    }
+    .playerbar .btn {
+      width: 40px;
+      height: 34px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #0d0f11;
+      color: var(--text);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+    }
+    .playerbar .time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 88px; text-align: left; }
+    .playerbar .spacer { flex: 1; }
+    .playerbar input[type="range"] { width: 120px; }
+    .playerbar .mini { font-size: 11px; color: var(--muted); }
     pre {
       min-height: 150px;
       max-height: 30vh;
@@ -292,7 +337,8 @@
       .paths { text-align: left; margin-top: 10px; grid-template-columns: auto 1fr; }
       .toolbar, .controls, .path-config { grid-template-columns: 1fr; }
       .browser { max-height: 48vh; margin-bottom: 18px; }
-      .item { grid-template-columns: 38px minmax(0, 1fr) 64px 50px 56px; }
+      .style-box { max-height: 22vh; }
+      .item { grid-template-columns: 38px minmax(0, 1fr) 18px 64px 50px 56px; }
       .item .cell:nth-child(6) { display: none; }
       .title .name { font-size: 14px; }
     }
@@ -327,22 +373,6 @@
           </div>
           <button id="savePaths">Сохранить пути</button>
         </div>
-        <div class="toolbar">
-          <input id="search" placeholder="Поиск или оставь пустым для просмотра папки">
-          <select id="limit">
-            <option>20</option>
-            <option selected>40</option>
-            <option>60</option>
-            <option>80</option>
-            <option>100</option>
-            <option>120</option>
-            <option>140</option>
-            <option>160</option>
-            <option>180</option>
-            <option>200</option>
-          </select>
-          <button id="clearSearch">Папки</button>
-        </div>
         <div class="crumbs" id="crumbs"></div>
         <div class="browser" id="browser"></div>
         <div class="maintenance">
@@ -351,16 +381,42 @@
             <button id="refreshTags">Обновить теги в папке</button>
             <button id="reloadFolder">Обновить список</button>
           </div>
+          <div class="toolbar compact">
+            <input id="search" placeholder="Поиск трека (или оставь пустым для папки)">
+            <select id="limit" title="Сколько треков показывать в списке">
+              <option>20</option>
+              <option selected>40</option>
+              <option>60</option>
+              <option>80</option>
+              <option>100</option>
+              <option>120</option>
+              <option>140</option>
+              <option>160</option>
+              <option>180</option>
+              <option>200</option>
+            </select>
+            <button id="clearSearch" title="Сбросить поиск и вернуться к папкам">Папки</button>
+          </div>
         </div>
       </section>
 
       <section>
         <div class="selected-box" id="selected">Выбери трек из папки или поиска.</div>
-        <div class="style-box">
-          <label>Стили для подбора</label>
-          <div class="style-grid" id="styleGrid"></div>
+        <audio id="player" preload="none"></audio>
+        <div class="playerbar" id="playerbar">
+          <button class="btn" id="playPause" type="button" title="Play/Pause (Space)">▶</button>
+          <div class="time" id="playerTime">0:00 / 0:00</div>
+          <div class="spacer"></div>
+          <div class="mini">Vol</div>
+          <input id="playerVol" type="range" min="0" max="1" step="0.01" value="0.85" aria-label="Volume">
         </div>
-        <audio id="player" controls preload="none"></audio>
+        <div class="waveform" id="waveBox" hidden>
+          <div class="waveform-head">
+            <div class="title">Waveform (Engine overview)</div>
+            <div class="meta" id="waveMeta"></div>
+          </div>
+          <canvas id="waveCanvas" width="1024" height="84"></canvas>
+        </div>
 
         <div class="controls">
           <div>
@@ -376,7 +432,7 @@
           </div>
           <div>
             <label for="keyStep">Camelot ±</label>
-            <input id="keyStep" type="number" min="0" max="12" step="1" value="5">
+            <input id="keyStep" type="number" min="0" max="12" step="1" value="3" title="±N считается по кругу Camelot (1–12). Наведи на поле, чтобы увидеть диапазон для выбранного трека.">
           </div>
           <div>
             <label for="bpmWindow">BPM ±</label>
@@ -394,6 +450,11 @@
           <div>
             <input id="engineFolder" type="text" value="Event" placeholder="Расположение плейлиста" title="Куда будет создан плейлист в базе Engine: папка (например Event или Event/Sub). Название плейлиста формируется автоматически." aria-label="Расположение плейлиста (папка в Engine)">
           </div>
+        </div>
+
+        <div class="style-box">
+          <label>Стили для подбора</label>
+          <div class="style-grid" id="styleGrid"></div>
         </div>
 
         <pre id="output">Готовый сет появится в папке Music/Sets на этом SSD.</pre>
@@ -605,9 +666,14 @@
       const btn = document.createElement('div');
       btn.tabIndex = 0;
       btn.className = `item ${genreClass(track.genre)}` + (selectedTrack?.id && selectedTrack.id === track.id ? ' selected' : '');
+      const marks = [
+        track.has_cue ? '<span class="dot cue" title="Есть cue"></span>' : '',
+        track.has_loop ? '<span class="dot loop" title="Есть loop"></span>' : '',
+      ].filter(Boolean).join('');
       btn.innerHTML = `
         <button class="play ${playingPath === (track.rel || track.path) ? 'active' : ''}" title="Прослушать">▶</button>
         <div class="title"><span class="name">${esc(track.label || track.filename)}</span><span class="sub">${esc(track.path || track.rel || '')}</span></div>
+        <div class="marks">${marks}</div>
         <div class="cell genre-cell">${esc(track.genre || '')}</div>
         <div class="cell tag ${keyClass(track.camelot)}">${esc(track.camelot || '')}</div>
         <div class="cell tag">${esc(track.bpm || '')}</div>
@@ -630,6 +696,7 @@
       head.innerHTML = `
         <div></div>
         <div>Название / путь</div>
+        <div></div>
         <button class="sort-head ${sortState.key === 'genre' ? 'active' : ''}" data-sort="genre">Жанр ${sortState.key === 'genre' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
         <button class="sort-head ${sortState.key === 'camelot' ? 'active' : ''}" data-sort="camelot">Key ${sortState.key === 'camelot' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
         <button class="sort-head ${sortState.key === 'bpm' ? 'active' : ''}" data-sort="bpm">BPM ${sortState.key === 'bpm' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
@@ -899,6 +966,9 @@
       applyInferredStyles(track);
       $('selected').innerHTML = selectedMarkup(track);
       wireGenreSelect();
+      updateKeyStepHint();
+      updatePlayerBar();
+      loadWaveform(track.id);
       if ($('search').value.trim()) search(); else browse(currentPath);
     }
 
@@ -919,7 +989,494 @@
       $('build').disabled = !track.id;
       $('enginePlaylist').disabled = !track.id;
       lastBuiltSetFolder = '';
+      updateKeyStepHint();
+      updatePlayerBar();
+      loadWaveform(track.id);
       if ($('search').value.trim()) search(); else browse(currentPath);
+    }
+
+    let lastWaveTrackId = 0;
+    let lastWavePeaks = null;
+    window.__waveMarkers = [];
+    window.__waveCues = [];
+    window.__waveLoops = [];
+    window.__waveRGB = null;
+    let waveDragActive = false;
+    let waveLastFrac = null;
+
+    function drawWaveform(peaks) {
+      const canvas = $('waveCanvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const cssW = canvas.clientWidth || 1;
+      const cssH = canvas.clientHeight || 1;
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.max(1, Math.floor(cssW * dpr));
+      const h = Math.max(1, Math.floor(cssH * dpr));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#0b0d0f';
+      ctx.fillRect(0, 0, w, h);
+
+      if (!Array.isArray(peaks) || !peaks.length) return;
+      const cueLabelH = 18 * dpr;
+      const loopLabelH = 14 * dpr;
+      const waveTop = cueLabelH + (6 * dpr);
+      const waveBottom = h - loopLabelH - (6 * dpr);
+      const waveBase = Math.max(waveTop + 6 * dpr, waveBottom); // baseline (only upper half waveform)
+      const maxAmp = Math.max(4 * dpr, (waveBase - waveTop) * 0.96);
+      const bins = Math.min(w, peaks.length);
+      const rgb = window.__waveRGB;
+      const hasRgb = rgb && Array.isArray(rgb.r) && Array.isArray(rgb.g) && Array.isArray(rgb.b) && rgb.r.length === peaks.length;
+      if (hasRgb) {
+        // Engine-like layered look: blue (low), green (mid), white envelope.
+        const drawLayer = (arr, color, gain, alpha) => {
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = alpha;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          for (let x = 0; x < bins; x++) {
+            const idx = Math.floor((x / Math.max(1, bins - 1)) * (peaks.length - 1));
+            const p = Math.max(0, Math.min(255, Number(arr[idx]) || 0));
+            const amp = (p / 255) * maxAmp * gain;
+            ctx.moveTo(x + 0.5, waveBase);
+            ctx.lineTo(x + 0.5, waveBase - amp);
+          }
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        };
+        drawLayer(rgb.b, 'rgba(73,160,236,1)', 1.0, 0.95);
+        drawLayer(rgb.g, 'rgba(55,197,143,1)', 0.92, 0.95);
+        drawLayer(rgb.r, 'rgba(238,242,245,1)', 0.78, 0.9);
+      } else {
+        ctx.strokeStyle = '#37c58f';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let x = 0; x < bins; x++) {
+          const idx = Math.floor((x / Math.max(1, bins - 1)) * (peaks.length - 1));
+          const p = Math.max(0, Math.min(255, Number(peaks[idx]) || 0));
+          const amp = (p / 255) * maxAmp;
+          ctx.moveTo(x + 0.5, waveBase);
+          ctx.lineTo(x + 0.5, waveBase - amp);
+        }
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+      ctx.beginPath();
+      ctx.moveTo(0, waveBase + 0.5);
+      ctx.lineTo(w, waveBase + 0.5);
+      ctx.stroke();
+
+      if (Array.isArray(window.__waveMarkers) && window.__waveMarkers.length) {
+        const beats = window.__waveMarkers.filter(m => String(m?.kind || '') === 'beat');
+        const beatStep = beats.length > 80 ? Math.ceil(beats.length / 40) : 1;
+        let beatSeen = 0;
+        for (const m of window.__waveMarkers) {
+          const frac = Number(m?.pos_frac);
+          if (!Number.isFinite(frac) || frac < 0 || frac > 1) continue;
+          const x = Math.floor(frac * (w - 1)) + 0.5;
+          const kind = String(m?.kind || '');
+          if (kind === 'beat') {
+            beatSeen += 1;
+            if (beatSeen % beatStep !== 0) continue;
+            ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+            ctx.lineWidth = 1;
+          } else if (kind === 'cue') {
+            ctx.strokeStyle = 'rgba(30,110,200,0.72)';
+            ctx.lineWidth = 2;
+          } else if (kind === 'loop') {
+            ctx.strokeStyle = 'rgba(236,196,76,0.95)';
+            ctx.lineWidth = 2;
+          } else {
+            ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+            ctx.lineWidth = 1;
+          }
+          ctx.beginPath();
+          const y1 = (kind === 'cue' || kind === 'beat') ? 0 : 0;
+          const y2 = (kind === 'cue' || kind === 'beat') ? waveBase : h;
+          ctx.moveTo(x, y1);
+          ctx.lineTo(x, y2);
+          ctx.stroke();
+        }
+        ctx.lineWidth = 1;
+      }
+
+      if (Array.isArray(window.__waveCues) && window.__waveCues.length) {
+        const roundRect = (ctx, x, y, w, h, r) => {
+          if (ctx.roundRect) return ctx.roundRect(x, y, w, h, r);
+          const rr = Math.min(r, w / 2, h / 2);
+          ctx.moveTo(x + rr, y);
+          ctx.arcTo(x + w, y, x + w, y + h, rr);
+          ctx.arcTo(x + w, y + h, x, y + h, rr);
+          ctx.arcTo(x, y + h, x, y, rr);
+          ctx.arcTo(x, y, x + w, y, rr);
+          ctx.closePath();
+        };
+        ctx.font = `${Math.max(10, Math.floor(11 * dpr))}px Segoe UI, Inter, Arial, sans-serif`;
+        ctx.textBaseline = 'top';
+        const cues = [...window.__waveCues].filter(c => Number.isFinite(Number(c?.pos_frac)));
+        cues.sort((a, b) => Number(a.pos_frac) - Number(b.pos_frac));
+        const placed = [];
+        const cueTop = 2 * dpr;
+        const gap = 6 * dpr;
+        const clusterPx = 72 * dpr;
+
+        for (let i = 0; i < cues.length; i++) {
+          const cue = cues[i];
+          const frac = Number(cue.pos_frac);
+          const x = Math.floor(frac * (w - 1)) + 0.5;
+          const slot = Number(cue?.slot) || 0;
+          const label = (cue?.label || '').trim() || (slot ? `Cue ${slot}` : 'Cue');
+          const time = Number.isFinite(Number(cue?.pos_s)) ? fmtTime(cue.pos_s) : '';
+
+          const padX = 6 * dpr;
+          const padY = 3 * dpr;
+          const labelW = ctx.measureText(label).width;
+          const boxW = labelW + padX * 2;
+          const boxH = (12 * dpr) + padY * 2;
+
+          // Place label pill centered over cue, clamped.
+          const pillLeft = Math.max(2 * dpr, Math.min(w - boxW - 2 * dpr, x - boxW / 2));
+          const pillRight = pillLeft + boxW;
+
+          // Determine clustering with next/prev.
+          const prev = cues[i - 1];
+          const next = cues[i + 1];
+          const hasPrevClose = prev && Math.abs((Number(prev.pos_frac) * (w - 1)) - (frac * (w - 1))) < clusterPx;
+          const hasNextClose = next && Math.abs((Number(next.pos_frac) * (w - 1)) - (frac * (w - 1))) < clusterPx;
+
+          // Time placement rule:
+          // - In a close pair/cluster: first time goes before first pill, last time goes after last pill.
+          // - Otherwise: time goes before pill if it fits, else after.
+          let timeSide = 'before';
+          if (hasPrevClose && !hasNextClose) timeSide = 'after';
+          if (!hasPrevClose && hasNextClose) timeSide = 'before';
+          if (hasPrevClose && hasNextClose) timeSide = 'after';
+
+          const timeW = time ? ctx.measureText(time).width : 0;
+          let timeX = null;
+          if (time) {
+            if (timeSide === 'before') {
+              timeX = pillLeft - gap - timeW;
+              if (timeX < 2 * dpr) timeX = pillRight + gap;
+            } else {
+              timeX = pillRight + gap;
+              if (timeX + timeW > w - 2 * dpr) timeX = Math.max(2 * dpr, pillLeft - gap - timeW);
+            }
+          }
+
+          // Draw label pill.
+          ctx.fillStyle = 'rgba(73,160,236,0.22)';
+          ctx.strokeStyle = 'rgba(73,160,236,0.55)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          roundRect(ctx, pillLeft, cueTop, boxW, boxH, 6 * dpr);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = 'rgba(231,240,245,0.95)';
+          ctx.fillText(label, pillLeft + padX, cueTop + padY);
+
+          if (time && timeX != null) {
+            ctx.fillStyle = 'rgba(154,167,178,0.92)';
+            ctx.fillText(time, timeX, cueTop + padY);
+          }
+
+          placed.push({ pillLeft, pillRight });
+        }
+      }
+
+      if (Array.isArray(window.__waveLoops) && window.__waveLoops.length) {
+        const player = $('player');
+        const dur = player ? Number(player.duration) : NaN;
+        const trackLen = (Number.isFinite(dur) && dur > 0) ? dur : null;
+        ctx.font = `${Math.max(10, Math.floor(11 * dpr))}px Segoe UI, Inter, Arial, sans-serif`;
+        ctx.textBaseline = 'bottom';
+        for (const loop of window.__waveLoops) {
+          const a = Number(loop?.start_frac);
+          const b = Number(loop?.end_frac);
+          if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+          const leftFrac = Math.max(0, Math.min(1, Math.min(a, b)));
+          const rightFrac = Math.max(0, Math.min(1, Math.max(a, b)));
+          const x1 = Math.floor(leftFrac * (w - 1)) + 0.5;
+          const x2 = Math.floor(rightFrac * (w - 1)) + 0.5;
+          const yTop = waveBase + 1;
+          const yBot = h - 1;
+          ctx.fillStyle = 'rgba(255,138,61,0.18)';
+          ctx.strokeStyle = 'rgba(255,138,61,0.70)';
+          ctx.lineWidth = 1;
+          ctx.fillRect(x1, yTop, Math.max(1, x2 - x1), yBot - yTop);
+          ctx.beginPath();
+          ctx.moveTo(x1, yTop);
+          ctx.lineTo(x1, yBot);
+          ctx.moveTo(x2, yTop);
+          ctx.lineTo(x2, yBot);
+          ctx.stroke();
+          const labelOnly = (loop?.label || '').trim() || (loop?.slot ? `Loop ${loop.slot}` : 'Loop');
+          const time = Number.isFinite(Number(loop?.start_s)) ? fmtTime(loop.start_s) : '';
+          const label = time ? `${time} ${labelOnly}` : labelOnly;
+          const textW = ctx.measureText(label).width;
+          const center = (x1 + x2) / 2;
+          const tx = Math.max(2 * dpr, Math.min(w - textW - 2 * dpr, center - textW / 2));
+          ctx.fillStyle = 'rgba(231,240,245,0.92)';
+          ctx.fillText(label, tx, h - (3 * dpr));
+        }
+      }
+
+      // Total duration label at the right edge.
+      {
+        const player = $('player');
+        const dur = player ? Number(player.duration) : NaN;
+        if (Number.isFinite(dur) && dur > 0) {
+          const text = fmtTime(dur);
+          ctx.font = `${Math.max(10, Math.floor(11 * dpr))}px Segoe UI, Inter, Arial, sans-serif`;
+          ctx.textBaseline = 'bottom';
+          ctx.fillStyle = 'rgba(154,167,178,0.95)';
+          const tw = ctx.measureText(text).width;
+          ctx.fillText(text, w - tw - (6 * dpr), waveBase - (2 * dpr));
+        }
+      }
+
+      const player = $('player');
+      if (player) {
+        const dur = Number(player.duration);
+        const cur = Number(player.currentTime);
+        if (Number.isFinite(dur) && dur > 0 && Number.isFinite(cur) && cur >= 0) {
+          const frac = Math.max(0, Math.min(1, cur / dur));
+          const x = Math.floor(frac * (w - 1)) + 0.5;
+          ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, h);
+          ctx.stroke();
+        }
+      }
+    }
+
+    function _waveFracFromEvent(event) {
+      const canvas = $('waveCanvas');
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      if (!Number.isFinite(x)) return null;
+      return Math.max(0, Math.min(1, x / Math.max(1, rect.width)));
+    }
+
+    function _seekPlayerToFrac(frac) {
+      const player = $('player');
+      if (!player) return;
+      const dur = Number(player.duration);
+      if (!Number.isFinite(dur) || dur <= 0) return;
+      const t = Math.max(0, Math.min(dur, frac * dur));
+      try { player.currentTime = t; } catch {}
+      waveLastFrac = frac;
+      if (lastWavePeaks) drawWaveform(lastWavePeaks);
+    }
+
+    function fmtTime(seconds) {
+      const s = Math.max(0, Math.floor(Number(seconds) || 0));
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return `${m}:${String(r).padStart(2, '0')}`;
+    }
+
+    function updatePlayerBar() {
+      const player = $('player');
+      const timeEl = $('playerTime');
+      const btn = $('playPause');
+      if (!player || !timeEl || !btn) return;
+      const dur = Number(player.duration);
+      const cur = Number(player.currentTime);
+      const durText = (Number.isFinite(dur) && dur > 0) ? fmtTime(dur) : '0:00';
+      const curText = (Number.isFinite(cur) && cur >= 0) ? fmtTime(cur) : '0:00';
+      timeEl.textContent = `${curText} / ${durText}`;
+      btn.textContent = player.paused ? '▶' : '⏸';
+    }
+
+    function wirePlayerBar() {
+      const player = $('player');
+      if (!player || player.__wiredBar) return;
+      player.__wiredBar = true;
+      const btn = $('playPause');
+      const vol = $('playerVol');
+      if (vol) player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0.85));
+      if (vol) vol.addEventListener('input', () => { player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0)); });
+      if (btn) btn.addEventListener('click', () => {
+        if (player.paused) player.play().catch(() => {});
+        else player.pause();
+      });
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && e.target === document.body) {
+          e.preventDefault();
+          if (player.paused) player.play().catch(() => {});
+          else player.pause();
+        }
+      });
+      player.addEventListener('timeupdate', updatePlayerBar);
+      player.addEventListener('loadedmetadata', updatePlayerBar);
+      player.addEventListener('play', updatePlayerBar);
+      player.addEventListener('pause', updatePlayerBar);
+      updatePlayerBar();
+    }
+
+    function wireWaveformScrub() {
+      const canvas = $('waveCanvas');
+      if (!canvas) return;
+      if (canvas.__wired) return;
+      canvas.__wired = true;
+
+      canvas.addEventListener('mousedown', (e) => {
+        const frac = _waveFracFromEvent(e);
+        if (frac == null) return;
+        waveDragActive = true;
+        _seekPlayerToFrac(frac);
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (!waveDragActive) return;
+        const frac = _waveFracFromEvent(e);
+        if (frac == null) return;
+        _seekPlayerToFrac(frac);
+      });
+      window.addEventListener('mouseup', () => { waveDragActive = false; });
+      canvas.addEventListener('click', (e) => {
+        const frac = _waveFracFromEvent(e);
+        if (frac == null) return;
+        _seekPlayerToFrac(frac);
+      });
+    }
+
+    function startWaveformPlayheadLoop() {
+      const player = $('player');
+      if (!player) return;
+      if (player.__waveLoop) return;
+      player.__waveLoop = true;
+      const tick = () => {
+        if (lastWavePeaks) drawWaveform(lastWavePeaks);
+        window.requestAnimationFrame(tick);
+      };
+      window.requestAnimationFrame(tick);
+    }
+
+    async function loadWaveform(trackId) {
+      trackId = Number(trackId) || 0;
+      lastWaveTrackId = trackId;
+      lastWavePeaks = null;
+      $('waveBox').hidden = true;
+      $('waveMeta').textContent = '';
+      if (!trackId) return;
+      try {
+        wirePlayerBar();
+        const res = await fetch(`/api/performance?track_id=${encodeURIComponent(trackId)}`);
+        const data = await res.json();
+        if (lastWaveTrackId !== trackId) return;
+        const overview = data?.overview || null;
+        const peaks = overview?.peaks || null;
+        window.__waveRGB = overview?.rgb || null;
+        window.__waveMarkers = Array.isArray(data?.markers) ? data.markers : [];
+        if (Array.isArray(data?.cues)) {
+          window.__waveCues = data.cues.map(c => {
+            const pos = Number(c?.pos_s);
+            const len = Number(data?.track_length_s) || 0;
+            const frac = (len > 0 && Number.isFinite(pos)) ? Math.max(0, Math.min(1, pos / len)) : null;
+            return { slot: c?.slot, label: c?.label, pos_s: pos, pos_frac: frac };
+          }).filter(c => Number.isFinite(c.pos_frac));
+        } else {
+          window.__waveCues = [];
+        }
+        if (Array.isArray(data?.loops) && Number(data?.track_length_s)) {
+          const len = Number(data.track_length_s) || 0;
+          window.__waveLoops = data.loops.map(l => {
+            const s = Number(l?.start_s);
+            const e = Number(l?.end_s);
+            const a = (len > 0 && Number.isFinite(s)) ? Math.max(0, Math.min(1, s / len)) : null;
+            const b = (len > 0 && Number.isFinite(e)) ? Math.max(0, Math.min(1, e / len)) : null;
+            return { slot: l?.slot, label: l?.label, start_s: s, end_s: e, start_frac: a, end_frac: b };
+          }).filter(l => Number.isFinite(l.start_frac) && Number.isFinite(l.end_frac));
+        } else {
+          window.__waveLoops = [];
+        }
+        if (!Array.isArray(peaks) || !peaks.length) return;
+        lastWavePeaks = peaks;
+        $('waveBox').hidden = false;
+        const energy = (typeof overview?.energy === 'number') ? overview.energy : null;
+        const p = data?.present || {};
+        const cueCount = Array.isArray(data?.cues) ? data.cues.length : 0;
+        const loopCount = Array.isArray(data?.loops) ? data.loops.length : 0;
+        const markCounts = [];
+        if (cueCount) markCounts.push(`cues:${cueCount}`);
+        if (loopCount) markCounts.push(`loops:${loopCount}`);
+        if (p.beatData) markCounts.push('beats');
+        const marksText = markCounts.length ? ` · ${markCounts.join(' ')}` : '';
+        $('waveMeta').textContent = energy == null ? `${peaks.length} pts${marksText}` : `${peaks.length} pts · energy ${energy}${marksText}`;
+        wireWaveformScrub();
+        startWaveformPlayheadLoop();
+        drawWaveform(peaks);
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    function parseCamelot(value) {
+      const m = String(value || '').trim().match(/^(\d{1,2})([AB])$/i);
+      if (!m) return null;
+      const num = Number(m[1]);
+      if (!Number.isFinite(num) || num < 1 || num > 12) return null;
+      return { num, mode: m[2].toUpperCase() };
+    }
+
+    function wrapCamelotNumber(num) {
+      const n = Number(num);
+      return ((n - 1 + 12) % 12) + 1;
+    }
+
+    function numberDistance(a, b) {
+      const d = Math.abs(a - b);
+      return Math.min(d, 12 - d);
+    }
+
+    function allowedCamelotNumbers(center, maxStep) {
+      const max = Math.max(0, Math.min(12, Number(maxStep) || 0));
+      if (max >= 6) return Array.from({length: 12}, (_, i) => i + 1);
+      const out = [];
+      for (let n = 1; n <= 12; n++) {
+        if (numberDistance(center, n) <= max) out.push(n);
+      }
+      return out;
+    }
+
+    function formatCamelotRange(center, maxStep) {
+      const max = Math.max(0, Math.min(12, Number(maxStep) || 0));
+      if (max >= 6) return 'все ключи (1–12)';
+      const chunks = [];
+      chunks.push(String(center));
+      for (let d = 1; d <= max; d++) {
+        chunks.push(`${wrapCamelotNumber(center - d)}/${wrapCamelotNumber(center + d)}`);
+      }
+      return chunks.join(', ');
+    }
+
+    function updateKeyStepHint() {
+      const input = $('keyStep');
+      if (!input) return;
+      const step = Math.max(0, Math.min(12, Number(input.value) || 0));
+      const camelot = selectedTrack?.camelot || '';
+      const parsed = parseCamelot(camelot);
+      if (!parsed) {
+        input.title = `±${step} считается по кругу Camelot (1–12). A↔B (мажор/минор) разрешается, но даёт небольшой штраф.`;
+        return;
+      }
+      const allowedNums = allowedCamelotNumbers(parsed.num, step);
+      const forbiddenNums = [];
+      for (let n = 1; n <= 12; n++) {
+        if (!allowedNums.includes(n)) forbiddenNums.push(n);
+      }
+      const forbiddenText = forbiddenNums.length
+        ? ` Запрещены: ${forbiddenNums.map(n => `${n}A/${n}B`).join(', ')}.`
+        : ' Запрещённых нет.';
+      input.title = `От ${parsed.num}${parsed.mode} при ±${step}: числа ${formatCamelotRange(parsed.num, step)} (каждое в A и B).${forbiddenText} A↔B разрешается, но даёт небольшой штраф.`;
     }
 
     async function build() {
@@ -1041,6 +1598,10 @@
     });
     $('build').addEventListener('click', build);
     $('enginePlaylist').addEventListener('click', createEnginePlaylist);
+    $('keyStep').addEventListener('input', updateKeyStepHint);
+    window.addEventListener('resize', () => lastWavePeaks && drawWaveform(lastWavePeaks));
+    $('player').addEventListener('loadedmetadata', () => lastWavePeaks && drawWaveform(lastWavePeaks));
+    $('player').addEventListener('timeupdate', () => lastWavePeaks && drawWaveform(lastWavePeaks));
     loadStyles().then(() => loadConfig()).then(() => browse(''));
   </script>
 </body>

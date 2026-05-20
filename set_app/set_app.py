@@ -4,10 +4,12 @@ import os
 import re
 import socket
 import sqlite3
+import struct
 import subprocess
 import sys
 import threading
 import webbrowser
+import zlib
 from dataclasses import dataclass
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,7 +31,7 @@ DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "zmin_autoset"
-APP_VERSION = "0.4.8"
+APP_VERSION = "1.5.2"
 APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -310,6 +312,381 @@ def open_db():
     return con
 
 
+def _decode_engine_zlib_blob(blob):
+    if not blob:
+        return None
+    if len(blob) < 6:
+        return None
+    try:
+        expected = struct.unpack(">I", blob[:4])[0]
+        raw = zlib.decompress(blob[4:])
+        if expected != len(raw):
+            pass
+        return raw
+    except Exception:
+        return None
+
+
+def _parse_overview_waveform(raw):
+    if not raw or len(raw) < 16:
+        return None
+    try:
+        a, points, c, d = struct.unpack(">4I", raw[:16])
+    except Exception:
+        return None
+    if not points or points > 8192:
+        return None
+    payload = raw[16:]
+    need = points * 3
+    if len(payload) < need:
+        return None
+    peaks = []
+    r_vals = []
+    g_vals = []
+    b_vals = []
+    for i in range(0, need, 3):
+        r = payload[i]
+        g = payload[i + 1]
+        b = payload[i + 2]
+        peaks.append(max(r, g, b))
+        r_vals.append(r)
+        g_vals.append(g)
+        b_vals.append(b)
+    avg = sum(peaks) / (len(peaks) * 255.0) if peaks else 0.0
+    energy = max(0.05, min(0.98, float(avg ** 0.85)))
+    return {
+        "header": {"u32be_0": a, "points": points, "u32be_2": c, "u32be_3": d},
+        "points": points,
+        "peaks": peaks,
+        "rgb": {"r": r_vals, "g": g_vals, "b": b_vals},
+        "energy": round(energy, 4),
+    }
+
+
+def _finite_number(value):
+    try:
+        return value is not None and not (value != value) and value not in (float("inf"), float("-inf"))
+    except Exception:
+        return False
+
+
+def _extract_aligned_doubles(raw, *, offset=0, endian=">"):
+    if not raw:
+        return []
+    data = bytes(raw)
+    out = []
+    fmt = f"{endian}d"
+    for off in range(int(offset), max(0, len(data) - 7), 8):
+        try:
+            v = struct.unpack(fmt, data[off : off + 8])[0]
+        except Exception:
+            continue
+        if not _finite_number(v):
+            continue
+        out.append(float(v))
+    return out
+
+
+def _best_time_scaler(values, track_len_s):
+    # Pick scaler that yields most plausible timestamps in seconds.
+    # Engine can store positions as seconds, ms, or sample frames (44100/48000).
+    if not values:
+        return None
+    track_len_s = float(track_len_s or 0) or 0.0
+    if track_len_s <= 0:
+        return None
+    candidates = [
+        (1.0, "sec"),
+        (1.0 / 1000.0, "ms"),
+        (1.0 / 44100.0, "frames44100"),
+        (1.0 / 48000.0, "frames48000"),
+    ]
+    best = None
+    best_hits = -1
+    for scale, _name in candidates:
+        hits = 0
+        for v in values:
+            if not _finite_number(v):
+                continue
+            if v <= 0:
+                continue
+            t = v * scale
+            if 0.05 <= t <= track_len_s * 1.05:
+                hits += 1
+        if hits > best_hits:
+            best_hits = hits
+            best = scale
+    return best if best_hits > 0 else None
+
+
+def _extract_positions_seconds(raw, track_len_s, *, endian=">", aligned_offset=8):
+    values = _extract_aligned_doubles(raw, offset=aligned_offset, endian=endian)
+    # Remove obvious sentinels/noise.
+    cleaned = []
+    for v in values:
+        if abs(v - 0.0) < 1e-12:
+            continue
+        if abs(v + 1.0) < 1e-12:
+            continue
+        if abs(v - 1.0) < 1e-12:
+            continue
+        # Drop extreme garbage.
+        if not _finite_number(v) or abs(v) > 1e12:
+            continue
+        cleaned.append(v)
+    scale = _best_time_scaler(cleaned, track_len_s)
+    if scale is None:
+        return []
+    out = set()
+    for v in cleaned:
+        t = v * scale
+        if 0.05 <= t <= float(track_len_s) * 1.05:
+            out.add(round(float(t), 3))
+    return sorted(out)
+
+
+def _parse_quick_cues(raw, track_len_s):
+    # Observed format (zlib-decoded):
+    # u64be slots (usually 8)
+    # for each slot:
+    #   u8 label_len
+    #   label bytes (utf-8)
+    #   f64be position (often stored as frames@44100/48000, sometimes seconds)
+    #   u32be color/flags (optional but present in observed data)
+    if not raw or len(raw) < 8:
+        return []
+    data = bytes(raw)
+    try:
+        slots = int(struct.unpack(">Q", data[:8])[0])
+    except Exception:
+        return []
+    if slots <= 0 or slots > 16:
+        return []
+    off = 8
+    items = []
+    for slot in range(1, slots + 1):
+        if off >= len(data):
+            break
+        label_len = data[off]
+        off += 1
+        if label_len:
+            label = data[off : off + label_len].decode("utf-8", "replace")
+            off += label_len
+        else:
+            label = ""
+        if off + 8 > len(data):
+            break
+        try:
+            pos = float(struct.unpack(">d", data[off : off + 8])[0])
+        except Exception:
+            break
+        off += 8
+        color = None
+        if off + 4 <= len(data):
+            try:
+                color = int(struct.unpack(">I", data[off : off + 4])[0])
+            except Exception:
+                color = None
+            off += 4
+        items.append({"slot": slot, "label": label, "pos_raw": pos, "color": color})
+
+    raw_positions = [i["pos_raw"] for i in items if _finite_number(i["pos_raw"]) and i["pos_raw"] > 0]
+    scale = _best_time_scaler(raw_positions, track_len_s)
+    if scale is None:
+        return []
+    cues = []
+    for i in items:
+        pos = i.get("pos_raw")
+        if not _finite_number(pos) or pos is None:
+            continue
+        if abs(float(pos) + 1.0) < 1e-12:
+            continue
+        t = float(pos) * scale
+        if t < 0.05 or t > float(track_len_s or 0) * 1.05:
+            continue
+        cues.append({
+            "slot": int(i["slot"]),
+            "label": str(i.get("label") or ""),
+            "pos_s": round(t, 3),
+            "color": i.get("color"),
+        })
+    return cues
+
+
+def _has_any_quick_cue_blob(blob, track_len_s):
+    raw = _decode_engine_zlib_blob(blob)
+    cues = _parse_quick_cues(raw, track_len_s)
+    return bool(cues)
+
+
+def _loops_blob_has_any_loop(blob):
+    loops = _parse_loops(blob, 0)
+    return bool(loops)
+
+
+def _parse_loops(blob, track_len_s):
+    # Observed format (raw, not zlib):
+    # u32le slots (usually 8)
+    # u32le unknown (often 0)
+    # for each slot:
+    #   u8 label_len
+    #   label bytes (utf-8)
+    #   f64le start
+    #   f64le end
+    #   u8 enabled?
+    #   u8 enabled2?
+    #   u32be color
+    if not blob or len(blob) < 8:
+        return []
+    data = bytes(blob)
+    try:
+        slots = int(struct.unpack("<I", data[:4])[0])
+    except Exception:
+        return []
+    if slots <= 0 or slots > 16:
+        return []
+    off = 8
+    items = []
+    for slot in range(1, slots + 1):
+        if off >= len(data):
+            break
+        label_len = data[off]
+        off += 1
+        if off + label_len > len(data):
+            break
+        label = data[off : off + label_len].decode("utf-8", "replace") if label_len else ""
+        off += label_len
+        if off + 16 > len(data):
+            break
+        start = float(struct.unpack("<d", data[off : off + 8])[0])
+        end = float(struct.unpack("<d", data[off + 8 : off + 16])[0])
+        off += 16
+        if off + 6 > len(data):
+            break
+        en1 = int(data[off])
+        en2 = int(data[off + 1])
+        off += 2
+        try:
+            color = int(struct.unpack(">I", data[off : off + 4])[0])
+        except Exception:
+            color = None
+        off += 4
+        items.append({"slot": slot, "label": label, "start_raw": start, "end_raw": end, "en1": en1, "en2": en2, "color": color})
+
+    raw_positions = []
+    for i in items:
+        for v in (i["start_raw"], i["end_raw"]):
+            if _finite_number(v) and v > 0 and abs(v) < 1e12:
+                raw_positions.append(v)
+    scale = _best_time_scaler(raw_positions, track_len_s) if track_len_s else None
+    if scale is None:
+        # If we don't know track length, return only presence via raw sentinel checks.
+        loops = []
+        for i in items:
+            s = i["start_raw"]
+            e = i["end_raw"]
+            if not _finite_number(s) or not _finite_number(e):
+                continue
+            if s <= 0 or e <= 0:
+                continue
+            if abs(s + 1.0) < 1e-12 or abs(e + 1.0) < 1e-12:
+                continue
+            loops.append({"slot": i["slot"], "label": i["label"], "color": i["color"]})
+        return loops
+
+    loops = []
+    track_len = float(track_len_s or 0) or 0.0
+    for i in items:
+        s = i["start_raw"]
+        e = i["end_raw"]
+        if not _finite_number(s) or not _finite_number(e):
+            continue
+        if abs(s + 1.0) < 1e-12 or abs(e + 1.0) < 1e-12:
+            continue
+        if s <= 0 or e <= 0:
+            continue
+        start_s = float(s) * scale
+        end_s = float(e) * scale
+        if end_s < start_s:
+            start_s, end_s = end_s, start_s
+        if track_len:
+            if end_s < 0.05 or start_s > track_len * 1.05:
+                continue
+            start_s = max(0.0, min(track_len, start_s))
+            end_s = max(0.0, min(track_len, end_s))
+        if end_s - start_s < 0.2:
+            continue
+        loops.append({
+            "slot": int(i["slot"]),
+            "label": str(i.get("label") or ""),
+            "start_s": round(start_s, 3),
+            "end_s": round(end_s, 3),
+            "color": i.get("color"),
+            "enabled": bool(i.get("en1") or i.get("en2")),
+        })
+    return loops
+
+
+def _positions_to_markers(positions, *, kind, track_len_s):
+    markers = []
+    max_s = max(1.0, float(track_len_s or 0) or 0.0)
+    for p in positions:
+        if p <= 0.0 or p >= max_s + 5.0:
+            continue
+        frac = max(0.0, min(1.0, p / max_s))
+        markers.append({"kind": kind, "pos_s": p, "pos_frac": round(frac, 6)})
+    return markers
+
+
+def get_track_performance(track_id):
+    track_id = int(track_id)
+    with open_db() as con:
+        trow = con.execute("SELECT length FROM Track WHERE id=?", (track_id,)).fetchone()
+        row = con.execute(
+            "SELECT overviewWaveFormData, beatData, quickCues, loops FROM PerformanceData WHERE trackId=?",
+            (track_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("PerformanceData not found for track")
+    track_len = 0 if not trow else int(trow["length"] or 0)
+    overview_raw = _decode_engine_zlib_blob(row["overviewWaveFormData"])
+    overview = _parse_overview_waveform(overview_raw)
+
+    markers = []
+    qc_raw = _decode_engine_zlib_blob(row["quickCues"])
+    bd_raw = _decode_engine_zlib_blob(row["beatData"])
+    lp_raw = row["loops"]
+
+    # These formats are not publicly documented; we use robust heuristics:
+    # - quickCues/beatData: aligned big-endian doubles after an 8-byte count.
+    # - loops: scan both endians but still aligned.
+    cues = _parse_quick_cues(qc_raw, track_len)
+    loops = _parse_loops(lp_raw, track_len)
+    qc_pos = sorted({c["pos_s"] for c in cues})
+    bd_pos = _extract_positions_seconds(bd_raw, track_len, endian=">", aligned_offset=8)
+
+    markers.extend(_positions_to_markers(qc_pos, kind="cue", track_len_s=track_len))
+    markers.extend(_positions_to_markers(bd_pos, kind="beat", track_len_s=track_len))
+    markers.sort(key=lambda m: (m["pos_s"], m["kind"]))
+    return {
+        "ok": True,
+        "track_id": track_id,
+        "track_length_s": track_len,
+        "overview": overview,
+        "cues": cues,
+        "loops": loops,
+        "has_cue": bool(cues),
+        "has_loop": bool(loops),
+        "markers": markers[:200],
+        "present": {
+            "overviewWaveFormData": row["overviewWaveFormData"] is not None,
+            "beatData": row["beatData"] is not None,
+            "quickCues": row["quickCues"] is not None,
+            "loops": row["loops"] is not None,
+        },
+    }
+
+
 def resolve_track_path(raw_path):
     if not raw_path:
         return ""
@@ -341,6 +718,16 @@ def label(row):
 
 def row_to_track(row):
     path = resolve_track_path(row["path"])
+    has_cue = False
+    has_loop = False
+    try:
+        has_cue = bool(row["has_cue"])  # sqlite returns 0/1
+    except Exception:
+        has_cue = False
+    try:
+        has_loop = bool(row["has_loop"])
+    except Exception:
+        has_loop = False
     return {
         "id": int(row["id"]),
         "label": label(row),
@@ -354,6 +741,8 @@ def row_to_track(row):
         "length": row["length"] or 0,
         "path": path,
         "rel": rel_to_music(path) if path else "",
+        "has_cue": has_cue,
+        "has_loop": has_loop,
     }
 
 
@@ -403,14 +792,30 @@ def load_track_maps():
     by_path = {}
     by_name = {}
     sql = """
-        SELECT id, filename, length, bitrate, bpmAnalyzed, key, genre, artist, title, path
+        SELECT
+          Track.id,
+          Track.filename,
+          Track.length,
+          Track.bitrate,
+          Track.bpmAnalyzed,
+          Track.key,
+          Track.genre,
+          Track.artist,
+          Track.title,
+          Track.path,
+          PerformanceData.quickCues AS quickCues,
+          PerformanceData.loops AS loops
         FROM Track
-        WHERE isAvailable = 1
-          AND path IS NOT NULL
+        LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
+        WHERE Track.isAvailable = 1
+          AND Track.path IS NOT NULL
     """
     with open_db() as con:
         for row in con.execute(sql):
-            track = row_to_track(row)
+            payload = dict(row)
+            payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
+            payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
+            track = row_to_track(payload)
             if track["path"]:
                 by_path[norm_abs(track["path"])] = track
             by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
@@ -431,6 +836,8 @@ def read_file_tags(path):
         "bitrate": "",
         "length": 0,
         "path": str(path),
+        "has_cue": False,
+        "has_loop": False,
     }
     try:
         from mutagen import File
@@ -484,15 +891,28 @@ def browse_music(rel):
 def search_tracks(query, limit):
     terms = [t.casefold() for t in re.split(r"\s+", query or "") if t.strip()]
     sql = """
-        SELECT id, filename, length, bitrate, bpmAnalyzed, key, genre, artist, title, path
+        SELECT
+          Track.id,
+          Track.filename,
+          Track.length,
+          Track.bitrate,
+          Track.bpmAnalyzed,
+          Track.key,
+          Track.genre,
+          Track.artist,
+          Track.title,
+          Track.path,
+          PerformanceData.quickCues AS quickCues,
+          PerformanceData.loops AS loops
         FROM Track
-        WHERE isAvailable = 1
-          AND bpmAnalyzed IS NOT NULL
-          AND key IS NOT NULL
-          AND length IS NOT NULL
-          AND length BETWEEN 75 AND 720
-          AND path IS NOT NULL
-        ORDER BY artist, title, filename
+        LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
+        WHERE Track.isAvailable = 1
+          AND Track.bpmAnalyzed IS NOT NULL
+          AND Track.key IS NOT NULL
+          AND Track.length IS NOT NULL
+          AND Track.length BETWEEN 75 AND 720
+          AND Track.path IS NOT NULL
+        ORDER BY Track.artist, Track.title, Track.filename
     """
     out = []
     with open_db() as con:
@@ -505,7 +925,10 @@ def search_tracks(query, limit):
             ]).casefold()
             if terms and not all(t in haystack for t in terms):
                 continue
-            out.append(row_to_track(row))
+            payload = dict(row)
+            payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
+            payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
+            out.append(row_to_track(payload))
             if len(out) >= limit:
                 break
     return out
@@ -1258,6 +1681,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(browse_music(rel))
             except Exception as exc:
                 self.send_json({"error": repr(exc)}, status=400)
+            return
+        if parsed.path == "/api/performance":
+            qs = parse_qs(parsed.query)
+            track_id = qs.get("track_id", [""])[0]
+            try:
+                self.send_json(get_track_performance(track_id))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": repr(exc)}, status=400)
             return
         if parsed.path == "/media":
             qs = parse_qs(parsed.query)
