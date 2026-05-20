@@ -436,7 +436,7 @@
           </div>
           <div>
             <label for="keyStep">Camelot ±</label>
-            <input id="keyStep" type="number" min="0" max="12" step="1" value="3" title="±N считается по кругу Camelot (1–12). Наведи на поле, чтобы увидеть диапазон для выбранного трека.">
+            <input id="keyStep" type="number" min="0" max="12" step="1" value="3" title="±N показывает только входящие числа Camelot. ±6 и выше включает все 1–12.">
           </div>
           <div>
             <label for="bpmWindow">BPM ±</label>
@@ -1435,24 +1435,9 @@
       return ((n - 1 + 12) % 12) + 1;
     }
 
-    function numberDistance(a, b) {
-      const d = Math.abs(a - b);
-      return Math.min(d, 12 - d);
-    }
-
-    function allowedCamelotNumbers(center, maxStep) {
-      const max = Math.max(0, Math.min(12, Number(maxStep) || 0));
-      if (max >= 6) return Array.from({length: 12}, (_, i) => i + 1);
-      const out = [];
-      for (let n = 1; n <= 12; n++) {
-        if (numberDistance(center, n) <= max) out.push(n);
-      }
-      return out;
-    }
-
     function formatCamelotRange(center, maxStep) {
       const max = Math.max(0, Math.min(12, Number(maxStep) || 0));
-      if (max >= 6) return 'все ключи (1–12)';
+      if (max >= 6) return '1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12';
       const chunks = [];
       chunks.push(String(center));
       for (let d = 1; d <= max; d++) {
@@ -1471,18 +1456,10 @@
       const camelot = selectedTrack?.camelot || '';
       const parsed = parseCamelot(camelot);
       if (!parsed) {
-        input.title = `±${step} считается только по числам Camelot (1–12) в обе стороны по кругу. A/B не увеличивает расстояние.`;
+        input.title = `±${step}: входят только числа Camelot вокруг выбранного трека. ±6 и выше включает все 1–12. A/B не увеличивает расстояние.`;
         return;
       }
-      const allowedNums = allowedCamelotNumbers(parsed.num, step);
-      const forbiddenNums = [];
-      for (let n = 1; n <= 12; n++) {
-        if (!allowedNums.includes(n)) forbiddenNums.push(n);
-      }
-      const forbiddenText = forbiddenNums.length
-        ? ` Запрещены: ${forbiddenNums.map(n => `${n}A/${n}B`).join(', ')}.`
-        : ' Запрещённых нет.';
-      input.title = `От ${parsed.num}${parsed.mode} при ±${step}: числа ${formatCamelotRange(parsed.num, step)} (каждое в A и B).${forbiddenText} A/B не увеличивает расстояние.`;
+      input.title = `От ${parsed.num}${parsed.mode} при ±${step} входят числа Camelot: ${formatCamelotRange(parsed.num, step)}. Для каждого числа подходят A и B. A/B не увеличивает расстояние.`;
     }
 
     async function build() {
