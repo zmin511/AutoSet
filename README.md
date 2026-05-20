@@ -1,141 +1,123 @@
 # zmin_autoset
 
-Версия: `1.5.2` · Changelog: `CHANGELOG.md`
+Version: `1.5.2` | Changelog: `CHANGELOG.md`
 
-`zmin_autoset` — локальное приложение (UI в браузере) для работы с библиотекой **Denon Engine DJ**:
-ты выбираешь опорный трек, а приложение помогает собрать гармоничный сет и/или создать плейлист прямо в базе Engine — без облака и без внешних сервисов.
+`zmin_autoset` is a local portable companion app for **Denon Engine DJ**.
+It helps build harmonic DJ sets from a reference track, inspect tracks through
+Engine-like waveform/cue/loop data, and create playlists directly inside the
+Engine database. The app works offline: no cloud, no account, no external service
+is required for the main workflow.
 
----
+Русская документация: `README_RU.md`
 
-## Как работает (кратко)
+English documentation: `README_EN.md`
 
-Данные берутся из SQLite‑базы Engine:
+## What It Does
 
-```text
-Engine Library/Database2/m.db
-```
+- Builds a DJ set around a selected reference track.
+- Scores transitions by BPM, Camelot key, genre/style, duration, bitrate, and waveform-derived energy.
+- Supports two reference roles: opener (`Start`) or peak point (`Peak`).
+- Shows a browser UI with search, folder browsing, player, waveform, cue, and loop markers.
+- Exports a copied set folder with `playlist.m3u`, `playlist.csv`, and `methodology.txt`.
+- Can create an Engine DB playlist with links to existing tracks, without copying files.
+- Includes maintenance tools for writing Engine metadata back into audio tags and reviewing genres/styles.
 
-Используются таблицы:
-- `Track` — путь к файлу, метаданные (artist/title/genre), BPM, key, length, доступность.
-- `PerformanceData` — waveform и точки:
-  - `overviewWaveFormData` — цветная overview‑вейвформа (как в Engine);
-  - `quickCues` — `Cue 1..8` (позиции + подписи);
-  - `loops` — `Loop 1..8` (start/end + подпись).
+## How It Works
 
-Сборка сета идёт по скорингу переходов:
-- BPM: ограничения по окну (`BPM ±`) и шагу между соседними треками;
-- Key: по кругу Camelot (`Camelot ±`);
-- Жанр/стили: фильтр и “семейства” (house/techno/etc.);
-- “Энергия”: оценивается по `overviewWaveFormData` и используется в выборе следующего трека.
-
----
-
-## Как пользоваться (пошагово)
-
-1) Укажи пути:
-   - **Музыкальная библиотека** (`Music/`)
-   - **База Engine DJ** (`m.db` или папка `Engine Library`)
-   Нажми **Сохранить пути**.
-
-2) Найди трек:
-   - через поиск, либо открой папку в библиотеке.
-
-3) Выбери опорный трек (клик по строке) и проверь его:
-   - плеер + waveform: cue (сверху) и loops (снизу), можно скрабить мышью.
-
-4) Настрой параметры:
-   - **Роль трека**:
-     - `Начало` — опорный трек используется как opener, дальше энергия плавно растёт;
-     - `Кульминация` — опорный трек считается peak‑точкой, после неё энергия плавно снижается.
-   - **Длительность** — желаемая длина сета в минутах.
-   - **Camelot ±** — насколько далеко по кругу Camelot можно уходить (A↔B допускается, но с небольшим штрафом).
-   - **BPM ±** — окно допустимых BPM относительно опорного трека.
-   - **Стили для подбора** — дополнительные “корзины” жанров/поджанров, которые разрешены в подборе.
-
-5) Выбери режим результата:
-   - **Создать сет** — копирует треки в отдельную папку в `Music/Sets` и пишет `playlist.m3u`/`playlist.csv`.
-   - **Создать плейлист** — создаёт плейлист в базе Engine (ссылками на треки, без копирования), и дополнительно пишет локальные `playlist.m3u`/`playlist.csv` для предпрослушивания.
-
-6) Поле `Event` — путь папки в Engine, куда будет создан плейлист, например:
-   - `Event`
-   - `Event/Afro house`
-
----
-
-## Что означает интерфейс
-
-**Список треков**
-- Синяя точка — у трека есть cue.
-- Оранжевая точка — у трека есть loop.
-- Если есть оба — точки две, одна над другой.
-
-**Waveform**
-- Цветная overview‑вейвформа как в Engine (RGB из `overviewWaveFormData`).
-- Cue показываются сверху (с подписью и временем).
-- Loop показываются снизу диапазоном (с подписью и временем старта).
-
----
-
-Документация:
-- Русский: `README_RU.md`
-- English: `README_EN.md`
-
----
-
-# zmin_autoset
-
-Version: `1.5.2` · Changelog: `CHANGELOG.md`
-
-`zmin_autoset` is a local (browser UI) companion app for **Denon Engine DJ**:
-pick a reference track, then build a harmonic set and/or create an Engine playlist — fully offline.
-
-## How it works (short)
-
-Data is read from Engine’s SQLite DB:
+The main data source is the Denon Engine SQLite database:
 
 ```text
 Engine Library/Database2/m.db
 ```
 
-Tables used:
-- `Track` — file path and metadata (artist/title/genre), BPM, key, length, availability.
-- `PerformanceData` — waveform and markers:
-  - `overviewWaveFormData` — RGB overview waveform (Engine-like);
-  - `quickCues` — Cue 1..8 (positions + labels);
-  - `loops` — Loop 1..8 (start/end + label).
+The app reads:
 
-Set building is a scoring process that balances:
-- BPM (window + adjacent step limits),
-- Camelot (wheel distance),
-- genre/style filtering,
-- “energy” derived from `overviewWaveFormData`.
+- `Track` - file path, artist/title/genre, BPM, key, length, bitrate, availability;
+- `PerformanceData.overviewWaveFormData` - RGB overview waveform;
+- `PerformanceData.quickCues` - Cue 1..8 positions and labels;
+- `PerformanceData.loops` - Loop 1..8 start/end positions and labels.
 
-## How to use
+The set builder filters and scores candidates using:
 
-1) Configure paths (Music root + Engine DB) and save.
-2) Find a track (search or folder browsing) and select it as the reference.
-3) Use player + waveform (scrub with mouse, inspect cues/loops).
-4) Set parameters:
-   - Role: `Start` (energy rises) or `Peak` (energy releases after the peak),
-   - Duration (minutes),
-   - Camelot ±, BPM ±,
-   - Style filters.
-5) Output:
-   - **Create set**: copies files into `Music/Sets/<run>/` + exports `playlist.m3u`/`playlist.csv`.
-   - **Create playlist**: writes a playlist into Engine DB (links only) + also exports local `playlist.m3u`/`playlist.csv`.
-6) `Event` is the Engine folder path to create the playlist under (e.g. `Event/Afro house`).
+- `BPM +/-` window around the reference track;
+- maximum adjacent BPM step;
+- `Camelot +/-` wheel distance;
+- genre families and selected style filters;
+- estimated energy from Engine waveform data;
+- duplicate/version pressure to avoid crowding the set with near-identical tracks.
 
-## UI notes
+## Interface
 
-Track list:
-- Blue dot: has cues.
-- Orange dot: has loops.
+The app runs as a local Python HTTP server and opens a browser UI, usually at:
 
-Waveform:
-- RGB overview waveform (Engine-like).
-- Cues on top (label + time).
-- Loops on bottom as ranges (label + start time).
+```text
+http://127.0.0.1:8765/
+```
 
-Docs:
-- Русский: `README_RU.md`
-- English: `README_EN.md`
+Main UI areas:
+
+- path setup for `Music/` and `Engine Library`/`m.db`;
+- music-folder browser and Engine library search;
+- track table with genre, Camelot, BPM, duration, cue/loop indicators;
+- audio player with waveform scrubbing;
+- Engine-like waveform rendering with cues on top and loops on bottom;
+- set controls: role, duration, Camelot range, BPM range, style filters;
+- actions: create copied set, create Engine playlist, refresh tags.
+
+## Project Structure
+
+```text
+zmin_autoset/
+  run_windows.cmd
+  run_mac.command
+  set_app/
+    set_app.py        # local server, REST API, Engine DB integration
+    index.html        # browser UI
+  tools/
+    engine_set_builder.py   # main harmonic set builder
+    engine_config.py        # shared path configuration
+    engine_write_tags.py    # write BPM/key/bitrate tags from Engine data
+    review_new_genres.py    # genre/style normalization helper
+    engine_db_playlist.py   # CLI helper for Engine DB scans/playlists
+    tag_from_musicbrainz.py # optional MusicBrainz/iTunes tagger
+  reports/
+  tag_backups/
+```
+
+## Quick Start
+
+Recommended drive layout:
+
+```text
+<drive root>/
+  zmin_autoset/
+  Music/
+  Engine Library/
+    Database2/
+      m.db
+```
+
+Run:
+
+- Windows: `zmin_autoset\run_windows.cmd`
+- macOS: `zmin_autoset/run_mac.command`
+
+Do not open `set_app/index.html` directly for real work; the local Python server is required.
+
+## Outputs
+
+**Create set** writes a copied set folder:
+
+```text
+Music/Sets/<set_name>/
+  01 - ...
+  02 - ...
+  playlist.m3u
+  playlist.csv
+  methodology.txt
+```
+
+**Create playlist** writes a playlist into the Engine DB using links to existing
+tracks and also exports local `m3u/csv` files for checking. The `Event` field in
+the UI controls the target Engine folder path, for example `Event` or
+`Event/Afro house`.
