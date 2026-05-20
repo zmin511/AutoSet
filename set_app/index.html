@@ -1023,20 +1023,27 @@
       $('selected').innerHTML = selectedMarkup(track);
       wireGenreSelect();
       updateKeyStepHint();
+      setPlayerSource(track);
       updatePlayerBar();
       loadWaveform(track.id);
       if ($('search').value.trim()) search(); else browse(currentPath);
     }
 
-    function playTrack(track) {
+    function setPlayerSource(track) {
       const mediaPath = track.rel || track.path;
-      if (!mediaPath) return;
+      if (!mediaPath) return false;
       playingPath = mediaPath;
       const player = $('player');
       const src = `/media?path=${encodeURIComponent(mediaPath)}`;
       if (player.getAttribute('src') !== src) {
         player.setAttribute('src', src);
       }
+      return true;
+    }
+
+    function playTrack(track) {
+      if (!setPlayerSource(track)) return;
+      const player = $('player');
       player.play().catch(() => {});
       selectedTrack = track;
       applyInferredStyles(track);
@@ -1361,8 +1368,12 @@
       if (vol) player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0.85));
       if (vol) vol.addEventListener('input', () => { player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0)); });
       if (btn) btn.addEventListener('click', () => {
-        if (player.paused) player.play().catch(() => {});
-        else player.pause();
+        if (player.paused) {
+          if (!player.getAttribute('src') && selectedTrack) setPlayerSource(selectedTrack);
+          player.play().catch(() => {});
+        } else {
+          player.pause();
+        }
       });
       window.addEventListener('keydown', (e) => {
         if (e.code === 'Space' && e.target === document.body) {
@@ -1638,6 +1649,7 @@
     window.addEventListener('resize', () => lastWavePeaks && drawWaveform(lastWavePeaks));
     $('player').addEventListener('loadedmetadata', () => lastWavePeaks && drawWaveform(lastWavePeaks));
     $('player').addEventListener('timeupdate', () => lastWavePeaks && drawWaveform(lastWavePeaks));
+    wirePlayerBar();
     loadStyles().then(() => loadConfig()).then(() => browse(''));
   </script>
 </body>
