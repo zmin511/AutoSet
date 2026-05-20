@@ -2,6 +2,12 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.3
+
+- UI: выбранный трек, плеер и waveform вынесены в единую верхнюю панель.
+- UI: выровнены основные колонки библиотеки и панели сборки.
+- Camelot: подсказка `±N` показывает только входящие числа Camelot.
+
 ## 1.5.2
 
 - Engine-like waveform: цветная overview‑вейвформа из `PerformanceData.overviewWaveFormData`.

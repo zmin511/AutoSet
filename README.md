@@ -1,6 +1,6 @@
 # zmin_autoset
 
-Version: `1.5.2` | Changelog: `CHANGELOG.md`
+Version: `1.5.3` | Changelog: `CHANGELOG.md`
 
 ## Русское описание
 

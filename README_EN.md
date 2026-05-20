@@ -1,6 +1,6 @@
 # zmin_autoset
 
-Version: `1.5.2`
+Version: `1.5.3`
 
 `zmin_autoset` is a local portable companion app for **Denon Engine DJ**. It
 helps build a harmonic DJ set from a selected reference track, inspect tracks
