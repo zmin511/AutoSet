@@ -263,12 +263,16 @@
     audio { width: 100%; margin: 0 0 13px; }
     .controls { display: grid; grid-template-columns: 1fr 110px 110px 110px; gap: 9px; margin-bottom: 12px; }
     .buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-    .build-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 220px); gap: 9px; margin-bottom: 12px; align-items: stretch; }
-    .build-controls button { width: 100%; white-space: nowrap; }
+    .build-controls { display: flex; gap: 9px; margin-bottom: 12px; align-items: stretch; }
+    .build-controls > div { flex: 0 0 auto; }
+    .build-controls > div:last-child { flex: 1 1 140px; min-width: 120px; }
+    .build-controls button { width: auto; white-space: nowrap; padding-left: 14px; padding-right: 14px; }
     .build-controls input { width: 100%; min-width: 0; box-sizing: border-box; }
     .build-controls button, .build-controls input { height: 42px; }
     @media (max-width: 900px) {
-      .build-controls { grid-template-columns: 1fr; }
+      .build-controls { flex-direction: column; }
+      .build-controls > div, .build-controls > div:last-child { flex: 1 1 auto; min-width: 0; }
+      .build-controls button { width: 100%; }
     }
     .maintenance { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
     .maintenance label { font-size: 12px; }
