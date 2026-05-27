@@ -172,13 +172,15 @@
     .cell { color: #dbe7ee; font-size: 12px; white-space: normal; overflow-wrap: anywhere; text-align: right; justify-self: end; }
     .genre-cell { font-size: 11px; line-height: 1.2; color: #f0f5f8; }
     .stars {
-      color: #f5c84b;
+      color: #8e989f;
       font-size: 13px;
       letter-spacing: 0;
       white-space: nowrap;
       text-align: right;
       font-variant-numeric: tabular-nums;
     }
+    .stars.synced { color: #f5c84b; }
+    .stars.unsynced { color: #8e989f; }
     .stars.empty { color: var(--muted); opacity: .75; }
     .tag { border: 1px solid var(--line); border-radius: 999px; padding: 3px 7px; text-align: center; min-width: 58px; }
     .marks { justify-self: center; display: flex; flex-direction: column; gap: 3px; align-items: center; }
@@ -462,7 +464,7 @@
           <label>Обслуживание текущей папки</label>
           <div class="buttons">
             <button id="refreshTags">Обновить теги в папке</button>
-            <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Энергию в звезды</button>
+            <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Записать звезды в Engine</button>
             <button id="reloadFolder">Обновить список</button>
           </div>
           <div class="toolbar compact">
@@ -734,11 +736,14 @@
       const computed = Number(track.energy_rating || 0);
       const engine = Number(track.rating || 0);
       const rating = Math.max(0, Math.min(5, computed || engine));
+      const synced = !!computed && engine === computed;
+      const stateClass = rating ? (synced ? 'synced' : 'unsynced') : 'empty';
+      const stateText = synced ? 'записано в Engine' : (computed ? 'рассчитано, еще не записано в Engine' : 'нет waveform-расчета');
       const energy = (typeof track.energy === 'number') ? `, waveform ${track.energy}` : '';
       const engineText = engine ? `, Engine rating ${engine}/5` : '';
-      const title = rating ? `Энергия трека ${rating}/5${energy}${engineText}` : 'Энергия не рассчитана';
+      const title = rating ? `Энергия трека ${rating}/5: ${stateText}${energy}${engineText}` : 'Энергия не рассчитана';
       const text = rating ? `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}` : '-----';
-      return `<span class="stars ${rating ? '' : 'empty'}" title="${esc(title)}">${text}</span>`;
+      return `<span class="stars ${stateClass}" title="${esc(title)}">${text}</span>`;
     }
 
     function trackRow(track) {
