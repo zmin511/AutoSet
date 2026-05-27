@@ -55,7 +55,7 @@ The UI opens in a browser through a local Python server. It includes:
 - style filter;
 - create set and create playlist actions;
 - tag refresh for the selected folder;
-- writing estimated waveform energy into Engine DJ `Track.rating` stars for the current folder.
+- writing estimated waveform energy into Engine DJ `Track.rating` stars for the current folder or the whole `Music` library.
 
 ## Output Modes
 

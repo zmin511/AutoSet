@@ -464,7 +464,8 @@
           <label>Обслуживание текущей папки</label>
           <div class="buttons">
             <button id="refreshTags">Обновить теги в папке</button>
-            <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Записать звезды в Engine</button>
+            <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Записать звезды в папке</button>
+            <button id="writeAllEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для всей медиатеки Music">Записать все звезды</button>
             <button id="reloadFolder">Обновить список</button>
           </div>
           <div class="toolbar compact">
@@ -1681,6 +1682,31 @@
       }
     }
 
+    async function writeAllEnergyRatings() {
+      const ok = window.confirm('Записать расчетную энергию в звезды Engine для всей медиатеки Music? Текущие рейтинги Track.rating будут перезаписаны.');
+      if (!ok) return;
+      $('writeAllEnergyRatings').disabled = true;
+      $('output').textContent = 'Записываю энергию waveform в звездочки Engine DJ для всей медиатеки Music...';
+      try {
+        const res = await fetch('/api/write-all-energy-ratings', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        $('output').textContent = data.output || data.error || 'Нет вывода.';
+        $('status').className = data.ok ? 'status ok' : 'status bad';
+        $('status').textContent = data.ok ? 'Все звездочки энергии обновлены' : 'Не удалось обновить все звездочки';
+        await browse(currentPath);
+      } catch (err) {
+        $('output').textContent = String(err);
+        $('status').className = 'status bad';
+        $('status').textContent = 'Ошибка обновления всех звездочек';
+      } finally {
+        $('writeAllEnergyRatings').disabled = false;
+      }
+    }
+
     $('search').addEventListener('input', () => {
       clearTimeout(timer);
       timer = setTimeout(search, 220);
@@ -1690,6 +1716,7 @@
     $('reloadFolder').addEventListener('click', () => browse(currentPath));
     $('refreshTags').addEventListener('click', refreshTags);
     $('writeEnergyRatings').addEventListener('click', writeEnergyRatings);
+    $('writeAllEnergyRatings').addEventListener('click', writeAllEnergyRatings);
     $('savePaths').addEventListener('click', savePaths);
     $('pickMusic').addEventListener('click', () => openPicker('folder', 'musicRoot'));
     $('pickDb').addEventListener('click', () => openPicker('db', 'dbPath'));

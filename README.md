@@ -98,7 +98,7 @@ database without cloud services, accounts, or external services.
 - Create a copied set folder with `playlist.m3u`, `playlist.csv`, `methodology.txt`.
 - Create an Engine DB playlist with links to existing tracks.
 - Refresh BPM/key/bitrate and DJ genre tags for a selected folder.
-- Write estimated waveform energy into Engine DJ star ratings for the selected folder.
+- Write estimated waveform energy into Engine DJ star ratings for the selected folder or the whole `Music` library.
 
 ### How It Works
 

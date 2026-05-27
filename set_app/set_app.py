@@ -1416,22 +1416,15 @@ def refresh_tags(rel):
     return {"ok": result.returncode == 0, "code": result.returncode, "output": result.stdout or ""}
 
 
-def write_energy_ratings(rel):
-    target = safe_music_path(rel)
-    rel_norm = rel_to_music(target).replace("\\", "/").casefold()
-    if rel_norm in {"set", "sets"} or rel_norm.startswith("set/") or rel_norm.startswith("sets/"):
-        raise ValueError("Set/Sets folders are protected from rating updates")
-    if not target.exists() or not target.is_dir():
-        raise ValueError("Folder does not exist")
+def _is_protected_set_path(path):
+    rel_norm = rel_to_music(path).replace("\\", "/").casefold()
+    return rel_norm in {"set", "sets"} or rel_norm.startswith("set/") or rel_norm.startswith("sets/")
 
-    files = {}
-    for child in target.iterdir():
-        if child.is_file() and child.suffix.lower() in AUDIO_EXTS:
-            files[norm_abs(child)] = child
 
-    if not files:
-        return {"ok": True, "updated": 0, "matched": 0, "skipped": 0, "output": "No audio files in current folder."}
-
+def _write_energy_ratings_for_paths(paths, scope_label):
+    wanted = {norm_abs(p): p for p in paths}
+    if not wanted:
+        return {"ok": True, "updated": 0, "matched": 0, "skipped": 0, "output": f"No audio files in {scope_label}."}
     now = _engine_now_str()
     matched = 0
     updated = 0
@@ -1453,7 +1446,7 @@ def write_energy_ratings(rel):
         ).fetchall()
         for row in rows:
             path = resolve_track_path(row["path"])
-            if norm_abs(path) not in files:
+            if norm_abs(path) not in wanted:
                 continue
             matched += 1
             _energy, rating = _energy_from_overview_blob(row["overviewWaveFormData"])
@@ -1470,10 +1463,10 @@ def write_energy_ratings(rel):
             updated += 1
         con.commit()
 
-    missing = max(0, len(files) - matched)
+    missing = max(0, len(wanted) - matched)
     output = (
-        f"Energy stars updated for current folder.\n"
-        f"Audio files: {len(files)}\n"
+        f"Energy stars updated for {scope_label}.\n"
+        f"Audio files: {len(wanted)}\n"
         f"Matched in Engine DB: {matched}\n"
         f"Updated Track.rating: {updated}\n"
         f"Already correct: {unchanged}\n"
@@ -1489,6 +1482,31 @@ def write_energy_ratings(rel):
         "missing": missing,
         "output": output,
     }
+
+
+def write_energy_ratings(rel):
+    target = safe_music_path(rel)
+    if _is_protected_set_path(target):
+        raise ValueError("Set/Sets folders are protected from rating updates")
+    if not target.exists() or not target.is_dir():
+        raise ValueError("Folder does not exist")
+    files = [
+        child
+        for child in target.iterdir()
+        if child.is_file() and child.suffix.lower() in AUDIO_EXTS
+    ]
+    return _write_energy_ratings_for_paths(files, "current folder")
+
+
+def write_all_energy_ratings():
+    files = []
+    for path in MUSIC_ROOT.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in AUDIO_EXTS:
+            continue
+        if _is_protected_set_path(path):
+            continue
+        files.append(path)
+    return _write_energy_ratings_for_paths(files, "Music library")
 
 
 def refresh_genres(rel):
@@ -1666,7 +1684,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/update-genre", "/api/config"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/config"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -1706,6 +1724,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(refresh_tags(data.get("path", "")))
             elif parsed_path == "/api/write-energy-ratings":
                 self.send_json(write_energy_ratings(data.get("path", "")))
+            elif parsed_path == "/api/write-all-energy-ratings":
+                self.send_json(write_all_energy_ratings())
             else:
                 self.send_json(update_genre(data["track_id"], data["genre"]))
         except Exception as exc:
