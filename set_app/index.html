@@ -736,12 +736,13 @@
     function energyStars(track) {
       const computed = Number(track.energy_rating || 0);
       const engine = Number(track.rating || 0);
+      const engineRaw = Number(track.rating_raw || 0);
       const rating = Math.max(0, Math.min(5, computed || engine));
-      const synced = !!computed && engine === computed;
+      const synced = !!computed && engine === computed && engineRaw === computed * 20;
       const stateClass = rating ? (synced ? 'synced' : 'unsynced') : 'empty';
       const stateText = synced ? 'записано в Engine' : (computed ? 'рассчитано, еще не записано в Engine' : 'нет waveform-расчета');
       const energy = (typeof track.energy === 'number') ? `, waveform ${track.energy}` : '';
-      const engineText = engine ? `, Engine rating ${engine}/5` : '';
+      const engineText = engineRaw ? `, Engine rating ${engineRaw}` : '';
       const title = rating ? `Энергия трека ${rating}/5: ${stateText}${energy}${engineText}` : 'Энергия не рассчитана';
       const text = rating ? `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}` : '-----';
       return `<span class="stars ${stateClass}" title="${esc(title)}">${text}</span>`;

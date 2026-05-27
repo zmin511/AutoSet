@@ -313,6 +313,26 @@ def _energy_from_overview_blob(blob):
     return energy, _energy_rating_from_energy(energy)
 
 
+def _engine_rating_to_stars(raw_rating):
+    try:
+        raw = int(raw_rating or 0)
+    except Exception:
+        return 0
+    if raw <= 0:
+        return 0
+    if raw < 20:
+        return 0
+    return max(1, min(5, int((raw + 10) / 20)))
+
+
+def _stars_to_engine_rating(stars):
+    try:
+        value = int(stars or 0)
+    except Exception:
+        return 0
+    return max(0, min(5, value)) * 20
+
+
 def _row_value(row, key, default=None):
     try:
         return row[key]
@@ -699,7 +719,8 @@ def row_to_track(row):
         "bpm": None if row["bpmAnalyzed"] is None else round(float(row["bpmAnalyzed"]), 1),
         "camelot": engine_key_to_camelot(None if row["key"] is None else int(row["key"])),
         "bitrate": row["bitrate"] or "",
-        "rating": int(_row_value(row, "rating", 0) or 0),
+        "rating": _engine_rating_to_stars(_row_value(row, "rating", 0)),
+        "rating_raw": int(_row_value(row, "rating", 0) or 0),
         "energy": energy,
         "energy_rating": int(energy_rating or 0),
         "length": row["length"] or 0,
@@ -1453,12 +1474,13 @@ def _write_energy_ratings_for_paths(paths, scope_label):
             if not rating:
                 skipped += 1
                 continue
-            if int(row["rating"] or 0) == rating:
+            engine_rating = _stars_to_engine_rating(rating)
+            if int(row["rating"] or 0) == engine_rating:
                 unchanged += 1
                 continue
             con.execute(
                 "UPDATE Track SET rating = ?, lastEditTime = ? WHERE id = ?",
-                (int(rating), now, int(row["id"])),
+                (int(engine_rating), now, int(row["id"])),
             )
             updated += 1
         con.commit()
