@@ -138,7 +138,7 @@
     .item {
       width: 100%;
       display: grid;
-      grid-template-columns: 42px minmax(0, 1fr) 20px 104px 62px 66px 58px;
+      grid-template-columns: 42px minmax(0, 1fr) 20px 92px 76px 62px 62px 58px;
       gap: 8px;
       align-items: center;
       padding: 9px 11px;
@@ -171,6 +171,15 @@
     .sub { display: block; color: var(--muted); font-size: 11px; line-height: 1.25; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cell { color: #dbe7ee; font-size: 12px; white-space: normal; overflow-wrap: anywhere; text-align: right; justify-self: end; }
     .genre-cell { font-size: 11px; line-height: 1.2; color: #f0f5f8; }
+    .stars {
+      color: #f5c84b;
+      font-size: 13px;
+      letter-spacing: 0;
+      white-space: nowrap;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .stars.empty { color: var(--muted); opacity: .75; }
     .tag { border: 1px solid var(--line); border-radius: 999px; padding: 3px 7px; text-align: center; min-width: 58px; }
     .marks { justify-self: center; display: flex; flex-direction: column; gap: 3px; align-items: center; }
     .dot { width: 7px; height: 7px; border-radius: 999px; box-shadow: 0 0 0 1px rgba(0,0,0,.55) inset; }
@@ -453,6 +462,7 @@
           <label>Обслуживание текущей папки</label>
           <div class="buttons">
             <button id="refreshTags">Обновить теги в папке</button>
+            <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Энергию в звезды</button>
             <button id="reloadFolder">Обновить список</button>
           </div>
           <div class="toolbar compact">
@@ -624,6 +634,7 @@
           ${genreSelect(track)}
           <span>${esc(track.camelot || 'key?')}</span>
           <span>${esc(track.bpm || '?')} BPM</span>
+          <span>${energyStars(track)}</span>
           <span>${fmtLen(track.length) || 'len?'}</span>
           <span>${esc(track.bitrate || '')} kbps</span>
         </div>
@@ -719,6 +730,17 @@
       return Array.from(document.querySelectorAll('#styleGrid input[type="checkbox"]:checked')).map(input => input.value);
     }
 
+    function energyStars(track) {
+      const computed = Number(track.energy_rating || 0);
+      const engine = Number(track.rating || 0);
+      const rating = Math.max(0, Math.min(5, computed || engine));
+      const energy = (typeof track.energy === 'number') ? `, waveform ${track.energy}` : '';
+      const engineText = engine ? `, Engine rating ${engine}/5` : '';
+      const title = rating ? `Энергия трека ${rating}/5${energy}${engineText}` : 'Энергия не рассчитана';
+      const text = rating ? `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}` : '-----';
+      return `<span class="stars ${rating ? '' : 'empty'}" title="${esc(title)}">${text}</span>`;
+    }
+
     function trackRow(track) {
       const btn = document.createElement('div');
       btn.tabIndex = 0;
@@ -732,6 +754,7 @@
         <div class="title"><span class="name">${esc(track.label || track.filename)}</span><span class="sub">${esc(track.path || track.rel || '')}</span></div>
         <div class="marks">${marks}</div>
         <div class="cell genre-cell">${esc(track.genre || '')}</div>
+        <div class="cell">${energyStars(track)}</div>
         <div class="cell tag ${keyClass(track.camelot)}">${esc(track.camelot || '')}</div>
         <div class="cell tag">${esc(track.bpm || '')}</div>
         <div class="cell">${esc(fmtLen(track.length))}</div>
@@ -755,6 +778,7 @@
         <div>Название / путь</div>
         <div></div>
         <button class="sort-head ${sortState.key === 'genre' ? 'active' : ''}" data-sort="genre">Жанр ${sortState.key === 'genre' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
+        <button class="sort-head ${sortState.key === 'energy' ? 'active' : ''}" data-sort="energy">Энергия ${sortState.key === 'energy' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
         <button class="sort-head ${sortState.key === 'camelot' ? 'active' : ''}" data-sort="camelot">Key ${sortState.key === 'camelot' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
         <button class="sort-head ${sortState.key === 'bpm' ? 'active' : ''}" data-sort="bpm">BPM ${sortState.key === 'bpm' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
         <button class="sort-head ${sortState.key === 'length' ? 'active' : ''}" data-sort="length">Длит. ${sortState.key === 'length' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
@@ -784,6 +808,9 @@
         } else if (sortState.key === 'camelot') {
           av = camelotSortValue(a.camelot);
           bv = camelotSortValue(b.camelot);
+        } else if (sortState.key === 'energy') {
+          av = Number(a.energy_rating || a.rating || 0);
+          bv = Number(b.energy_rating || b.rating || 0);
         } else {
           av = String(a.genre || '').toLowerCase();
           bv = String(b.genre || '').toLowerCase();
@@ -813,14 +840,14 @@
       if ((currentRows.rel || '') && currentRows.parent !== undefined) {
         const up = document.createElement('button');
         up.className = 'item';
-        up.innerHTML = '<div></div><div class="folder">..</div><div></div><div></div><div></div><div></div>';
+        up.innerHTML = '<div></div><div class="folder">..</div><div></div><div></div><div></div><div></div><div></div><div></div>';
         up.onclick = () => browse(currentRows.parent || '');
         box.appendChild(up);
       }
       currentRows.dirs.forEach(dir => {
         const btn = document.createElement('button');
         btn.className = 'item';
-        btn.innerHTML = `<div></div><div class="folder">${esc(dir.name)}</div><div></div><div></div><div>Папка</div><div></div>`;
+        btn.innerHTML = `<div></div><div class="folder">${esc(dir.name)}</div><div></div><div></div><div></div><div>Папка</div><div></div><div></div>`;
         btn.onclick = () => browse(dir.rel);
         box.appendChild(btn);
       });
@@ -1626,6 +1653,29 @@
       }
     }
 
+    async function writeEnergyRatings() {
+      $('writeEnergyRatings').disabled = true;
+      $('output').textContent = 'Записываю энергию waveform в звездочки Engine DJ для текущей папки...';
+      try {
+        const res = await fetch('/api/write-energy-ratings', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ path: currentPath })
+        });
+        const data = await res.json();
+        $('output').textContent = data.output || data.error || 'Нет вывода.';
+        $('status').className = data.ok ? 'status ok' : 'status bad';
+        $('status').textContent = data.ok ? 'Звездочки энергии обновлены' : 'Не удалось обновить звездочки';
+        await browse(currentPath);
+      } catch (err) {
+        $('output').textContent = String(err);
+        $('status').className = 'status bad';
+        $('status').textContent = 'Ошибка обновления звездочек';
+      } finally {
+        $('writeEnergyRatings').disabled = false;
+      }
+    }
+
     $('search').addEventListener('input', () => {
       clearTimeout(timer);
       timer = setTimeout(search, 220);
@@ -1634,6 +1684,7 @@
     $('clearSearch').addEventListener('click', () => browse(currentPath));
     $('reloadFolder').addEventListener('click', () => browse(currentPath));
     $('refreshTags').addEventListener('click', refreshTags);
+    $('writeEnergyRatings').addEventListener('click', writeEnergyRatings);
     $('savePaths').addEventListener('click', savePaths);
     $('pickMusic').addEventListener('click', () => openPicker('folder', 'musicRoot'));
     $('pickDb').addEventListener('click', () => openPicker('db', 'dbPath'));

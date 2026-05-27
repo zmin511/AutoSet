@@ -91,12 +91,14 @@ database without cloud services, accounts, or external services.
 
 - Pick a reference track from the Engine library or `Music/` folders.
 - Build a set by BPM, Camelot key, genre/style, duration, and estimated energy.
+- Show estimated track energy as stars and optionally write it to Engine DJ `Track.rating`.
 - Use the reference track as `Start` or `Peak`.
 - Preview tracks in the built-in player.
 - Render Engine-like waveform, cues, and loops.
 - Create a copied set folder with `playlist.m3u`, `playlist.csv`, `methodology.txt`.
 - Create an Engine DB playlist with links to existing tracks.
 - Refresh BPM/key/bitrate and DJ genre tags for a selected folder.
+- Write estimated waveform energy into Engine DJ star ratings for the selected folder.
 
 ### How It Works
 

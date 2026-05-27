@@ -295,6 +295,31 @@ def _parse_overview_waveform(raw):
     }
 
 
+def _energy_rating_from_energy(energy):
+    try:
+        value = float(energy)
+    except Exception:
+        return 0
+    if value <= 0:
+        return 0
+    return max(1, min(5, int(value * 5 + 0.999)))
+
+
+def _energy_from_overview_blob(blob):
+    overview = _parse_overview_waveform(_decode_engine_zlib_blob(blob))
+    if not overview:
+        return None, 0
+    energy = overview.get("energy")
+    return energy, _energy_rating_from_energy(energy)
+
+
+def _row_value(row, key, default=None):
+    try:
+        return row[key]
+    except Exception:
+        return default
+
+
 def _finite_number(value):
     try:
         return value is not None and not (value != value) and value not in (float("inf"), float("-inf"))
@@ -660,6 +685,10 @@ def row_to_track(row):
         has_loop = bool(row["has_loop"])
     except Exception:
         has_loop = False
+    energy = _row_value(row, "energy", None)
+    energy_rating = _row_value(row, "energy_rating", 0)
+    if not energy_rating:
+        energy, energy_rating = _energy_from_overview_blob(_row_value(row, "overviewWaveFormData"))
     return {
         "id": int(row["id"]),
         "label": label(row),
@@ -670,6 +699,9 @@ def row_to_track(row):
         "bpm": None if row["bpmAnalyzed"] is None else round(float(row["bpmAnalyzed"]), 1),
         "camelot": engine_key_to_camelot(None if row["key"] is None else int(row["key"])),
         "bitrate": row["bitrate"] or "",
+        "rating": int(_row_value(row, "rating", 0) or 0),
+        "energy": energy,
+        "energy_rating": int(energy_rating or 0),
         "length": row["length"] or 0,
         "path": path,
         "rel": rel_to_music(path) if path else "",
@@ -731,6 +763,7 @@ def load_track_maps():
           Track.bitrate,
           Track.bpmAnalyzed,
           Track.key,
+          Track.rating,
           Track.genre,
           Track.artist,
           Track.title,
@@ -766,6 +799,9 @@ def read_file_tags(path):
         "bpm": None,
         "camelot": "",
         "bitrate": "",
+        "rating": 0,
+        "energy": None,
+        "energy_rating": 0,
         "length": 0,
         "path": str(path),
         "has_cue": False,
@@ -795,6 +831,26 @@ def track_for_file(path, by_path, unique_name):
     return by_path.get(norm_abs(path)) or unique_name.get(path.name.casefold()) or read_file_tags(path)
 
 
+def attach_energy(tracks):
+    ids = [int(t["id"]) for t in tracks if t.get("id")]
+    if not ids:
+        return tracks
+    placeholders = ",".join("?" for _ in ids)
+    with open_db() as con:
+        rows = con.execute(
+            f"SELECT trackId, overviewWaveFormData FROM PerformanceData WHERE trackId IN ({placeholders})",
+            ids,
+        ).fetchall()
+    by_id = {}
+    for row in rows:
+        by_id[int(row["trackId"])] = _energy_from_overview_blob(row["overviewWaveFormData"])
+    for track in tracks:
+        pair = by_id.get(int(track["id"] or 0))
+        if pair:
+            track["energy"], track["energy_rating"] = pair
+    return tracks
+
+
 def browse_music(rel):
     current = safe_music_path(rel)
     if not current.exists() or not current.is_dir():
@@ -814,6 +870,7 @@ def browse_music(rel):
             tr["rel"] = rel_to_music(child)
             tr["source"] = "engine" if tr.get("id") else "file"
             tracks.append(tr)
+    attach_energy(tracks)
     parent = ""
     if current.resolve() != MUSIC_ROOT.resolve():
         parent = rel_to_music(current.parent)
@@ -830,6 +887,7 @@ def search_tracks(query, limit):
           Track.bitrate,
           Track.bpmAnalyzed,
           Track.key,
+          Track.rating,
           Track.genre,
           Track.artist,
           Track.title,
@@ -863,7 +921,7 @@ def search_tracks(query, limit):
             out.append(row_to_track(payload))
             if len(out) >= limit:
                 break
-    return out
+    return attach_energy(out)
 
 
 def genre_counts():
@@ -1358,6 +1416,81 @@ def refresh_tags(rel):
     return {"ok": result.returncode == 0, "code": result.returncode, "output": result.stdout or ""}
 
 
+def write_energy_ratings(rel):
+    target = safe_music_path(rel)
+    rel_norm = rel_to_music(target).replace("\\", "/").casefold()
+    if rel_norm in {"set", "sets"} or rel_norm.startswith("set/") or rel_norm.startswith("sets/"):
+        raise ValueError("Set/Sets folders are protected from rating updates")
+    if not target.exists() or not target.is_dir():
+        raise ValueError("Folder does not exist")
+
+    files = {}
+    for child in target.iterdir():
+        if child.is_file() and child.suffix.lower() in AUDIO_EXTS:
+            files[norm_abs(child)] = child
+
+    if not files:
+        return {"ok": True, "updated": 0, "matched": 0, "skipped": 0, "output": "No audio files in current folder."}
+
+    now = _engine_now_str()
+    matched = 0
+    updated = 0
+    skipped = 0
+    unchanged = 0
+    with open_db() as con:
+        rows = con.execute(
+            """
+            SELECT
+              Track.id,
+              Track.path,
+              Track.rating,
+              PerformanceData.overviewWaveFormData AS overviewWaveFormData
+            FROM Track
+            LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
+            WHERE Track.isAvailable = 1
+              AND Track.path IS NOT NULL
+            """
+        ).fetchall()
+        for row in rows:
+            path = resolve_track_path(row["path"])
+            if norm_abs(path) not in files:
+                continue
+            matched += 1
+            _energy, rating = _energy_from_overview_blob(row["overviewWaveFormData"])
+            if not rating:
+                skipped += 1
+                continue
+            if int(row["rating"] or 0) == rating:
+                unchanged += 1
+                continue
+            con.execute(
+                "UPDATE Track SET rating = ?, lastEditTime = ? WHERE id = ?",
+                (int(rating), now, int(row["id"])),
+            )
+            updated += 1
+        con.commit()
+
+    missing = max(0, len(files) - matched)
+    output = (
+        f"Energy stars updated for current folder.\n"
+        f"Audio files: {len(files)}\n"
+        f"Matched in Engine DB: {matched}\n"
+        f"Updated Track.rating: {updated}\n"
+        f"Already correct: {unchanged}\n"
+        f"Skipped without waveform: {skipped}\n"
+        f"Not found in Engine DB: {missing}"
+    )
+    return {
+        "ok": True,
+        "updated": updated,
+        "matched": matched,
+        "skipped": skipped,
+        "unchanged": unchanged,
+        "missing": missing,
+        "output": output,
+    }
+
+
 def refresh_genres(rel):
     target = safe_music_path(rel)
     cmd = [
@@ -1533,7 +1666,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/update-genre", "/api/config"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/update-genre", "/api/config"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -1571,6 +1704,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(result)
             elif parsed_path == "/api/refresh-tags":
                 self.send_json(refresh_tags(data.get("path", "")))
+            elif parsed_path == "/api/write-energy-ratings":
+                self.send_json(write_energy_ratings(data.get("path", "")))
             else:
                 self.send_json(update_genre(data["track_id"], data["genre"]))
         except Exception as exc:

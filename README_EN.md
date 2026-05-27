@@ -47,14 +47,15 @@ The UI opens in a browser through a local Python server. It includes:
 - path setup for `Music/` and `Engine Library`/`m.db`;
 - music-folder browser;
 - Engine library search;
-- track table with genre, Camelot, BPM, and duration;
+- track table with genre, energy stars, Camelot, BPM, and duration;
 - cue and loop indicators;
 - built-in audio player;
 - waveform with cues on top and loops on bottom;
 - role, duration, `Camelot +/-`, and `BPM +/-` controls;
 - style filter;
 - create set and create playlist actions;
-- tag refresh for the selected folder.
+- tag refresh for the selected folder;
+- writing estimated waveform energy into Engine DJ `Track.rating` stars for the current folder.
 
 ## Output Modes
 
