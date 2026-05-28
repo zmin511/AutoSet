@@ -17,8 +17,9 @@ from urllib.parse import parse_qs, urlparse
 
 
 APP_DIR = Path(__file__).resolve().parent
-SSD_ROOT = APP_DIR.parent.parent
-TOOLS_DIR = SSD_ROOT / "zmin_autoset" / "tools"
+PROJECT_DIR = APP_DIR.parent
+SSD_ROOT = PROJECT_DIR.parent
+TOOLS_DIR = PROJECT_DIR / "tools"
 BUILDER = TOOLS_DIR / "engine_set_builder.py"
 CONFIG_PATH = APP_DIR / "paths.json"
 DEFAULT_MUSIC_ROOT = SSD_ROOT / "Music" if (SSD_ROOT / "Music").exists() else SSD_ROOT
@@ -29,7 +30,7 @@ SETS_DIR = DEFAULT_SETS_DIR
 DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
-APP_NAME = "zmin_autoset"
+APP_NAME = "AutoSet"
 APP_VERSION = "1.5.3"
 APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
@@ -1415,9 +1416,9 @@ def refresh_tags(rel):
         "--music-root",
         str(MUSIC_ROOT),
         "--report-dir",
-        str(SSD_ROOT / "zmin_autoset" / "reports"),
+        str(PROJECT_DIR / "reports"),
         "--backup-dir",
-        str(SSD_ROOT / "zmin_autoset" / "tag_backups"),
+        str(PROJECT_DIR / "tag_backups"),
         "--key-format",
         "camelot",
         "--write-bitrate-tag",
@@ -1543,9 +1544,9 @@ def refresh_genres(rel):
         "--music-root",
         str(MUSIC_ROOT),
         "--report-dir",
-        str(SSD_ROOT / "zmin_autoset" / "reports" / "genres"),
+        str(PROJECT_DIR / "reports" / "genres"),
         "--backup-dir",
-        str(SSD_ROOT / "zmin_autoset" / "tag_backups"),
+        str(PROJECT_DIR / "tag_backups"),
         "--apply",
         "--no-backup",
         "--min-confidence",

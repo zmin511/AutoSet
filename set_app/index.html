@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>zmin_autoset</title>
+  <title>AutoSet</title>
   <style>
     :root {
       color-scheme: dark;
@@ -412,7 +412,7 @@
   <main>
     <header>
       <div>
-        <h1>zmin_autoset</h1>
+        <h1>AUTOSET</h1>
         <div class="status" id="status">Загрузка библиотеки...</div>
       </div>
       <div class="paths" id="paths"></div>
@@ -892,11 +892,11 @@
       const provider = cfg.library_provider || {};
       const repo = cfg.repository_url || 'https://github.com/zmin511/zmin_autoset';
       $('paths').innerHTML = `
-        <span>Версия</span><span>${esc(cfg.app_name || 'zmin_autoset')} · v${esc(cfg.version || '0.3.0')}</span>
+        <span>Версия</span><span>${esc(cfg.app_name || 'AutoSet')} · v${esc(cfg.version || '0.3.0')}</span>
         <span>Библиотека</span><span>${esc(provider.name || 'Denon Engine DJ')} · ${esc(provider.status || '')}</span>
         <span>База</span><span title="${esc(cfg.db_path)}">${esc(cfg.db_path)}</span>
         <span>Сеты</span><span title="${esc(cfg.sets_dir)}">${esc(cfg.sets_dir)}</span>
-        <span>GitHub</span><span><a href="${esc(repo)}" target="_blank" rel="noreferrer">zmin511/zmin_autoset</a></span>
+        <span>GitHub</span><span><a href="${esc(repo)}" target="_blank" rel="noreferrer">AutoSet</a></span>
       `;
       $('status').className = cfg.ready ? 'status ok' : 'status bad';
       $('status').textContent = cfg.ready ? `Готово · ${cfg.startup_refresh || ''}` : 'Не найдена база или builder';

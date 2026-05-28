@@ -1,10 +1,10 @@
-# zmin_autoset
+# AutoSet
 
 Version: `1.5.3` | Changelog: `CHANGELOG.md`
 
 ## Русское описание
 
-`zmin_autoset` - локальное portable-приложение для **Denon Engine DJ**. Оно
+`AutoSet` - локальное portable-приложение для **Denon Engine DJ**. Оно
 помогает собрать гармоничный DJ-сет от выбранного опорного трека, проверить
 трек по waveform/cue/loop и создать плейлист прямо в базе Engine без облака,
 аккаунтов и внешних сервисов.
@@ -45,7 +45,7 @@ Engine Library/Database2/m.db
 
 ```text
 <корень диска>/
-  zmin_autoset/
+  AutoSet/
   Music/
   Engine Library/
     Database2/
@@ -54,8 +54,8 @@ Engine Library/Database2/m.db
 
 Запуск:
 
-- Windows: `zmin_autoset\run_windows.cmd`
-- macOS: `zmin_autoset/run_mac.command`
+- Windows: `AutoSet\run_windows.cmd`
+- macOS: `AutoSet/run_mac.command`
 
 Интерфейс обычно открывается здесь:
 
@@ -82,7 +82,7 @@ tools/review_new_genres.py  нормализация жанров, семейс�
 
 ## English Description
 
-`zmin_autoset` is a local portable companion app for **Denon Engine DJ**. It
+`AutoSet` is a local portable companion app for **Denon Engine DJ**. It
 helps build a harmonic DJ set from a selected reference track, inspect tracks
 with waveform/cue/loop data, and create playlists directly inside the Engine
 database without cloud services, accounts, or external services.
@@ -125,7 +125,7 @@ Recommended layout:
 
 ```text
 <drive root>/
-  zmin_autoset/
+  AutoSet/
   Music/
   Engine Library/
     Database2/
@@ -134,8 +134,8 @@ Recommended layout:
 
 Run:
 
-- Windows: `zmin_autoset\run_windows.cmd`
-- macOS: `zmin_autoset/run_mac.command`
+- Windows: `AutoSet\run_windows.cmd`
+- macOS: `AutoSet/run_mac.command`
 
 The UI usually opens at:
 
