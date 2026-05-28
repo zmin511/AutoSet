@@ -1336,13 +1336,44 @@ def write_local_playlist_no_copy(playlist, out_dir, playlist_name):
     return {"folder": str(out_dir), "m3u": str(m3u_path), "csv": str(csv_path)}
 
 
-def create_engine_playlist_from_paths(track_paths, folder_path, title):
+def _engine_track_id_for_playlist_item(con, item):
+    if isinstance(item, dict):
+        raw_id = item.get("id")
+        if raw_id is not None:
+            try:
+                track_id = int(raw_id)
+            except Exception:
+                track_id = 0
+            if track_id:
+                row = con.execute("SELECT id FROM Track WHERE id=?", (track_id,)).fetchone()
+                if row:
+                    return int(row[0]), None
+        raw_path = item.get("path") or ""
+    else:
+        raw_path = item
+
+    abs_path = str(Path(str(raw_path)).resolve()) if str(raw_path).strip() else ""
+    if not abs_path:
+        return None, ("", "")
+    try:
+        engine_path = _engine_track_path_for_abs(abs_path)
+    except Exception:
+        engine_path = abs_path
+    row = con.execute("SELECT id FROM Track WHERE path=?", (engine_path,)).fetchone()
+    if not row:
+        row = con.execute("SELECT id FROM Track WHERE path=?", (abs_path,)).fetchone()
+    if row:
+        return int(row[0]), None
+    return None, (abs_path, engine_path)
+
+
+def create_engine_playlist_from_tracks(tracks, folder_path, title):
     folder_path = str(folder_path or "").strip()
     title = str(title or "").strip()
     if not folder_path or not title:
         raise ValueError("folder and title are required")
-    track_paths = [str(Path(p).resolve()) for p in (track_paths or []) if str(p).strip()]
-    if not track_paths:
+    tracks = [t for t in (tracks or []) if t]
+    if not tracks:
         raise ValueError("Empty track list")
 
     con = sqlite3.connect(str(DB_PATH))
@@ -1358,18 +1389,12 @@ def create_engine_playlist_from_paths(track_paths, folder_path, title):
 
             missing = []
             track_ids = []
-            for abs_path in track_paths:
-                try:
-                    engine_path = _engine_track_path_for_abs(abs_path)
-                except Exception:
-                    engine_path = abs_path
-                row = con.execute("SELECT id FROM Track WHERE path=?", (engine_path,)).fetchone()
-                if not row:
-                    row = con.execute("SELECT id FROM Track WHERE path=?", (abs_path,)).fetchone()
-                if not row:
-                    missing.append((abs_path, engine_path))
+            for item in tracks:
+                track_id, missing_path = _engine_track_id_for_playlist_item(con, item)
+                if not track_id:
+                    missing.append(missing_path)
                     continue
-                track_ids.append(int(row[0]))
+                track_ids.append(int(track_id))
 
             if missing:
                 lines = ["Some tracks are not imported in Engine DB (Track.path not found):"]
@@ -1735,9 +1760,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 local_name = _engine_playlist_local_folder_name(playlist, data.get("role", "start"))
                 local_out = write_local_playlist_no_copy(playlist, SETS_DIR / local_name, local_name)
-                paths = [t.get("path") for t in (playlist.get("tracks") or []) if isinstance(t, dict)]
                 # Название плейлиста (и локальной папки) должно быть одинаковым для set/playlist/Engine.
-                result = create_engine_playlist_from_paths(paths, data.get("folder", ""), local_name)
+                result = create_engine_playlist_from_tracks(playlist.get("tracks") or [], data.get("folder", ""), local_name)
                 result["local_playlist_folder"] = local_out["folder"]
                 result["local_m3u"] = local_out["m3u"]
                 result["local_csv"] = local_out["csv"]
