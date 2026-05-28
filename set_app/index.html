@@ -865,6 +865,7 @@
       const box = $('crumbs');
       box.innerHTML = '';
       const root = document.createElement('button');
+      root.type = 'button';
       root.textContent = 'Music';
       root.onclick = () => browse('');
       box.appendChild(root);
@@ -874,9 +875,11 @@
         sep.textContent = '/';
         box.appendChild(sep);
         acc = acc ? `${acc}/${part}` : part;
+        const targetPath = acc;
         const b = document.createElement('button');
+        b.type = 'button';
         b.textContent = part;
-        b.onclick = () => browse(acc);
+        b.onclick = () => browse(targetPath);
         box.appendChild(b);
       });
     }
