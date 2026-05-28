@@ -32,7 +32,7 @@ INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "AutoSet"
 APP_VERSION = "1.5.3"
-APP_REPOSITORY_URL = "https://github.com/zmin511/zmin_autoset"
+APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
 

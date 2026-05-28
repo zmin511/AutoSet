@@ -890,7 +890,7 @@
       $('musicRoot').value = cfg.music_root || '';
       $('dbPath').value = cfg.db_path || '';
       const provider = cfg.library_provider || {};
-      const repo = cfg.repository_url || 'https://github.com/zmin511/zmin_autoset';
+      const repo = cfg.repository_url || 'https://github.com/zmin511/AutoSet';
       $('paths').innerHTML = `
         <span>Версия</span><span>${esc(cfg.app_name || 'AutoSet')} · v${esc(cfg.version || '0.3.0')}</span>
         <span>Библиотека</span><span>${esc(provider.name || 'Denon Engine DJ')} · ${esc(provider.status || '')}</span>
