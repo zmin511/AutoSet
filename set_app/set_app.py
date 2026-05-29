@@ -31,7 +31,7 @@ DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.4"
+APP_VERSION = "1.5.5"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -1007,6 +1007,37 @@ def genre_options():
     return sorted(seen.values(), key=lambda s: s.casefold())
 
 
+def split_genre_tags(value):
+    tags = []
+    for part in re.split(r"[,;/|<>]+", str(value or "")):
+        tag = re.sub(r"\s+", " ", part).strip()
+        if tag:
+            tags.append(tag)
+    return tags
+
+
+def join_genre_tags(tags):
+    out = []
+    seen = set()
+    for tag in tags or []:
+        clean = re.sub(r"\s+", " ", str(tag or "")).strip()
+        if not clean:
+            continue
+        key = clean.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(clean)
+    return ", ".join(out)
+
+
+def _normalize_genre_value(value):
+    genre = join_genre_tags(split_genre_tags(value))
+    if not genre:
+        raise ValueError("Genre is empty")
+    return genre
+
+
 def update_file_genre(path, genre):
     suffix = path.suffix.lower()
     if suffix == ".mp3":
@@ -1017,23 +1048,25 @@ def update_file_genre(path, genre):
         except ID3NoHeaderError:
             tags = ID3()
         tags.delall("TCON")
-        tags.add(TCON(encoding=3, text=[genre]))
+        if str(genre or "").strip():
+            tags.add(TCON(encoding=3, text=[genre]))
         tags.save(str(path), v2_version=3)
         return True
     if suffix == ".flac":
         from mutagen.flac import FLAC
 
         audio = FLAC(str(path))
-        audio["GENRE"] = [genre]
+        if str(genre or "").strip():
+            audio["GENRE"] = [genre]
+        elif "GENRE" in audio:
+            del audio["GENRE"]
         audio.save()
         return True
     return False
 
 
 def update_genre(track_id, genre):
-    genre = re.sub(r"\s+", " ", str(genre or "")).strip()
-    if not genre:
-        raise ValueError("Genre is empty")
+    genre = _normalize_genre_value(genre)
     with open_db() as con:
         row = con.execute(
             "SELECT id, filename, length, bitrate, bpmAnalyzed, key, genre, artist, title, path FROM Track WHERE id = ?",
@@ -1041,13 +1074,122 @@ def update_genre(track_id, genre):
         ).fetchone()
         if not row:
             raise ValueError("Track not found")
-        con.execute("UPDATE Track SET genre = ? WHERE id = ?", (genre, int(track_id)))
+        con.execute("UPDATE Track SET genre = ?, lastEditTime = ? WHERE id = ?", (genre, _engine_now_str(), int(track_id)))
         con.commit()
     track = row_to_track(row)
     path = safe_media_path(track["rel"] or track["path"])
     file_written = update_file_genre(path, genre)
     track["genre"] = genre
     return {"ok": True, "track": track, "file_written": file_written}
+
+
+def _genre_after_bulk_action(current, action, tag, find, replace):
+    current_tags = split_genre_tags(current)
+    if action == "append":
+        additions = split_genre_tags(tag)
+        if not additions:
+            raise ValueError("Tag is empty")
+        return join_genre_tags(current_tags + additions)
+    if action in {"replace", "remove"}:
+        needles = {t.casefold() for t in split_genre_tags(find)}
+        if not needles:
+            raise ValueError("Find tag is empty")
+        replacement = split_genre_tags(replace)
+        out = []
+        changed = False
+        for item in current_tags:
+            if item.casefold() in needles:
+                changed = True
+                if action == "replace":
+                    out.extend(replacement)
+            else:
+                out.append(item)
+        return join_genre_tags(out), changed
+    raise ValueError("Unknown bulk genre action")
+
+
+def _audio_files_for_genre_bulk(rel, recursive):
+    target = safe_music_path(rel)
+    if not target.exists() or not target.is_dir():
+        raise ValueError("Folder does not exist")
+    iterator = target.rglob("*") if bool(recursive) else target.iterdir()
+    return [
+        path
+        for path in iterator
+        if path.is_file() and path.suffix.lower() in AUDIO_EXTS
+    ]
+
+
+def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
+    files = _audio_files_for_genre_bulk(rel, recursive)
+    by_path, unique_name = load_track_maps()
+    targets = []
+    missing = []
+    for path in files:
+        track = track_for_file(path, by_path, unique_name)
+        if track.get("id"):
+            targets.append((int(track["id"]), path))
+        else:
+            missing.append(str(path))
+    if not targets:
+        return {"ok": False, "updated": 0, "output": "No Engine DB tracks found in this folder."}
+
+    now = _engine_now_str()
+    updated = 0
+    unchanged = 0
+    file_written = 0
+    file_failed = 0
+    with open_db() as con:
+        for track_id, path in targets:
+            row = con.execute("SELECT genre FROM Track WHERE id = ?", (int(track_id),)).fetchone()
+            if not row:
+                missing.append(str(path))
+                continue
+            current = row["genre"] or ""
+            if action == "append":
+                new_genre = _genre_after_bulk_action(current, action, tag, find, replace)
+                changed = new_genre != join_genre_tags(split_genre_tags(current))
+            else:
+                new_genre, changed = _genre_after_bulk_action(current, action, tag, find, replace)
+            if not changed:
+                unchanged += 1
+                continue
+            con.execute(
+                "UPDATE Track SET genre = ?, lastEditTime = ? WHERE id = ?",
+                (new_genre, now, int(track_id)),
+            )
+            updated += 1
+            try:
+                if update_file_genre(path, new_genre):
+                    file_written += 1
+                else:
+                    file_failed += 1
+            except Exception:
+                file_failed += 1
+        con.commit()
+
+    scope = "current folder and subfolders" if recursive else "current folder"
+    output = (
+        f"Genre tags updated for {scope}.\n"
+        f"Audio files: {len(files)}\n"
+        f"Matched in Engine DB: {len(targets)}\n"
+        f"Updated: {updated}\n"
+        f"Unchanged: {unchanged}\n"
+        f"File tags written: {file_written}\n"
+        f"File tags skipped/failed: {file_failed}\n"
+        f"Not found in Engine DB: {len(missing)}"
+    )
+    if missing:
+        output += "\n\nMissing examples:\n" + "\n".join(f"- {p}" for p in missing[:12])
+    return {
+        "ok": True,
+        "updated": updated,
+        "unchanged": unchanged,
+        "file_written": file_written,
+        "file_failed": file_failed,
+        "missing": len(missing),
+        "output": output,
+    }
 
 
 def build_set(track_id, role, minutes, max_key_step, bpm_window, style_filter):
@@ -1732,7 +1874,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/config"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/config"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -1773,6 +1915,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(write_energy_ratings(data.get("path", "")))
             elif parsed_path == "/api/write-all-energy-ratings":
                 self.send_json(write_all_energy_ratings())
+            elif parsed_path == "/api/bulk-genre":
+                self.send_json(bulk_update_genres(
+                    data.get("path", ""),
+                    bool(data.get("recursive", False)),
+                    data.get("action", ""),
+                    data.get("tag", ""),
+                    data.get("find", ""),
+                    data.get("replace", ""),
+                ))
             else:
                 self.send_json(update_genre(data["track_id"], data["genre"]))
         except Exception as exc:

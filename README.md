@@ -1,6 +1,6 @@
 # AutoSet
 
-Version: `1.5.4` | Changelog: `CHANGELOG.md`
+Version: `1.5.5` | Changelog: `CHANGELOG.md`
 
 ## Русское описание
 
@@ -98,6 +98,7 @@ database without cloud services, accounts, or external services.
 - Create a copied set folder with `playlist.m3u`, `playlist.csv`, `methodology.txt`.
 - Create an Engine DB playlist with links to existing tracks.
 - Refresh BPM/key/bitrate and DJ genre tags for a selected folder.
+- Add, replace, and remove genre tags for the current folder or folder plus subfolders.
 - Write estimated waveform energy into Engine DJ star ratings for the selected folder or the whole `Music` library.
 
 ### How It Works

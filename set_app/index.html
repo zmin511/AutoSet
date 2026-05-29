@@ -166,7 +166,7 @@
       -webkit-box-orient: vertical;
       white-space: normal;
       line-height: 1.25;
-      font-size: 15px;
+      font-size: 13px;
     }
     .sub { display: block; color: var(--muted); font-size: 11px; line-height: 1.25; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cell { color: #dbe7ee; font-size: 12px; white-space: normal; overflow-wrap: anywhere; text-align: right; justify-self: end; }
@@ -243,13 +243,33 @@
     }
     .genre-select {
       width: auto;
-      max-width: 150px;
+      min-width: 132px;
+      max-width: 190px;
       padding: 3px 22px 3px 7px;
       font-size: 12px;
       color: #e7fff4;
       border-color: rgba(55, 197, 143, .45);
       background-color: #102019;
     }
+    .tag-tools {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 6px;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255,255,255,.06);
+    }
+    .tag-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px;
+      align-items: center;
+    }
+    .tag-row.replace { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; }
+    .tag-row input { min-height: 34px; font-size: 12px; }
+    .tag-row button, .tag-tools button { min-height: 34px; padding: 7px 10px; white-space: nowrap; }
+    .tag-check { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+    .tag-check input { width: auto; min-height: 0; }
     .style-box {
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -296,6 +316,7 @@
     .maintenance { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
     .maintenance label { font-size: 12px; }
     .maintenance .buttons { margin-bottom: 0; }
+    .toolbar.compact select { width: 62px; min-width: 62px; }
     .waveform { border: 1px solid var(--line); border-radius: 8px; background: #0b0d0f; padding: 10px; margin: 0; min-height: 96px; }
     .waveform-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
     .waveform-head .title { font-size: 12px; color: var(--muted); }
@@ -405,6 +426,7 @@
       .item { grid-template-columns: 38px minmax(0, 1fr) 18px 64px 50px 56px; }
       .item .cell:nth-child(6) { display: none; }
       .title .name { font-size: 14px; }
+      .tag-row, .tag-row.replace { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -469,7 +491,7 @@
             <button id="reloadFolder">Обновить список</button>
           </div>
           <div class="toolbar compact">
-            <input id="search" placeholder="Поиск трека (или оставь пустым для папки)">
+            <input id="search" placeholder="Поиск трека">
             <select id="limit" title="Сколько треков показывать в списке">
               <option>20</option>
               <option selected>40</option>
@@ -483,6 +505,19 @@
               <option>200</option>
             </select>
             <button id="clearSearch" title="Сбросить поиск и вернуться к папкам">Папки</button>
+          </div>
+          <div class="tag-tools">
+            <label class="tag-check"><input id="tagRecursive" type="checkbox"> С подпапками</label>
+            <div class="tag-row">
+              <input id="tagAdd" list="genreOptionsList" placeholder="Добавить жанр/тег в папку">
+              <button id="addGenreTag" title="Добавить жанр через запятую к каждому треку текущей папки">Добавить тег</button>
+            </div>
+            <div class="tag-row replace">
+              <input id="tagFind" list="genreOptionsList" placeholder="Найти тег">
+              <input id="tagReplace" list="genreOptionsList" placeholder="Заменить на">
+              <button id="replaceGenreTag" title="Заменить найденный жанр в текущей папке">Заменить</button>
+              <button id="removeGenreTag" title="Удалить найденный жанр из текущей папки">Удалить</button>
+            </div>
           </div>
         </div>
       </section>
@@ -547,6 +582,7 @@
       </div>
     </div>
   </div>
+  <datalist id="genreOptionsList"></datalist>
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -619,15 +655,13 @@
       const genreData = await genreRes.json();
       styleGroups = data.groups || [];
       genreOptions = genreData.genres || [];
+      $('genreOptionsList').innerHTML = genreOptions.map(g => `<option value="${esc(g)}"></option>`).join('');
       renderStyleGrid();
     }
 
     function genreSelect(track) {
       const current = track.genre || '';
-      const options = Array.from(new Set([current, ...genreOptions].filter(Boolean)));
-      return `<select class="genre-select" id="selectedGenre">
-        ${options.map(g => `<option value="${esc(g)}" ${g === current ? 'selected' : ''}>${esc(g)}</option>`).join('')}
-      </select>`;
+      return `<input class="genre-select" id="selectedGenre" list="genreOptionsList" value="${esc(current)}" placeholder="Жанр">`;
     }
 
     function selectedMarkup(track, withStatus = true) {
@@ -648,8 +682,10 @@
     function wireGenreSelect() {
       const select = $('selectedGenre');
       if (!select || !selectedTrack?.id) return;
-      select.addEventListener('change', async () => {
-        const genre = select.value;
+      let lastSaved = select.value;
+      const saveGenre = async () => {
+        const genre = select.value.trim();
+        if (!genre || genre === lastSaved) return;
         $('status').textContent = 'Сохраняю жанр...';
         try {
           const res = await fetch('/api/update-genre', {
@@ -660,6 +696,7 @@
           const data = await res.json();
           if (!data.ok) throw new Error(data.error || 'update failed');
           selectedTrack.genre = genre;
+          lastSaved = genre;
           applyInferredStyles(selectedTrack);
           $('status').className = 'status ok';
           $('status').textContent = 'Жанр сохранён';
@@ -667,6 +704,14 @@
         } catch (err) {
           $('status').className = 'status bad';
           $('status').textContent = `Ошибка сохранения жанра: ${err}`;
+        }
+      };
+      select.addEventListener('change', saveGenre);
+      select.addEventListener('blur', saveGenre);
+      select.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          saveGenre();
         }
       });
     }
@@ -1711,6 +1756,52 @@
       }
     }
 
+    async function bulkGenre(action) {
+      const tag = $('tagAdd').value.trim();
+      const find = $('tagFind').value.trim();
+      const replace = $('tagReplace').value.trim();
+      if (action === 'append' && !tag) {
+        $('status').className = 'status bad';
+        $('status').textContent = 'Укажи тег для добавления';
+        return;
+      }
+      if ((action === 'replace' || action === 'remove') && !find) {
+        $('status').className = 'status bad';
+        $('status').textContent = 'Укажи тег для поиска';
+        return;
+      }
+      const buttonMap = { append: 'addGenreTag', replace: 'replaceGenreTag', remove: 'removeGenreTag' };
+      const btn = $(buttonMap[action]);
+      btn.disabled = true;
+      $('output').textContent = 'Обновляю жанры в Engine DB и файлах...';
+      try {
+        const res = await fetch('/api/bulk-genre', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            path: currentPath,
+            recursive: $('tagRecursive').checked,
+            action,
+            tag,
+            find,
+            replace
+          })
+        });
+        const data = await res.json();
+        $('output').textContent = data.output || data.error || 'Нет вывода.';
+        $('status').className = data.ok ? 'status ok' : 'status bad';
+        $('status').textContent = data.ok ? 'Жанры обновлены' : 'Не удалось обновить жанры';
+        await loadStyles();
+        await browse(currentPath);
+      } catch (err) {
+        $('output').textContent = String(err);
+        $('status').className = 'status bad';
+        $('status').textContent = 'Ошибка обновления жанров';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     $('search').addEventListener('input', () => {
       clearTimeout(timer);
       timer = setTimeout(search, 220);
@@ -1721,6 +1812,9 @@
     $('refreshTags').addEventListener('click', refreshTags);
     $('writeEnergyRatings').addEventListener('click', writeEnergyRatings);
     $('writeAllEnergyRatings').addEventListener('click', writeAllEnergyRatings);
+    $('addGenreTag').addEventListener('click', () => bulkGenre('append'));
+    $('replaceGenreTag').addEventListener('click', () => bulkGenre('replace'));
+    $('removeGenreTag').addEventListener('click', () => bulkGenre('remove'));
     $('savePaths').addEventListener('click', savePaths);
     $('pickMusic').addEventListener('click', () => openPicker('folder', 'musicRoot'));
     $('pickDb').addEventListener('click', () => openPicker('db', 'dbPath'));

@@ -1,6 +1,6 @@
 # AutoSet
 
-Version: `1.5.4`
+Version: `1.5.5`
 
 `AutoSet` is a local portable companion app for **Denon Engine DJ**. It
 helps build a harmonic DJ set from a selected reference track, inspect tracks
@@ -55,6 +55,7 @@ The UI opens in a browser through a local Python server. It includes:
 - style filter;
 - create set and create playlist actions;
 - tag refresh for the selected folder;
+- adding, replacing, and removing genre tags for the current folder or folder plus subfolders;
 - writing estimated waveform energy into Engine DJ `Track.rating` stars for the current folder or the whole `Music` library.
 
 ## Output Modes
