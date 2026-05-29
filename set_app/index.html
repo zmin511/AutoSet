@@ -261,7 +261,7 @@
     }
     .tag-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       gap: 6px;
       align-items: center;
     }
@@ -507,10 +507,10 @@
             <button id="clearSearch" title="Сбросить поиск и вернуться к папкам">Папки</button>
           </div>
           <div class="tag-tools">
-            <label class="tag-check"><input id="tagRecursive" type="checkbox"> С подпапками</label>
             <div class="tag-row">
               <input id="tagAdd" list="genreOptionsList" placeholder="Добавить жанр/тег в папку">
               <button id="addGenreTag" title="Добавить жанр через запятую к каждому треку текущей папки">Добавить тег</button>
+              <label class="tag-check" title="Применять операции с тегами к текущей папке и всем подпапкам"><input id="tagRecursive" type="checkbox"> С подпапками</label>
             </div>
             <div class="tag-row replace">
               <input id="tagFind" list="genreOptionsList" placeholder="Найти тег">
@@ -756,6 +756,7 @@
         picked.add('electronica');
       }
       if (text.includes('dance') || text.includes('edm')) picked.add('dance');
+      if (text.includes('rus') || text.includes('рус')) picked.add('rus');
       if (text.includes('pop')) picked.add('pop');
       if (text.includes('rock')) picked.add('rock');
       if (picked.has('house')) {

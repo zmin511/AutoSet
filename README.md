@@ -1,6 +1,6 @@
 # AutoSet
 
-Version: `1.5.5` | Changelog: `CHANGELOG.md`
+Version: `1.5.6` | Changelog: `CHANGELOG.md`
 
 ## Русское описание
 

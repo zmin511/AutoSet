@@ -361,6 +361,8 @@ STYLE_CANONICAL = {
     "euro_house": "euro_house",
     "soul_funk": "soul_and_funk",
     "soul_and_funk": "soul_and_funk",
+    "russian": "rus",
+    "рус": "rus",
 }
 
 
@@ -398,11 +400,27 @@ def candidate_style_values(track: Track) -> set:
     return values
 
 
+SPECIAL_ALLOW_STYLES = {"rus"}
+RUS_STYLE_VALUES = {"rus", "russian", "рус", "ruspop", "rusrock"}
+
+
+def track_has_rus_tag(track: Track) -> bool:
+    for field in [track.genre, track.dj_style, track.dj_family]:
+        for part in re.split(r"[,;/|<>]+", field or ""):
+            if normalize_style(part) in RUS_STYLE_VALUES:
+                return True
+    return False
+
+
 def style_allowed(reference: Track, candidate: Track, allowed_styles: set) -> bool:
     if not candidate.dj_set_ok:
         return False
-    if allowed_styles:
-        return bool(candidate_style_values(candidate) & allowed_styles)
+    allow_rus = "rus" in allowed_styles
+    if track_has_rus_tag(candidate) and not allow_rus:
+        return False
+    music_styles = set(allowed_styles) - SPECIAL_ALLOW_STYLES
+    if music_styles:
+        return bool(candidate_style_values(candidate) & music_styles)
     return same_genre_family(reference, candidate)
 
 

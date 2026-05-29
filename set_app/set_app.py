@@ -31,7 +31,7 @@ DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.5"
+APP_VERSION = "1.5.6"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -183,6 +183,7 @@ def active_library_provider():
 
 
 STYLE_GROUPS = [
+    ("Допуск", ["Rus"]),
     ("House", ["House", "Tech House", "Deep House", "Progressive House", "Afro House", "Disco House", "Funky House", "Funky", "Groove", "Club House", "Electro House", "Future House", "Jackin House", "Soulful House", "Jazz House", "Chill House", "Euro-House"]),
     ("Electronic / Dance", ["Electronic", "electronics", "Electronica", "Dance", "EDM", "Indie Dance", "Nu Disco", "Electro", "Eurodance", "Synth-pop"]),
     ("Techno", ["Techno", "techno", "Minimal", "Minimal / Deep Tech", "Deep Tech", "Melodic Techno"]),
@@ -210,6 +211,8 @@ STYLE_CANONICAL = {
     "euro_house": "euro_house",
     "soul_funk": "soul_and_funk",
     "soul_and_funk": "soul_and_funk",
+    "russian": "rus",
+    "рус": "rus",
 }
 
 
@@ -983,7 +986,7 @@ def style_groups():
             if norm in used:
                 continue
             data = counts.get(norm, {"label": label, "count": 0})
-            if data["count"] > 0 or label in {"House", "Electronic", "Dance", "Techno", "Drum & Bass", "Pop", "Rock"}:
+            if data["count"] > 0 or label in {"Rus", "House", "Electronic", "Dance", "Techno", "Drum & Bass", "Pop", "Rock"}:
                 items.append({"value": norm, "label": data["label"], "count": data["count"]})
                 used.add(norm)
         if items:
