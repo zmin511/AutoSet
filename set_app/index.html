@@ -276,6 +276,8 @@
       gap: 6px;
       align-items: center;
     }
+    .tag-row.detail { grid-template-columns: auto auto minmax(0, 1fr); }
+    .tag-note { color: var(--muted); font-size: 11px; line-height: 1.3; }
     .tag-row.replace { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; }
     .tag-row input { min-height: 34px; font-size: 12px; }
     .tag-row button, .tag-tools button { min-height: 34px; padding: 7px 10px; white-space: nowrap; }
@@ -525,6 +527,11 @@
           <div class="maintenance-section">
             <span class="maintenance-title">Жанры текущей папки</span>
             <div class="tag-tools">
+              <div class="tag-row detail">
+                <button id="previewStyleDetails" title="Показать, какие подстили AutoSet добавит к жанрам текущей папки без записи">Предложить стили</button>
+                <button id="applyStyleDetails" title="Добавить предложенные подстили средней и высокой уверенности в Engine DB и теги файлов">Применить стили</button>
+                <span class="tag-note">Добавляет подстили к существующим жанрам, не удаляя старые теги.</span>
+              </div>
               <div class="tag-row">
                 <input id="tagAdd" list="genreOptionsList" placeholder="Добавить жанр/тег в папку">
                 <button id="addGenreTag" title="Добавить жанр через запятую к каждому треку текущей папки">Добавить тег</button>
@@ -1753,6 +1760,44 @@
       }
     }
 
+    async function detailStyles(apply = false) {
+      if (apply) {
+        const ok = window.confirm('Добавить предложенные подстили в жанры текущей папки? Старые жанры не удаляются.');
+        if (!ok) return;
+      }
+      const btn = $(apply ? 'applyStyleDetails' : 'previewStyleDetails');
+      btn.disabled = true;
+      $('output').textContent = apply ? 'Добавляю подстили в Engine DB и файлы...' : 'Анализирую подстили текущей папки...';
+      try {
+        const res = await fetch('/api/detail-styles', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            path: currentPath,
+            recursive: $('tagRecursive').checked,
+            apply,
+            min_confidence: 'medium'
+          })
+        });
+        const data = await res.json();
+        $('output').textContent = data.output || data.error || 'Нет вывода.';
+        $('status').className = data.ok ? 'status ok' : 'status bad';
+        $('status').textContent = data.ok
+          ? (apply ? `Подстили добавлены: ${data.updated}` : `Предложений по стилям: ${data.suggestion_count || 0}`)
+          : 'Не удалось детализировать стили';
+        if (data.ok && apply) {
+          await loadStyles();
+          await browse(currentPath);
+        }
+      } catch (err) {
+        $('output').textContent = String(err);
+        $('status').className = 'status bad';
+        $('status').textContent = 'Ошибка детализации стилей';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     async function bulkGenre(action) {
       const tag = $('tagAdd').value.trim();
       const find = $('tagFind').value.trim();
@@ -1808,6 +1853,8 @@
     $('reloadFolder').addEventListener('click', () => browse(currentPath));
     $('writeEnergyRatings').addEventListener('click', writeEnergyRatings);
     $('writeAllEnergyRatings').addEventListener('click', writeAllEnergyRatings);
+    $('previewStyleDetails').addEventListener('click', () => detailStyles(false));
+    $('applyStyleDetails').addEventListener('click', () => detailStyles(true));
     $('addGenreTag').addEventListener('click', () => bulkGenre('append'));
     $('replaceGenreTag').addEventListener('click', () => bulkGenre('replace'));
     $('removeGenreTag').addEventListener('click', () => bulkGenre('remove'));

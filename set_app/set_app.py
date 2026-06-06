@@ -193,6 +193,7 @@ STYLE_GROUPS = [
 ]
 
 RUS_ALLOW_DESCRIPTION = "Допускает в подбор треки с тегом Rus/рус вместе с выбранными стилями, BPM и Camelot."
+DETAIL_CONFIDENCE_ORDER = {"low": 1, "medium": 2, "high": 3}
 
 
 STYLE_CANONICAL = {
@@ -1231,6 +1232,100 @@ def _genre_after_bulk_action(current, action, tag, find, replace):
     raise ValueError("Unknown bulk genre action")
 
 
+def _text_has_any(text, needles):
+    text = text.casefold()
+    return any(needle.casefold() in text for needle in needles)
+
+
+def _track_style_text(track, path):
+    return " ".join([
+        str(path),
+        str(track.get("genre") or ""),
+        str(track.get("artist") or ""),
+        str(track.get("title") or ""),
+        str(track.get("filename") or ""),
+        str(track.get("label") or ""),
+    ]).casefold()
+
+
+def _append_style(out, existing_norms, label):
+    if normalize_style(label) not in existing_norms and label not in out:
+        out.append(label)
+
+
+def suggest_style_details(track, path):
+    current_tags = split_genre_tags(track.get("genre") or "")
+    existing_norms = {normalize_style(tag) for tag in current_tags}
+    text = _track_style_text(track, path)
+    additions = []
+    confidence = "low"
+    reasons = []
+
+    def add(labels, level, reason):
+        nonlocal confidence
+        for label in labels:
+            _append_style(additions, existing_norms, label)
+        if DETAIL_CONFIDENCE_ORDER[level] > DETAIL_CONFIDENCE_ORDER[confidence]:
+            confidence = level
+        reasons.append(reason)
+
+    if _text_has_any(text, ["tech house", "techhouse"]):
+        add(["House", "Tech House"], "high", "найден Tech House")
+    elif _text_has_any(text, ["deep house"]):
+        add(["House", "Deep House"], "high", "найден Deep House")
+    elif _text_has_any(text, ["afro house"]):
+        add(["House", "Afro House"], "high", "найден Afro House")
+    elif _text_has_any(text, ["progressive house"]):
+        add(["House", "Progressive House"], "high", "найден Progressive House")
+    elif _text_has_any(text, ["disco house"]):
+        add(["House", "Disco House"], "high", "найден Disco House")
+    elif _text_has_any(text, ["funky house", "jackin house", "club house", "chill house"]):
+        if "funky house" in text:
+            add(["House", "Funky House"], "high", "найден Funky House")
+        if "jackin house" in text:
+            add(["House", "Jackin House"], "high", "найден Jackin House")
+        if "club house" in text:
+            add(["House", "Club House"], "medium", "найден Club House")
+        if "chill house" in text:
+            add(["House", "Chill House"], "medium", "найден Chill House")
+    elif _text_has_any(text, ["house"]) and normalize_style("Club") in existing_norms:
+        add(["House"], "medium", "Club уточнен как House")
+
+    if _text_has_any(text, ["melodic techno"]):
+        add(["Techno", "Melodic Techno"], "high", "найден Melodic Techno")
+    elif _text_has_any(text, ["minimal techno", "minimal/deep tech", "minimal deep tech", "deep tech"]):
+        add(["Techno", "Minimal / Deep Tech"], "high", "найден Minimal / Deep Tech")
+    elif _text_has_any(text, ["techno"]):
+        add(["Techno"], "medium", "найден Techno")
+
+    if _text_has_any(text, ["drum & bass", "drum and bass", "dnb"]):
+        add(["Drum & Bass"], "high", "найден Drum & Bass")
+    if _text_has_any(text, ["uk garage"]):
+        add(["Garage", "UK Garage"], "high", "найден UK Garage")
+    elif _text_has_any(text, ["garage"]) and (track.get("bpm") or 0) >= 126:
+        add(["Garage"], "medium", "найден Garage при клубном BPM")
+    if _text_has_any(text, ["breakbeat", "break beat"]):
+        add(["Breakbeat"], "high", "найден Breakbeat")
+    if _text_has_any(text, ["trance"]):
+        add(["Trance"], "high", "найден Trance")
+    if _text_has_any(text, ["nu disco", "nudisco"]):
+        add(["Dance", "Nu Disco"], "high", "найден Nu Disco")
+    if _text_has_any(text, ["indie dance"]):
+        add(["Dance", "Indie Dance"], "high", "найден Indie Dance")
+
+    broad = {"club", "dance", "electronic", "electronics", "edm"}
+    bpm = track.get("bpm")
+    if not additions and existing_norms & broad and bpm and 118 <= float(bpm or 0) <= 132:
+        add(["Dance"], "low", "широкий клубный тег и клубный BPM")
+
+    return {
+        "additions": additions,
+        "new_genre": join_genre_tags(current_tags + additions),
+        "confidence": confidence,
+        "reason": "; ".join(dict.fromkeys(reasons)) or "нет уверенного подстиля",
+    }
+
+
 def _audio_files_for_genre_bulk(rel, recursive):
     target = safe_music_path(rel)
     if not target.exists() or not target.is_dir():
@@ -1241,6 +1336,105 @@ def _audio_files_for_genre_bulk(rel, recursive):
         for path in iterator
         if path.is_file() and path.suffix.lower() in AUDIO_EXTS
     ]
+
+
+def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medium"):
+    target = safe_music_path(rel)
+    if _is_protected_set_path(target):
+        raise ValueError("Set/Sets folders are protected from style updates")
+    if not target.exists() or not target.is_dir():
+        raise ValueError("Folder does not exist")
+    min_confidence = min_confidence if min_confidence in DETAIL_CONFIDENCE_ORDER else "medium"
+    files = _audio_files_for_genre_bulk(rel, recursive)
+    by_path, unique_name = load_track_maps_for_files(files)
+    now = _engine_now_str()
+    suggestions = []
+    missing = []
+    eligible = 0
+    updated = 0
+    unchanged = 0
+    skipped_confidence = 0
+    file_written = 0
+    file_failed = 0
+
+    with open_db() as con:
+        for path in files:
+            track = track_for_file(path, by_path, unique_name)
+            if not track.get("id"):
+                missing.append(str(path))
+                continue
+            decision = suggest_style_details(track, path)
+            if not decision["additions"]:
+                unchanged += 1
+                continue
+            eligible += 1
+            allowed = DETAIL_CONFIDENCE_ORDER[decision["confidence"]] >= DETAIL_CONFIDENCE_ORDER[min_confidence]
+            action = "preview"
+            if not allowed:
+                skipped_confidence += 1
+                action = "skipped_confidence"
+            elif apply:
+                con.execute(
+                    "UPDATE Track SET genre = ?, lastEditTime = ? WHERE id = ?",
+                    (decision["new_genre"], now, int(track["id"])),
+                )
+                updated += 1
+                action = "updated"
+                try:
+                    if update_file_genre(path, decision["new_genre"]):
+                        file_written += 1
+                    else:
+                        file_failed += 1
+                except Exception:
+                    file_failed += 1
+            suggestions.append({
+                "track_id": int(track["id"]),
+                "file": str(path),
+                "label": track.get("label") or track.get("filename") or path.name,
+                "old_genre": track.get("genre") or "",
+                "additions": decision["additions"],
+                "new_genre": decision["new_genre"],
+                "confidence": decision["confidence"],
+                "reason": decision["reason"],
+                "action": action,
+            })
+        if apply:
+            con.commit()
+
+    scope = "current folder and subfolders" if recursive else "current folder"
+    lines = [
+        f"Style detail {'applied' if apply else 'preview'} for {scope}.",
+        f"Audio files: {len(files)}",
+        f"Matched in Engine DB: {len(files) - len(missing)}",
+        f"Tracks with suggestions: {eligible}",
+        f"Updated: {updated}",
+        f"Already detailed/no suggestion: {unchanged}",
+        f"Skipped by confidence: {skipped_confidence}",
+        f"File tags written: {file_written}",
+        f"File tags skipped/failed: {file_failed}",
+        f"Not found in Engine DB: {len(missing)}",
+    ]
+    if suggestions:
+        lines.append("")
+        lines.append("Examples:")
+        for item in suggestions[:18]:
+            add_text = ", ".join(item["additions"])
+            lines.append(f"- {item['label']}: + {add_text} -> {item['new_genre']} [{item['confidence']}; {item['action']}]")
+    if missing:
+        lines.append("")
+        lines.append("Missing examples:")
+        lines.extend(f"- {p}" for p in missing[:8])
+    return {
+        "ok": True,
+        "apply": bool(apply),
+        "suggestions": suggestions,
+        "suggestion_count": eligible,
+        "updated": updated,
+        "unchanged": unchanged,
+        "skipped_confidence": skipped_confidence,
+        "missing": len(missing),
+        "output": "\n".join(lines),
+    }
 
 
 def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
@@ -2070,7 +2264,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/config"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -2123,6 +2317,13 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("tag", ""),
                     data.get("find", ""),
                     data.get("replace", ""),
+                ))
+            elif parsed_path == "/api/detail-styles":
+                self.send_json(detail_folder_styles(
+                    data.get("path", ""),
+                    bool(data.get("recursive", False)),
+                    bool(data.get("apply", False)),
+                    data.get("min_confidence", "medium"),
                 ))
             else:
                 self.send_json(update_genre(data["track_id"], data["genre"]))
