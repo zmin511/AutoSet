@@ -813,6 +813,112 @@ def load_track_maps():
     return by_path, unique_name
 
 
+def _chunks(items, size):
+    items = list(items)
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def _engine_path_candidates(path):
+    candidates = []
+    try:
+        resolved = Path(path).resolve()
+    except Exception:
+        resolved = Path(path)
+    for value in (str(resolved), resolved.as_posix()):
+        if value and value not in candidates:
+            candidates.append(value)
+    try:
+        rel = resolved.relative_to(MUSIC_ROOT.resolve()).as_posix()
+        for value in (
+            f"../Music/{rel}",
+            f"Music/{rel}",
+            f"G:/Music/{rel}",
+            str(PureWindowsPath("G:/Music") / PureWindowsPath(rel)),
+        ):
+            if value and value not in candidates:
+                candidates.append(value)
+    except Exception:
+        pass
+    return candidates
+
+
+def load_track_maps_for_files(paths):
+    paths = [Path(path) for path in paths]
+    if not paths:
+        return {}, {}
+
+    by_path = {}
+    by_name = {}
+    wanted_paths = []
+    wanted_names = []
+    for path in paths:
+        wanted_names.append(path.name)
+        wanted_paths.extend(_engine_path_candidates(path))
+
+    sql_base = """
+        SELECT
+          Track.id,
+          Track.filename,
+          Track.length,
+          Track.bitrate,
+          Track.bpmAnalyzed,
+          Track.key,
+          Track.rating,
+          Track.genre,
+          Track.artist,
+          Track.title,
+          Track.path,
+          PerformanceData.quickCues AS quickCues,
+          PerformanceData.loops AS loops
+        FROM Track
+        LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
+        WHERE Track.isAvailable = 1
+          AND Track.path IS NOT NULL
+          AND ({predicate})
+    """
+
+    seen_ids = set()
+    with open_db() as con:
+        for chunk in _chunks(sorted(set(wanted_paths)), 400):
+            placeholders = ",".join("?" for _ in chunk)
+            sql = sql_base.format(predicate=f"Track.path IN ({placeholders})")
+            for row in con.execute(sql, chunk):
+                if int(row["id"]) in seen_ids:
+                    continue
+                seen_ids.add(int(row["id"]))
+                payload = dict(row)
+                payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
+                payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
+                track = row_to_track(payload)
+                if track["path"]:
+                    by_path[norm_abs(track["path"])] = track
+                by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
+
+        missing_names = [
+            path.name
+            for path in paths
+            if norm_abs(path) not in by_path
+        ]
+        for chunk in _chunks(sorted(set(missing_names)), 400):
+            placeholders = ",".join("?" for _ in chunk)
+            sql = sql_base.format(predicate=f"Track.filename IN ({placeholders})")
+            for row in con.execute(sql, chunk):
+                if int(row["id"]) in seen_ids:
+                    continue
+                seen_ids.add(int(row["id"]))
+                payload = dict(row)
+                payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
+                payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
+                track = row_to_track(payload)
+                if track["path"]:
+                    by_path[norm_abs(track["path"])] = track
+                by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
+
+    unique_name = {name: rows[0] for name, rows in by_name.items() if name and len(rows) == 1}
+    return by_path, unique_name
+
+
 def read_file_tags(path):
     item = {
         "id": None,
@@ -880,9 +986,8 @@ def browse_music(rel):
     current = safe_music_path(rel)
     if not current.exists() or not current.is_dir():
         raise ValueError("Folder does not exist")
-    by_path, unique_name = load_track_maps()
     dirs = []
-    tracks = []
+    audio_files = []
     try:
         children = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold()))
     except OSError:
@@ -891,10 +996,14 @@ def browse_music(rel):
         if child.is_dir():
             dirs.append({"name": child.name, "rel": rel_to_music(child)})
         elif child.is_file() and child.suffix.lower() in AUDIO_EXTS:
-            tr = track_for_file(child, by_path, unique_name)
-            tr["rel"] = rel_to_music(child)
-            tr["source"] = "engine" if tr.get("id") else "file"
-            tracks.append(tr)
+            audio_files.append(child)
+    by_path, unique_name = load_track_maps_for_files(audio_files)
+    tracks = []
+    for child in audio_files:
+        tr = track_for_file(child, by_path, unique_name)
+        tr["rel"] = rel_to_music(child)
+        tr["source"] = "engine" if tr.get("id") else "file"
+        tracks.append(tr)
     attach_energy(tracks)
     parent = ""
     if current.resolve() != MUSIC_ROOT.resolve():
