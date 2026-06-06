@@ -1338,7 +1338,7 @@ def _audio_files_for_genre_bulk(rel, recursive):
     ]
 
 
-def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medium"):
+def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medium", selected_files=None):
     target = safe_music_path(rel)
     if _is_protected_set_path(target):
         raise ValueError("Set/Sets folders are protected from style updates")
@@ -1346,6 +1346,9 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
         raise ValueError("Folder does not exist")
     min_confidence = min_confidence if min_confidence in DETAIL_CONFIDENCE_ORDER else "medium"
     files = _audio_files_for_genre_bulk(rel, recursive)
+    if selected_files:
+        selected = {str(item).lower() for item in selected_files if item}
+        files = [path for path in files if str(path).lower() in selected]
     by_path, unique_name = load_track_maps_for_files(files)
     now = _engine_now_str()
     suggestions = []
@@ -2324,6 +2327,7 @@ class Handler(BaseHTTPRequestHandler):
                     bool(data.get("recursive", False)),
                     bool(data.get("apply", False)),
                     data.get("min_confidence", "medium"),
+                    data.get("files") or None,
                 ))
             else:
                 self.send_json(update_genre(data["track_id"], data["genre"]))
