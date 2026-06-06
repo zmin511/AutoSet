@@ -742,7 +742,7 @@
           <div class="style-title">${esc(group.name)}</div>
           <div class="style-grid">
             ${(group.styles || []).map(style => `
-              <label class="style-chip" title="${esc(style.count || 0)} tracks">
+              <label class="style-chip" title="${esc(style.title || `${style.count || 0} tracks`)}">
                 <input type="checkbox" value="${esc(style.value)}">
                 <span>${esc(style.label)}</span>
               </label>

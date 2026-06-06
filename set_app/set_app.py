@@ -183,7 +183,6 @@ def active_library_provider():
 
 
 STYLE_GROUPS = [
-    ("Допуск", ["Rus"]),
     ("House", ["House", "Tech House", "Deep House", "Progressive House", "Afro House", "Disco House", "Funky House", "Funky", "Groove", "Club House", "Electro House", "Future House", "Jackin House", "Soulful House", "Jazz House", "Chill House", "Euro-House"]),
     ("Electronic / Dance", ["Electronic", "electronics", "Electronica", "Dance", "EDM", "Indie Dance", "Nu Disco", "Electro", "Eurodance", "Synth-pop"]),
     ("Techno", ["Techno", "techno", "Minimal", "Minimal / Deep Tech", "Deep Tech", "Melodic Techno"]),
@@ -192,6 +191,8 @@ STYLE_GROUPS = [
     ("Pop", ["Pop", "pop", "Europop", "RusPop", "ruspop", "Рор", "Shanson"]),
     ("Chill / Other", ["Chill Out", "Chillout", "chill", "Ambient", "Downtempo", "Lounge", "Jazz", "Funk", "Disco", "Soul", "Soul & Funk", "Reggae", "Blues", "Easy Listening", "Soundtrack", "Other"]),
 ]
+
+RUS_ALLOW_DESCRIPTION = "Допускает в подбор треки с тегом Rus/рус вместе с выбранными стилями, BPM и Camelot."
 
 
 STYLE_CANONICAL = {
@@ -1108,6 +1109,16 @@ def style_groups():
     other.sort(key=lambda x: (-x["count"], x["label"].casefold()))
     if other:
         groups.append({"name": "Other", "styles": other[:36]})
+    rus = counts.get("rus", {"label": "Rus", "count": 0})
+    groups.append({
+        "name": "Допуск русских треков",
+        "styles": [{
+            "value": "rus",
+            "label": "Rus (допуск)",
+            "count": rus["count"],
+            "title": RUS_ALLOW_DESCRIPTION,
+        }],
+    })
     return groups
 
 
