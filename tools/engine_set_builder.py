@@ -11,17 +11,20 @@ from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Sequence, Tuple
 
-import struct
-import zlib
-
-from engine_config import PATHS
+try:
+    from engine_config import PATHS
+except Exception:
+    PATHS = {
+        "db_path": str(Path.cwd().parent / "Engine Library" / "Database2" / "m.db"),
+        "music_root": str(Path.cwd().parent / "Music"),
+        "out_dir": str(Path.cwd().parent / "Music" / "Sets"),
+    }
 
 DEFAULT_DB_PATH = PATHS["db_path"]
 DEFAULT_MUSIC_ROOT = PATHS["music_root"]
 DEFAULT_OUT_DIR = PATHS["out_dir"]
-DEFAULT_SET_SECONDS = 60 * 60
-BPM_WINDOW_DOWN = 4.0
 BPM_RISE_LIMIT = 5.0
+BPM_WINDOW_DOWN = 4.0
 MAX_ADJACENT_BPM_STEP = 2.0
 
 
@@ -45,33 +48,60 @@ class Track:
 
 _NOTE_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 _CAMELOT_MAJOR = {
-    "C": "8B",
-    "C#": "3B",
-    "D": "10B",
-    "D#": "5B",
-    "E": "12B",
-    "F": "7B",
-    "F#": "2B",
-    "G": "9B",
-    "G#": "4B",
-    "A": "11B",
-    "A#": "6B",
-    "B": "1B",
+    "C": "8B", "C#": "3B", "D": "10B", "D#": "5B", "E": "12B", "F": "7B",
+    "F#": "2B", "G": "9B", "G#": "4B", "A": "11B", "A#": "6B", "B": "1B",
 }
 _CAMELOT_MINOR = {
-    "C": "5A",
-    "C#": "12A",
-    "D": "7A",
-    "D#": "2A",
-    "E": "9A",
-    "F": "4A",
-    "F#": "11A",
-    "G": "6A",
-    "G#": "1A",
-    "A": "8A",
-    "A#": "3A",
-    "B": "10A",
+    "C": "5A", "C#": "12A", "D": "7A", "D#": "2A", "E": "9A", "F": "4A",
+    "F#": "11A", "G": "6A", "G#": "1A", "A": "8A", "A#": "3A", "B": "10A",
 }
+
+STYLE_CANONICAL = {
+    "breakbeat": "break_beat",
+    "break_beat": "break_beat",
+    "drum_bass": "drum_and_bass",
+    "drum_n_bass": "drum_and_bass",
+    "drum_and_bass": "drum_and_bass",
+    "dnb": "drum_and_bass",
+    "funky": "funky_house",
+    "groove": "funky_house",
+    "jackin": "jackin_house",
+    "deep_tech": "minimal_deep_tech",
+    "minimal_deep_tech": "minimal_deep_tech",
+    "euro_house": "euro_house",
+    "soul_funk": "soul_and_funk",
+    "soul_and_funk": "soul_and_funk",
+    "russian": "rus",
+    "рус": "rus",
+}
+
+STYLE_ALIASES = {
+    "house": ["house"],
+    "tech_house": ["tech house", "techhouse"],
+    "deep_house": ["deep house"],
+    "disco_house": ["disco house", "disco"],
+    "progressive": ["progressive"],
+    "afro_house": ["afro house", "afro"],
+    "funky_house": ["funky house", "funky", "groove"],
+    "club_house": ["club house", "club-house"],
+    "electro_house": ["electro house"],
+    "chill_house": ["chill house"],
+    "techno": ["techno", "minimal"],
+    "melodic_techno": ["melodic techno", "anyma"],
+    "electronic": ["electronic", "electronics", "electronica"],
+    "dance": ["dance", "edm", "eurodance"],
+    "nu_disco": ["nu disco"],
+    "break_beat": ["breakbeat", "break beat"],
+    "drum_and_bass": ["drum & bass", "drum and bass", "dnb"],
+    "uk_garage": ["uk garage"],
+    "garage": ["garage"],
+    "pop": ["pop", "ruspop", "europop"],
+    "rock": ["rock", "rusrock", "alternative"],
+    "chill": ["chill", "chillout", "chill out", "ambient", "downtempo", "lounge"],
+}
+
+SPECIAL_ALLOW_STYLES = {"rus"}
+RUS_STYLE_VALUES = {"rus", "russian", "рус", "ruspop", "rusrock"}
 
 
 def open_db(db_path: str) -> sqlite3.Connection:
@@ -115,7 +145,7 @@ def camelot_score(a_key: Optional[int], b_key: Optional[int], max_step: int) -> 
     if not a or not b:
         return 999.0
     num_dist = number_distance(a[0], b[0])
-    if num_dist > max(0, max_step):
+    if num_dist > max(0, int(max_step)):
         return 999.0
     return float(num_dist)
 
@@ -137,42 +167,37 @@ def camelot_relation(a_key: Optional[int], b_key: Optional[int]) -> Tuple[Option
     return num_dist, f"{num_dist} wheel steps (A/B allowed)"
 
 
+def normalize_style(value: str) -> str:
+    value = (value or "").casefold().strip()
+    value = re.sub(r"&", " and ", value)
+    value = re.sub(r"[^a-zа-я0-9]+", "_", value, flags=re.I)
+    normalized = re.sub(r"_+", "_", value).strip("_")
+    return STYLE_CANONICAL.get(normalized, normalized)
+
+
+def parse_style_filter(value: str) -> set:
+    return {normalize_style(p) for p in re.split(r"[,;|]+", value or "") if p.strip()}
+
+
 def genre_tokens(genre: str) -> set:
-    return {
-        p.strip().lower()
-        for p in re.split(r"[,;/|]+", genre or "")
-        if p.strip()
-    }
+    return {p.strip().lower() for p in re.split(r"[,;/|<>]+", genre or "") if p.strip()}
 
 
 def genre_words(track: Track) -> set:
-    text = " ".join([track.genre, track.filename, track.title, track.dj_style, track.dj_family])
-    return {
-        p.strip().lower()
-        for p in re.split(r"[^A-Za-zА-Яа-я0-9]+", text or "")
-        if p.strip()
-    }
+    text = " ".join([track.genre, track.filename, track.title, track.artist, track.dj_style, track.dj_family])
+    return {p.strip().lower() for p in re.split(r"[^A-Za-zА-Яа-я0-9]+", text or "") if p.strip()}
 
 
 def genre_family(track: Track) -> set:
     if track.dj_family:
-        return {track.dj_family.strip().lower()}
+        return {normalize_style(track.dj_family)}
     words = genre_words(track)
     families = set()
     identity = " ".join([track.artist, track.title, track.filename]).casefold()
-    if (
-        "boris brejcha" in identity
-        or "black brejcha" in identity
-        or "deniz bul" in identity
-        or "nonameleft" in identity
-        or "tesla" in identity
-        or "anyma" in identity
-        or "techno" in words
-        or "minimal" in words
-    ):
-        families.add("techno")
     if "house" in words:
         families.add("house")
+    if "techno" in words or "minimal" in words or "anyma" in identity:
+        families.add("techno")
     if "trance" in words:
         families.add("trance")
     if "disco" in words:
@@ -184,17 +209,44 @@ def genre_family(track: Track) -> set:
     if "electronic" in words or "electronics" in words or "electronica" in words:
         families.add("electronic")
     if "break" in words or "breakbeat" in words:
-        families.add("breakbeat")
+        families.add("break_beat")
     if "dnb" in words or "drum" in words:
-        families.add("dnb")
-    if "pop" in words:
+        families.add("drum_and_bass")
+    if "pop" in words or "ruspop" in words:
         families.add("pop")
-    if "rock" in words:
+    if "rock" in words or "rusrock" in words:
         families.add("rock")
     strong = families - {"electronic", "dance"}
-    if strong:
-        return strong
-    return families or genre_tokens(track.genre)
+    return strong or families or {normalize_style(x) for x in genre_tokens(track.genre)}
+
+
+def style_buckets(track: Track) -> set:
+    text = " ".join([track.genre, track.dj_style, track.dj_family, track.filename, track.artist, track.title]).casefold()
+    buckets = set()
+    for bucket, aliases in STYLE_ALIASES.items():
+        if any(alias in text for alias in aliases):
+            buckets.add(normalize_style(bucket))
+    if not buckets:
+        buckets |= genre_family(track)
+    return buckets
+
+
+def candidate_style_values(track: Track) -> set:
+    values = set(style_buckets(track))
+    for field in [track.genre, track.dj_style, track.dj_family]:
+        for part in re.split(r"[,;/|<>]+", field or ""):
+            norm = normalize_style(part)
+            if norm:
+                values.add(norm)
+    return values
+
+
+def track_has_rus_tag(track: Track) -> bool:
+    for field in [track.genre, track.dj_style, track.dj_family]:
+        for part in re.split(r"[,;/|<>]+", field or ""):
+            if normalize_style(part) in RUS_STYLE_VALUES:
+                return True
+    return False
 
 
 def same_genre_family(reference: Track, candidate: Track) -> bool:
@@ -202,11 +254,19 @@ def same_genre_family(reference: Track, candidate: Track) -> bool:
         return False
     ref = genre_family(reference)
     cand = genre_family(candidate)
-    if not ref or not cand:
+    return bool(ref and cand and ref & cand)
+
+
+def style_allowed(reference: Track, candidate: Track, allowed_styles: set) -> bool:
+    if not candidate.dj_set_ok:
         return False
-    if ref & cand:
-        return True
-    return False
+    allow_rus = "rus" in allowed_styles
+    if track_has_rus_tag(candidate) and not allow_rus:
+        return False
+    music_styles = set(allowed_styles) - SPECIAL_ALLOW_STYLES
+    if music_styles:
+        return bool(candidate_style_values(candidate) & music_styles)
+    return same_genre_family(reference, candidate)
 
 
 def genre_distance(a: Track, b: Track) -> float:
@@ -223,56 +283,6 @@ def genre_distance(a: Track, b: Track) -> float:
     return max(0.2, 1.0 - (overlap / union)) if overlap else 1.0
 
 
-def _decode_engine_zlib_blob(blob: Optional[bytes]) -> Optional[bytes]:
-    if not blob:
-        return None
-    if len(blob) < 6:
-        return None
-    try:
-        expected = struct.unpack(">I", blob[:4])[0]
-        raw = zlib.decompress(blob[4:])
-        if expected != len(raw):
-            # Length mismatch happens rarely; still accept.
-            pass
-        return raw
-    except Exception:
-        return None
-
-
-def _overview_peaks_from_raw(raw: Optional[bytes]) -> Optional[List[int]]:
-    if not raw or len(raw) < 16:
-        return None
-    # Observed header: 4 x u32be; the 2nd value looks like "points" (typically 1024).
-    try:
-        _a, points, _c, _d = struct.unpack(">4I", raw[:16])
-    except Exception:
-        return None
-    if not points or points > 8192:
-        return None
-    payload = raw[16:]
-    need = points * 3
-    if len(payload) < need:
-        return None
-    peaks: List[int] = []
-    for i in range(0, need, 3):
-        r = payload[i]
-        g = payload[i + 1]
-        b = payload[i + 2]
-        peaks.append(max(r, g, b))
-    return peaks
-
-
-def _energy_from_overview_blob(blob: Optional[bytes]) -> Optional[float]:
-    raw = _decode_engine_zlib_blob(blob)
-    peaks = _overview_peaks_from_raw(raw)
-    if not peaks:
-        return None
-    avg = sum(peaks) / (len(peaks) * 255.0)
-    # Slightly emphasize differences in the mid-range.
-    energy = max(0.0, min(1.0, avg ** 0.85))
-    return max(0.05, min(0.98, float(energy)))
-
-
 def energy_score(track: Track) -> float:
     if track.wave_energy is not None:
         return float(track.wave_energy)
@@ -286,8 +296,6 @@ def energy_score(track: Track) -> float:
         base = 0.62
     elif "house" in words:
         base = 0.66
-    elif {"minimal", "deep_tech"} & words:
-        base = 0.64
     elif "techno" in words:
         base = 0.8
     elif {"dnb", "drum"} & words:
@@ -329,101 +337,6 @@ def track_identity(track: Track) -> Tuple[str, str]:
     return re.sub(r"\W+", "", artist), re.sub(r"\W+", "", title)
 
 
-STYLE_ALIASES = {
-    "house": ["house"],
-    "tech_house": ["tech house", "techhouse"],
-    "deep_house": ["deep house"],
-    "disco_house": ["disco house", "disco"],
-    "progressive": ["progressive"],
-    "melodic_house": ["melodic house", "organic house", "organic"],
-    "techno": ["techno", "minimal"],
-    "melodic_techno": ["melodic techno", "anyma"],
-    "trance": ["trance"],
-    "dnb": ["drum & bass", "drum and bass", "dnb"],
-    "breakbeat": ["breakbeat", "break beat"],
-    "uk_garage": ["uk garage", "garage"],
-    "electronic": ["electronic", "electronics", "electronica"],
-    "dance": ["dance", "edm"],
-    "pop": ["pop", "ruspop"],
-    "rock": ["rock"],
-}
-
-
-STYLE_CANONICAL = {
-    "breakbeat": "break_beat",
-    "drum_bass": "drum_and_bass",
-    "drum_n_bass": "drum_and_bass",
-    "funky": "funky_house",
-    "groove": "funky_house",
-    "jackin": "jackin_house",
-    "deep_tech": "minimal_deep_tech",
-    "minimal_deep_tech": "minimal_deep_tech",
-    "euro_house": "euro_house",
-    "soul_funk": "soul_and_funk",
-    "soul_and_funk": "soul_and_funk",
-    "russian": "rus",
-    "рус": "rus",
-}
-
-
-def normalize_style(value: str) -> str:
-    value = (value or "").casefold().strip()
-    value = re.sub(r"&", " and ", value)
-    value = re.sub(r"[^a-zа-я0-9]+", "_", value, flags=re.I)
-    normalized = re.sub(r"_+", "_", value).strip("_")
-    return STYLE_CANONICAL.get(normalized, normalized)
-
-
-def parse_style_filter(value: str) -> set:
-    return {normalize_style(p) for p in re.split(r"[,;|]+", value or "") if p.strip()}
-
-
-def style_buckets(track: Track) -> set:
-    text = " ".join([track.genre, track.dj_style, track.dj_family, track.filename, track.artist, track.title]).casefold()
-    buckets = set()
-    for bucket, aliases in STYLE_ALIASES.items():
-        if any(alias in text for alias in aliases):
-            buckets.add(normalize_style(bucket))
-    if not buckets:
-        buckets |= genre_family(track)
-    return buckets
-
-
-def candidate_style_values(track: Track) -> set:
-    values = set(style_buckets(track))
-    text_fields = [track.genre, track.dj_style, track.dj_family]
-    for field in text_fields:
-        for part in re.split(r"[,;/|<>]+", field or ""):
-            norm = normalize_style(part)
-            if norm:
-                values.add(norm)
-    return values
-
-
-SPECIAL_ALLOW_STYLES = {"rus"}
-RUS_STYLE_VALUES = {"rus", "russian", "рус", "ruspop", "rusrock"}
-
-
-def track_has_rus_tag(track: Track) -> bool:
-    for field in [track.genre, track.dj_style, track.dj_family]:
-        for part in re.split(r"[,;/|<>]+", field or ""):
-            if normalize_style(part) in RUS_STYLE_VALUES:
-                return True
-    return False
-
-
-def style_allowed(reference: Track, candidate: Track, allowed_styles: set) -> bool:
-    if not candidate.dj_set_ok:
-        return False
-    allow_rus = "rus" in allowed_styles
-    if track_has_rus_tag(candidate) and not allow_rus:
-        return False
-    music_styles = set(allowed_styles) - SPECIAL_ALLOW_STYLES
-    if music_styles:
-        return bool(candidate_style_values(candidate) & music_styles)
-    return same_genre_family(reference, candidate)
-
-
 def label(track: Track) -> str:
     parts = [p for p in [track.artist.strip(), track.title.strip()] if p]
     return " - ".join(parts) if parts else track.filename
@@ -443,7 +356,7 @@ def reference_genre_slug(reference: Track) -> str:
 def safe_filename(text: str, fallback: str = "track") -> str:
     text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", text or "")
     text = re.sub(r"\s+", " ", text).strip().rstrip(".")
-    return (text[:140] or fallback)
+    return text[:140] or fallback
 
 
 def debug_suffix(track: Track) -> str:
@@ -459,33 +372,32 @@ def resolve_track_path(track: Track, music_root: Path) -> Optional[Path]:
     raw = original.replace("\\", "/")
     if re.match(r"^[A-Za-z]:/", raw):
         win_path = PureWindowsPath(original)
-        try:
-            rel = win_path.relative_to(PureWindowsPath("G:/Music"))
-            return music_root.joinpath(*rel.parts).resolve()
-        except ValueError:
-            return Path(original)
+        for root in (PureWindowsPath("G:/Music"), PureWindowsPath("F:/Music")):
+            try:
+                rel = win_path.relative_to(root)
+                return music_root.joinpath(*rel.parts).resolve()
+            except ValueError:
+                pass
+        return Path(original)
     if os.path.isabs(original):
         return Path(original)
     for prefix in ("../Music/", "Music/"):
         if raw.startswith(prefix):
-            rel = raw[len(prefix) :]
+            rel = raw[len(prefix):]
             return music_root.joinpath(*[p for p in rel.split("/") if p]).resolve()
     if raw.startswith("../"):
-        rel = raw[3:]
-        return music_root.joinpath(*[p for p in rel.split("/") if p]).resolve()
-    if raw:
-        return music_root.joinpath(*[p for p in raw.split("/") if p]).resolve()
-    return None
+        raw = raw[3:]
+    return music_root.joinpath(*[p for p in raw.split("/") if p]).resolve() if raw else None
 
 
-def _read_txxx_mp3(path: Path) -> Tuple[str, str, Optional[bool]]:
+def _read_txxx_mp3(path: Optional[Path]) -> Tuple[str, str, Optional[bool]]:
+    if not path or not path.exists() or path.suffix.lower() != ".mp3":
+        return "", "", None
     try:
         from mutagen.id3 import ID3
-
         tags = ID3(str(path))
     except Exception:
         return "", "", None
-
     values = {}
     for frame in tags.getall("TXXX"):
         desc = str(getattr(frame, "desc", "") or "")
@@ -498,33 +410,29 @@ def _read_txxx_mp3(path: Path) -> Tuple[str, str, Optional[bool]]:
     return values.get("DJ_STYLE", ""), values.get("DJ_GENRE_FAMILY", ""), set_ok
 
 
-def _read_dj_tags(path: Optional[Path]) -> Tuple[str, str, Optional[bool]]:
-    if not path or not path.exists():
-        return "", "", None
-    if path.suffix.lower() == ".mp3":
-        return _read_txxx_mp3(path)
-    return "", "", None
-
-
-def _should_read_dj_tags(track_path: str) -> bool:
-    return bool(track_path)
+def _row_has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
+    try:
+        rows = con.execute(f"PRAGMA table_info({table})").fetchall()
+    except Exception:
+        return False
+    return any(str(r[1]).lower() == column.lower() for r in rows)
 
 
 def load_tracks(con: sqlite3.Connection, music_root: Path) -> List[Track]:
-    rows = con.execute(
-        """
-        SELECT
-          Track.id,
-          Track.filename,
-          Track.length,
-          Track.bitrate,
-          Track.bpmAnalyzed,
-          Track.key,
-          Track.genre,
-          Track.artist,
-          Track.title,
-          Track.path,
-          PerformanceData.overviewWaveFormData AS overviewWaveFormData
+    # Keep this query intentionally conservative: it uses core Engine columns and does not fail if
+    # PerformanceData is absent or differs across Engine versions.
+    has_perf = False
+    try:
+        con.execute("SELECT 1 FROM PerformanceData LIMIT 1").fetchone()
+        has_perf = True
+    except Exception:
+        has_perf = False
+
+    if has_perf:
+        query = """
+        SELECT Track.id, Track.filename, Track.length, Track.bitrate,
+               Track.bpmAnalyzed, Track.key, Track.genre, Track.artist,
+               Track.title, Track.path
         FROM Track
         LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
         WHERE isAvailable = 1
@@ -534,11 +442,22 @@ def load_tracks(con: sqlite3.Connection, music_root: Path) -> List[Track]:
           AND length BETWEEN 75 AND 720
           AND path IS NOT NULL
         """
-    ).fetchall()
+    else:
+        query = """
+        SELECT id, filename, length, bitrate, bpmAnalyzed, key, genre, artist, title, path
+        FROM Track
+        WHERE isAvailable = 1
+          AND bpmAnalyzed IS NOT NULL
+          AND key IS NOT NULL
+          AND length IS NOT NULL
+          AND length BETWEEN 75 AND 720
+          AND path IS NOT NULL
+        """
+
+    rows = con.execute(query).fetchall()
     tracks: List[Track] = []
     for r in rows:
-        wave_energy = _energy_from_overview_blob(r["overviewWaveFormData"])
-        base_track = Track(
+        base = Track(
             id=int(r["id"]),
             filename=str(r["filename"] or ""),
             length=int(r["length"] or 0),
@@ -549,31 +468,10 @@ def load_tracks(con: sqlite3.Connection, music_root: Path) -> List[Track]:
             artist=str(r["artist"] or ""),
             title=str(r["title"] or ""),
             path=str(r["path"] or ""),
-            wave_energy=wave_energy,
         )
-        resolved = resolve_track_path(base_track, music_root)
-        if _should_read_dj_tags(base_track.path):
-            dj_style, dj_family, dj_set_ok = _read_dj_tags(resolved)
-        else:
-            dj_style, dj_family, dj_set_ok = "", "", None
-        tracks.append(
-            Track(
-                id=base_track.id,
-                filename=base_track.filename,
-                length=base_track.length,
-                bitrate=base_track.bitrate,
-                bpm=base_track.bpm,
-                key=base_track.key,
-                genre=base_track.genre,
-                artist=base_track.artist,
-                title=base_track.title,
-                path=base_track.path,
-                wave_energy=base_track.wave_energy,
-                dj_style=dj_style,
-                dj_family=dj_family,
-                dj_set_ok=True if dj_set_ok is None else dj_set_ok,
-            )
-        )
+        resolved = resolve_track_path(base, music_root)
+        dj_style, dj_family, dj_set_ok = _read_txxx_mp3(resolved)
+        tracks.append(Track(**{**base.__dict__, "dj_style": dj_style, "dj_family": dj_family, "dj_set_ok": True if dj_set_ok is None else dj_set_ok}))
     return tracks
 
 
@@ -600,37 +498,23 @@ def pick_reference_by_id(reference_id: int, tracks: Sequence[Track]) -> Track:
 
 
 def pick_reference(reference_file: Path, tracks: Sequence[Track], db_path: str) -> Track:
-    size = reference_file.stat().st_size
+    size = reference_file.stat().st_size if reference_file.exists() else None
     name = reference_file.name.lower()
     with open_db(db_path) as con:
-        row = con.execute(
-            """
-            SELECT id
-            FROM Track
-            WHERE lower(filename) = ? AND fileBytes = ?
-            LIMIT 1
-            """,
-            (name, int(size)),
-        ).fetchone()
+        row = None
+        if size is not None and _row_has_column(con, "Track", "fileBytes"):
+            row = con.execute(
+                "SELECT id FROM Track WHERE lower(filename) = ? AND fileBytes = ? LIMIT 1",
+                (name, int(size)),
+            ).fetchone()
         if not row:
             row = con.execute(
-                """
-                SELECT id
-                FROM Track
-                WHERE lower(filename) = ?
-                GROUP BY lower(filename)
-                HAVING COUNT(*) = 1
-                LIMIT 1
-                """,
+                "SELECT id FROM Track WHERE lower(filename) = ? GROUP BY lower(filename) HAVING COUNT(*) = 1 LIMIT 1",
                 (name,),
             ).fetchone()
     if not row:
-        raise SystemExit(f"Reference track was not found in Engine DB by filename+size: {reference_file}")
-    ref_id = int(row["id"])
-    for t in tracks:
-        if t.id == ref_id:
-            return t
-    raise SystemExit(f"Reference track is in Engine DB but is not usable for a set: {reference_file}")
+        raise SystemExit(f"Reference track was not found in Engine DB by filename: {reference_file}")
+    return pick_reference_by_id(int(row["id"]), tracks)
 
 
 def score_candidate(
@@ -666,35 +550,21 @@ def score_candidate(
         score += camelot_score(reference.key, candidate.key, max_key_step) * 10.0
 
     score += abs(cand_bpm - target_bpm) * 4.0
-    score -= 5.0
-
     selected = selected or []
-    selected_count = len(selected)
     exact_key_count = sum(1 for t in selected if engine_key_to_camelot(t.key) == engine_key_to_camelot(reference.key))
     exact_bpm_count = sum(1 for t in selected if t.bpm is not None and reference.bpm is not None and abs(t.bpm - reference.bpm) < 0.25)
-    exact_key_limit = max(2, math.ceil((selected_count + 1) * 0.55))
-    exact_bpm_limit = max(2, math.ceil((selected_count + 1) * 0.55))
-    same_ref_key = engine_key_to_camelot(candidate.key) == engine_key_to_camelot(reference.key)
-    same_ref_bpm = reference.bpm is not None and abs(cand_bpm - reference.bpm) < 0.25
-    if same_ref_key and exact_key_count >= exact_key_limit:
+    exact_key_limit = max(2, math.ceil((len(selected) + 1) * 0.55))
+    exact_bpm_limit = max(2, math.ceil((len(selected) + 1) * 0.55))
+    if engine_key_to_camelot(candidate.key) == engine_key_to_camelot(reference.key) and exact_key_count >= exact_key_limit:
         score += 14.0
-    elif not same_ref_key:
-        score -= 3.0
-    if same_ref_bpm and exact_bpm_count >= exact_bpm_limit:
+    if reference.bpm is not None and abs(cand_bpm - reference.bpm) < 0.25 and exact_bpm_count >= exact_bpm_limit:
         score += 9.0
-    elif not same_ref_bpm:
-        score -= 2.0
 
-    target_energy = energy_score(reference)
-    if target_energy is None and previous:
-        prev_energy = energy_score(previous)
-        target_energy = min(0.95, max(0.1, (prev_energy * 0.65) + (energy_score(reference) * 0.35)))
     if target_energy is None:
         target_energy = energy_score(reference)
     score += abs(energy_score(candidate) - target_energy) * 8.0
     if previous and track_identity(previous) == track_identity(candidate):
         score += 18.0
-
     if candidate.bitrate is not None and candidate.bitrate < 256:
         score += 8.0
     if candidate.length < 150 or candidate.length > 420:
@@ -723,17 +593,8 @@ def pick_next(
     best_score = 1e9
     for i, track in enumerate(remaining):
         s = score_candidate(
-            track,
-            previous,
-            reference,
-            target_bpm,
-            target_energy,
-            target_remaining,
-            max_key_step,
-            min_bpm,
-            max_bpm,
-            allowed_styles,
-            selected,
+            track, previous, reference, target_bpm, target_energy, target_remaining,
+            max_key_step, min_bpm, max_bpm, allowed_styles, selected,
         )
         if s < best_score:
             best_i = i
@@ -743,37 +604,28 @@ def pick_next(
     return remaining.pop(best_i)
 
 
-def extend_forward(
-    sequence: List[Track],
-    remaining: List[Track],
-    reference: Track,
-    target_total: int,
-    max_key_step: int,
-    bpm_curve,
-    energy_curve,
-    min_bpm: float,
-    max_bpm: float,
-    allowed_styles: set,
-) -> List[Track]:
+def extend_forward(sequence: List[Track], remaining: List[Track], reference: Track, target_total: int,
+                   max_key_step: int, bpm_curve, energy_curve, min_bpm: float, max_bpm: float,
+                   allowed_styles: set) -> List[Track]:
     elapsed = sum(t.length for t in sequence)
     while elapsed < target_total - 120 and remaining:
         frac = min(1.0, elapsed / max(1, target_total))
         target_bpm = bpm_curve(frac)
-        target_energy = (None if energy_curve is None else energy_curve(frac))
+        target_energy = None if energy_curve is None else energy_curve(frac)
         target_remaining = target_total - elapsed
         previous = sequence[-1] if sequence else None
         pick = pick_next(
-            remaining,
-            previous,
-            reference,
-            target_bpm,
-            target_energy,
-            target_remaining,
-            max_key_step,
-            min_bpm,
-            max_bpm,
-            allowed_styles,
-            sequence,
+            remaining=remaining,
+            previous=previous,
+            reference=reference,
+            target_bpm=target_bpm,
+            target_energy=target_energy,
+            target_remaining=target_remaining,
+            max_key_step=max_key_step,
+            min_bpm=min_bpm,
+            max_bpm=max_bpm,
+            allowed_styles=allowed_styles,
+            selected=sequence,
         )
         if not pick:
             break
@@ -782,26 +634,13 @@ def extend_forward(
     return sequence
 
 
-def build_start_set(
-    reference: Track,
-    tracks: Sequence[Track],
-    target_seconds: int,
-    max_key_step: int,
-    bpm_window: float,
-    allowed_styles: set,
-) -> List[Track]:
+def build_start_set(reference: Track, tracks: Sequence[Track], target_seconds: int, max_key_step: int,
+                    bpm_window: float, allowed_styles: set) -> List[Track]:
     ref_bpm = reference.bpm or 122.0
-    if bpm_window <= 0:
-        min_bpm, max_bpm = 0.0, 999.0
-    else:
-        min_bpm, max_bpm = ref_bpm - bpm_window, ref_bpm + bpm_window
+    min_bpm, max_bpm = (0.0, 999.0) if bpm_window <= 0 else (ref_bpm - bpm_window, ref_bpm + bpm_window)
     remaining = [
-        t
-        for t in tracks
-        if t.id != reference.id
-        and style_allowed(reference, t, allowed_styles)
-        and t.bpm is not None
-        and min_bpm <= t.bpm <= max_bpm
+        t for t in tracks
+        if t.id != reference.id and t.bpm is not None and min_bpm <= t.bpm <= max_bpm and style_allowed(reference, t, allowed_styles)
     ]
 
     def curve(frac: float) -> float:
@@ -811,7 +650,6 @@ def build_start_set(
     ref_e = energy_score(reference)
 
     def energy(frac: float) -> float:
-        # Warmup -> build: gradually climb, but avoid pushing too hard.
         start = max(0.1, ref_e - 0.10)
         end = min(0.95, ref_e + 0.14)
         t = min(1.0, frac / 0.78)
@@ -820,26 +658,13 @@ def build_start_set(
     return extend_forward([reference], remaining, reference, target_seconds, max_key_step, curve, energy, min_bpm, max_bpm, allowed_styles)
 
 
-def build_peak_set(
-    reference: Track,
-    tracks: Sequence[Track],
-    target_seconds: int,
-    max_key_step: int,
-    bpm_window: float,
-    allowed_styles: set,
-) -> List[Track]:
+def build_peak_set(reference: Track, tracks: Sequence[Track], target_seconds: int, max_key_step: int,
+                   bpm_window: float, allowed_styles: set) -> List[Track]:
     ref_bpm = reference.bpm or 122.0
-    if bpm_window <= 0:
-        min_bpm, max_bpm = 0.0, 999.0
-    else:
-        min_bpm, max_bpm = ref_bpm - bpm_window, ref_bpm + bpm_window
+    min_bpm, max_bpm = (0.0, 999.0) if bpm_window <= 0 else (ref_bpm - bpm_window, ref_bpm + bpm_window)
     remaining = [
-        t
-        for t in tracks
-        if t.id != reference.id
-        and style_allowed(reference, t, allowed_styles)
-        and t.bpm is not None
-        and min_bpm <= t.bpm <= max_bpm
+        t for t in tracks
+        if t.id != reference.id and t.bpm is not None and min_bpm <= t.bpm <= max_bpm and style_allowed(reference, t, allowed_styles)
     ]
     peak_at = int(target_seconds * 0.70)
 
@@ -851,17 +676,22 @@ def build_peak_set(
         target_bpm = ref_bpm - fall * frac_from_peak
         target_remaining = peak_at - elapsed_pre
         current_first = reverse_pre[-1]
+
+        # Fixed: pass target_energy explicitly. The old call missed this argument,
+        # shifted parameters, and sent allowed_styles into max_bpm, causing:
+        # TypeError: '>' not supported between instances of 'float' and 'set'.
         pick = pick_next(
-            remaining,
-            current_first,
-            reference,
-            target_bpm,
-            target_remaining,
-            max_key_step,
-            min_bpm,
-            max_bpm,
-            allowed_styles,
-            reverse_pre,
+            remaining=remaining,
+            previous=current_first,
+            reference=reference,
+            target_bpm=target_bpm,
+            target_energy=None,
+            target_remaining=target_remaining,
+            max_key_step=max_key_step,
+            min_bpm=min_bpm,
+            max_bpm=max_bpm,
+            allowed_styles=allowed_styles,
+            selected=reverse_pre,
         )
         if not pick:
             break
@@ -878,7 +708,6 @@ def build_peak_set(
     ref_e = energy_score(reference)
 
     def energy(frac: float) -> float:
-        # After the peak: slight release; keep it energetic but easing.
         return max(0.1, min(0.95, ref_e - 0.12 * frac))
 
     return extend_forward(sequence, remaining, reference, target_seconds, max_key_step, curve, energy, min_bpm, max_bpm, allowed_styles)
@@ -896,8 +725,7 @@ def write_outputs(playlist: Sequence[Track], set_dir: Path, music_root: Path) ->
             raise SystemExit(f"Track file was not found for copying: {label(track)} ({track.path})")
         base_name = safe_filename(label(track), track.filename)
         meta = debug_suffix(track)
-        dst_name = f"{i:02d} - {base_name} ({meta}){src.suffix.lower()}"
-        dst = set_dir / dst_name
+        dst = set_dir / f"{i:02d} - {base_name} ({meta}){src.suffix.lower()}"
         copy_index = 2
         while dst.exists():
             dst = set_dir / f"{i:02d} - {base_name} ({meta}) ({copy_index}){src.suffix.lower()}"
@@ -910,27 +738,13 @@ def write_outputs(playlist: Sequence[Track], set_dir: Path, music_root: Path) ->
         for t, _, dst in copied_paths:
             f.write(f"#EXTINF:{t.length},{label(t)}\n")
             f.write(f"{dst.name}\n")
+
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow([
-            "position",
-            "artist",
-            "title",
-            "length",
-            "bpm",
-            "camelot",
-            "genre",
-            "family",
-            "energy",
-            "bpm_delta",
-            "camelot_distance",
-            "camelot_relation",
-            "genre_distance",
-            "transition_score",
-            "transition_reason",
-            "bitrate",
-            "copied_file",
-            "source_path",
+            "position", "artist", "title", "length", "bpm", "camelot", "genre", "family",
+            "energy", "bpm_delta", "camelot_distance", "camelot_relation", "genre_distance",
+            "transition_score", "transition_reason", "bitrate", "copied_file", "source_path",
         ])
         for i, (t, src, dst) in enumerate(copied_paths, 1):
             previous = copied_paths[i - 2][0] if i > 1 else None
@@ -938,36 +752,21 @@ def write_outputs(playlist: Sequence[Track], set_dir: Path, music_root: Path) ->
             cdist, relation = camelot_relation(previous.key if previous else t.key, t.key)
             gdist = 0.0 if previous is None else genre_distance(previous, t)
             tscore, treason = transition_score(previous, t)
-            w.writerow(
-                [
-                    i,
-                    t.artist,
-                    t.title or t.filename,
-                    t.length,
-                    round(t.bpm or 0, 1),
-                    engine_key_to_camelot(t.key),
-                    t.genre,
-                    ", ".join(sorted(genre_family(t))),
-                    round(energy_score(t), 2),
-                    round(bpm_delta, 1),
-                    "" if cdist is None else cdist,
-                    "anchor" if previous is None else relation,
-                    round(gdist, 2),
-                    tscore,
-                    treason,
-                    t.bitrate or "",
-                    dst.name,
-                    str(src),
-                ]
-            )
+            w.writerow([
+                i, t.artist, t.title or t.filename, t.length, round(t.bpm or 0, 1),
+                engine_key_to_camelot(t.key), t.genre, ", ".join(sorted(genre_family(t))),
+                round(energy_score(t), 2), round(bpm_delta, 1), "" if cdist is None else cdist,
+                "anchor" if previous is None else relation, round(gdist, 2), tscore, treason,
+                t.bitrate or "", dst.name, str(src),
+            ])
+
     methodology_path = set_dir / "methodology.txt"
     with methodology_path.open("w", encoding="utf-8") as f:
         f.write("Selection methodology\n")
         f.write("- Reads Denon Engine DJ metadata: BPM, key, genre, bitrate, length, path.\n")
         f.write("- Filters candidates by selected style bucket, BPM corridor, and Camelot step limit.\n")
         f.write("- Scores neighboring transitions by BPM delta, Camelot relation, genre distance, and estimated energy.\n")
-        f.write("- Adds diversity pressure so exact reference BPM/key do not crowd out compatible neighbors.\n")
-        f.write("- Writes generated set folders under Music/Sets.\n")
+        f.write("- Fixes peak-set pick_next argument order to prevent float/set comparison errors.\n")
     return set_dir, m3u_path, csv_path
 
 
@@ -982,7 +781,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(errors="replace")
 
-    parser = argparse.ArgumentParser(description="Build a one-hour harmonic DJ set from Engine DJ metadata.")
+    parser = argparse.ArgumentParser(description="Build a harmonic DJ set from Engine DJ metadata.")
     parser.add_argument("reference", help="Reference audio file already imported/analyzed in Engine DJ.")
     parser.add_argument("--reference-id", type=int, help="Use an Engine DJ Track.id instead of matching by file path.")
     parser.add_argument("--role", choices=["start", "peak"], default="peak", help="Use reference as set opener or peak track.")
@@ -1017,6 +816,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ref_title = (ref.title or "").strip() or ref.filename
     ref_slug = slug(ref_title)
     base_name = safe_filename(f"{reference_genre_slug(ref)}_{date_str}_{ref_slug}", "set")
+
     if args.emit_playlist_json:
         args.no_copy = True
 
@@ -1050,7 +850,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     set_dir, m3u_path, csv_path = write_outputs(playlist, Path(args.out_dir) / base_name, music_root)
-
     print(f"Role: {args.role}")
     print(f"Reference: {label(ref)} | bpm={ref.bpm:.1f} | camelot={engine_key_to_camelot(ref.key)}")
     print(f"Tracks: {len(playlist)}")
@@ -1061,10 +860,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print("")
     for i, t in enumerate(playlist, 1):
         marker = " <REF>" if t.id == ref.id else ""
-        print(
-            f"{i:02d}. {label(t)} | {format_time(t.length)} | bpm={t.bpm:.1f} | "
-            f"{engine_key_to_camelot(t.key)} | {t.genre}{marker}"
-        )
+        print(f"{i:02d}. {label(t)} | {format_time(t.length)} | bpm={t.bpm:.1f} | {engine_key_to_camelot(t.key)} | {t.genre}{marker}")
     return 0
 
 
