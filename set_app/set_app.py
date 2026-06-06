@@ -1,4 +1,4 @@
-﻿import json
+import json
 import mimetypes
 import os
 import re
@@ -1414,6 +1414,55 @@ def _get_engine_database_uuid(con):
     raise ValueError("Cannot determine Engine databaseUuid")
 
 
+def _table_has_column(con, table_name, column_name):
+    try:
+        rows = con.execute(f"PRAGMA table_info({table_name})").fetchall()
+    except Exception:
+        return False
+    return any(str(row[1]).casefold() == str(column_name).casefold() for row in rows)
+
+
+def _database_uuid_for_track(con, track_id, default_uuid):
+    """Return the most likely Engine databaseUuid for a track.
+
+    Some Engine libraries keep tracks from different import roots / devices under
+    different databaseUuid values. If we write every PlaylistEntity with one global
+    UUID, Engine can keep the row in SQLite but hide the track in the UI.
+    """
+    track_id = int(track_id)
+
+    if _table_has_column(con, "Track", "databaseUuid"):
+        try:
+            row = con.execute(
+                "SELECT databaseUuid FROM Track WHERE id=? AND databaseUuid IS NOT NULL AND databaseUuid != ''",
+                (track_id,),
+            ).fetchone()
+            if row and row[0]:
+                return str(row[0])
+        except Exception:
+            pass
+
+    try:
+        row = con.execute(
+            """
+            SELECT databaseUuid
+            FROM PlaylistEntity
+            WHERE trackId=?
+              AND databaseUuid IS NOT NULL
+              AND databaseUuid != ''
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (track_id,),
+        ).fetchone()
+        if row and row[0]:
+            return str(row[0])
+    except Exception:
+        pass
+
+    return str(default_uuid)
+
+
 def _find_playlist(con, parent_list_id, title):
     return con.execute(
         "SELECT id, title, parentListId, nextListId FROM Playlist WHERE parentListId=? AND title=?",
@@ -1632,6 +1681,18 @@ def _engine_track_id_for_playlist_item(con, item):
     return None, (abs_path, engine_path)
 
 
+def _next_available_playlist_title(con, parent_list_id, title):
+    """Return title or title_N if a playlist with this title already exists."""
+    base = str(title or "").strip() or "playlist"
+    if not _find_playlist(con, parent_list_id, base):
+        return base
+    for index in range(2, 10000):
+        candidate = f"{base}_{index}"
+        if not _find_playlist(con, parent_list_id, candidate):
+            return candidate
+    raise ValueError(f"Cannot find free playlist name for: {base}")
+
+
 def create_engine_playlist_from_tracks(tracks, folder_path, title):
     folder_path = str(folder_path or "").strip()
     title = str(title or "").strip()
@@ -1647,10 +1708,8 @@ def create_engine_playlist_from_tracks(tracks, folder_path, title):
         database_uuid = _get_engine_database_uuid(con)
         with con:
             parent_id = _ensure_folder_path(con, folder_path)
-            if _find_playlist(con, parent_id, title):
-                raise ValueError(f"Playlist already exists: {folder_path}/{title}")
-
-            list_id = _insert_playlist(con, parent_id, title)
+            final_title = _next_available_playlist_title(con, parent_id, title)
+            list_id = _insert_playlist(con, parent_id, final_title)
 
             missing = []
             track_ids = []
@@ -1669,24 +1728,38 @@ def create_engine_playlist_from_tracks(tracks, folder_path, title):
                     lines.append(f"... and {len(missing) - 30} more")
                 raise ValueError("\n".join(lines))
 
-            next_entity_id = 0
-            for track_id in reversed(track_ids):
+            # Insert rows in the same visible order as the playlist.
+            # Then patch nextEntityId in a second pass. This is closer to how
+            # Engine DJ writes playlist entities than reverse insertion.
+            entity_ids = []
+            for track_id in track_ids:
+                track_database_uuid = _database_uuid_for_track(con, track_id, database_uuid)
                 cur = con.execute(
                     """
                     INSERT INTO PlaylistEntity(listId, trackId, databaseUuid, nextEntityId, membershipReference)
-                    VALUES (?, ?, ?, ?, 0)
+                    VALUES (?, ?, ?, 0, 0)
                     """,
-                    (int(list_id), int(track_id), database_uuid, int(next_entity_id)),
+                    (int(list_id), int(track_id), track_database_uuid),
                 )
-                next_entity_id = int(cur.lastrowid)
+                entity_ids.append(int(cur.lastrowid))
 
-            con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (_engine_now_str(), int(list_id)))
+            for current_entity_id, next_entity_id in zip(entity_ids, entity_ids[1:]):
+                con.execute(
+                    "UPDATE PlaylistEntity SET nextEntityId=? WHERE id=?",
+                    (int(next_entity_id), int(current_entity_id)),
+                )
+
+            now = _engine_now_str()
+            con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (now, int(list_id)))
+            # Also touch the parent folder so Engine notices externally-created playlist changes.
+            con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (now, int(parent_id)))
 
         return {
             "ok": True,
             "playlist_id": list_id,
             "track_count": len(track_ids),
-            "output": f"Engine playlist created: {folder_path}/{title} (id={list_id}), tracks: {len(track_ids)}",
+            "playlist_title": final_title,
+            "output": f"Engine playlist created: {folder_path}/{final_title} (id={list_id}), tracks: {len(track_ids)}",
         }
     finally:
         con.close()
@@ -2023,14 +2096,18 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("bpm_window", 5),
                     data.get("style_filter", []),
                 )
-                local_name = _engine_playlist_local_folder_name(playlist, data.get("role", "start"))
-                local_out = write_local_playlist_no_copy(playlist, SETS_DIR / local_name, local_name)
-                # Название плейлиста (и локальной папки) должно быть одинаковым для set/playlist/Engine.
-                result = create_engine_playlist_from_tracks(playlist.get("tracks") or [], data.get("folder", ""), local_name)
+                base_name = _engine_playlist_local_folder_name(playlist, data.get("role", "start"))
+                # Сначала создаем Engine playlist и получаем фактическое имя.
+                # Если такое имя уже есть, create_engine_playlist_from_tracks добавит _2, _3 и т.д.
+                result = create_engine_playlist_from_tracks(playlist.get("tracks") or [], data.get("folder", ""), base_name)
+                engine_title = result.get("playlist_title") or base_name
+                # Локальный m3u/csv должен называться так же, как новый плейлист Engine,
+                # чтобы тестовые прогоны не перезаписывали один и тот же файл.
+                local_out = write_local_playlist_no_copy(playlist, SETS_DIR / engine_title, engine_title)
                 result["local_playlist_folder"] = local_out["folder"]
                 result["local_m3u"] = local_out["m3u"]
                 result["local_csv"] = local_out["csv"]
-                result["engine_playlist_title"] = local_name
+                result["engine_playlist_title"] = engine_title
                 self.send_json(result)
             elif parsed_path == "/api/refresh-tags":
                 self.send_json(refresh_tags(data.get("path", "")))
