@@ -485,7 +485,6 @@
         <div class="maintenance">
           <label>Обслуживание текущей папки</label>
           <div class="buttons">
-            <button id="refreshTags">Обновить теги в папке</button>
             <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Записать звезды в папке</button>
             <button id="writeAllEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для всей медиатеки Music">Записать все звезды</button>
             <button id="reloadFolder">Обновить список</button>
@@ -1686,29 +1685,6 @@
       }
     }
 
-    async function refreshTags() {
-      $('refreshTags').disabled = true;
-      $('output').textContent = 'Обновляю BPM, Camelot и битрейт из Engine DB для текущей папки...';
-      try {
-        const res = await fetch('/api/refresh-tags', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ path: currentPath })
-        });
-        const data = await res.json();
-        $('output').textContent = data.output || data.error || 'Нет вывода.';
-        $('status').className = data.ok ? 'status ok' : 'status bad';
-        $('status').textContent = data.ok ? 'Теги обновлены' : 'Не удалось обновить теги';
-        await browse(currentPath);
-      } catch (err) {
-        $('output').textContent = String(err);
-        $('status').className = 'status bad';
-        $('status').textContent = 'Ошибка обновления';
-      } finally {
-        $('refreshTags').disabled = false;
-      }
-    }
-
     async function writeEnergyRatings() {
       $('writeEnergyRatings').disabled = true;
       $('output').textContent = 'Записываю энергию waveform в звездочки Engine DJ для текущей папки...';
@@ -1810,7 +1786,6 @@
     $('limit').addEventListener('change', search);
     $('clearSearch').addEventListener('click', () => browse(currentPath));
     $('reloadFolder').addEventListener('click', () => browse(currentPath));
-    $('refreshTags').addEventListener('click', refreshTags);
     $('writeEnergyRatings').addEventListener('click', writeEnergyRatings);
     $('writeAllEnergyRatings').addEventListener('click', writeAllEnergyRatings);
     $('addGenreTag').addEventListener('click', () => bulkGenre('append'));
