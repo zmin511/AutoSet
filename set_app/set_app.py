@@ -32,11 +32,36 @@ SETS_DIR = DEFAULT_SETS_DIR
 DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
+SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
+SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
 APP_VERSION = "1.5.7"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
+
+
+def is_hidden_or_system_path(path):
+    path = Path(path)
+    parts = [part.casefold() for part in path.parts]
+    if any(part in SYSTEM_DIR_NAMES for part in parts):
+        return True
+    name = path.name
+    name_cf = name.casefold()
+    if name_cf in SYSTEM_FILE_NAMES or name.startswith("._") or name.startswith("."):
+        return True
+    try:
+        attrs = getattr(path.stat(), "st_file_attributes", 0)
+        if attrs & 0x2:
+            return True
+    except OSError:
+        return False
+    return False
+
+
+def is_audio_file(path):
+    path = Path(path)
+    return path.is_file() and path.suffix.lower() in AUDIO_EXTS and not is_hidden_or_system_path(path)
 
 
 def _path_text(value):
@@ -154,7 +179,7 @@ def browse_disk(path, kind):
     except OSError:
         children = []
     for child in children:
-        if child.name.startswith("$") or child.name in {"System Volume Information", "Recovery"}:
+        if child.name.startswith("$") or child.name in {"System Volume Information", "Recovery"} or is_hidden_or_system_path(child):
             continue
         if child.is_dir():
             dirs.append({"name": child.name, "path": str(child)})
@@ -1024,6 +1049,8 @@ def safe_media_path(value):
             raise ValueError("Media path is outside Music")
     if candidate.suffix.lower() not in AUDIO_EXTS:
         raise ValueError("Unsupported media type")
+    if is_hidden_or_system_path(candidate):
+        raise ValueError("Hidden/system media files are ignored")
     if not candidate.exists() or not candidate.is_file():
         raise ValueError("Media file does not exist")
     return candidate
@@ -1058,6 +1085,8 @@ def load_track_maps():
             payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
             payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
             track = row_to_track(payload)
+            if track["path"] and is_hidden_or_system_path(track["path"]):
+                continue
             if track["path"]:
                 by_path[norm_abs(track["path"])] = track
             by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
@@ -1143,6 +1172,8 @@ def load_track_maps_for_files(paths):
                 payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
                 payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
                 track = row_to_track(payload)
+                if track["path"] and is_hidden_or_system_path(track["path"]):
+                    continue
                 if track["path"]:
                     by_path[norm_abs(track["path"])] = track
                 by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
@@ -1163,6 +1194,8 @@ def load_track_maps_for_files(paths):
                 payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
                 payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
                 track = row_to_track(payload)
+                if track["path"] and is_hidden_or_system_path(track["path"]):
+                    continue
                 if track["path"]:
                     by_path[norm_abs(track["path"])] = track
                 by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
@@ -1245,9 +1278,11 @@ def browse_music(rel):
     except OSError:
         children = []
     for child in children:
+        if is_hidden_or_system_path(child):
+            continue
         if child.is_dir():
             dirs.append({"name": child.name, "rel": rel_to_music(child)})
-        elif child.is_file() and child.suffix.lower() in AUDIO_EXTS:
+        elif is_audio_file(child):
             audio_files.append(child)
     by_path, unique_name = load_track_maps_for_files(audio_files)
     tracks = []
@@ -1294,6 +1329,8 @@ def search_tracks(query, limit):
     with open_db() as con:
         for row in con.execute(sql):
             p = resolve_track_path(row["path"]).replace("\\", "/").casefold()
+            if is_hidden_or_system_path(resolve_track_path(row["path"])):
+                continue
             if "/music/set/" in p or "/music/sets/" in p:
                 continue
             haystack = " ".join([
@@ -1578,7 +1615,7 @@ def _audio_files_for_genre_bulk(rel, recursive):
     return sorted([
         path
         for path in iterator
-        if path.is_file() and path.suffix.lower() in AUDIO_EXTS
+        if is_audio_file(path)
     ], key=lambda p: str(p).casefold())
 
 
@@ -2334,7 +2371,7 @@ def write_energy_ratings(rel):
     files = [
         child
         for child in target.iterdir()
-        if child.is_file() and child.suffix.lower() in AUDIO_EXTS
+        if is_audio_file(child)
     ]
     return _write_energy_ratings_for_paths(files, "current folder")
 
@@ -2342,7 +2379,7 @@ def write_energy_ratings(rel):
 def write_all_energy_ratings():
     files = []
     for path in MUSIC_ROOT.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in AUDIO_EXTS:
+        if not is_audio_file(path):
             continue
         if _is_protected_set_path(path):
             continue

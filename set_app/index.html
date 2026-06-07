@@ -279,6 +279,14 @@
       padding: 8px;
       margin-top: 8px;
     }
+    .top-search {
+      width: min(820px, 100%);
+      margin: 0 0 8px;
+    }
+    .top-search .toolbar {
+      margin-bottom: 0;
+      grid-template-columns: minmax(260px, 1fr) 70px 112px;
+    }
     .maintenance-title {
       display: block;
       color: var(--muted);
@@ -454,6 +462,8 @@
       header, .grid, .now-playing { display: block; }
       .paths { text-align: left; margin-top: 10px; grid-template-columns: auto 1fr; }
       .toolbar, .controls, .path-config { grid-template-columns: 1fr; }
+      .top-search { width: 100%; }
+      .top-search .toolbar { grid-template-columns: 1fr 72px 104px; }
       .now-playing > * { margin-bottom: 8px; }
       .browser { max-height: 48vh; margin-bottom: 18px; }
       .style-box { max-height: 22vh; }
@@ -515,36 +525,27 @@
           <button id="savePaths">Сохранить пути</button>
         </div>
         <div class="crumbs" id="crumbs"></div>
+        <div class="top-search">
+          <div class="toolbar compact">
+            <input id="search" placeholder="Поиск трека">
+            <select id="limit" title="Сколько треков показывать в списке">
+              <option>20</option>
+              <option selected>40</option>
+              <option>60</option>
+              <option>80</option>
+              <option>100</option>
+              <option>120</option>
+              <option>140</option>
+              <option>160</option>
+              <option>180</option>
+              <option>200</option>
+            </select>
+            <button id="clearSearch" title="Сбросить поиск и вернуться к папкам">Папки</button>
+          </div>
+        </div>
         <div class="browser" id="browser"></div>
         <div class="maintenance">
           <label>Обслуживание текущей папки</label>
-          <div class="maintenance-section">
-            <span class="maintenance-title">Синхронизация энергии</span>
-            <div class="buttons">
-              <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Записать звезды в папке</button>
-              <button id="writeAllEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для всей медиатеки Music">Записать все звезды</button>
-              <button id="reloadFolder" title="Заново прочитать текущую папку и обновить список файлов после изменений на диске">Обновить список</button>
-            </div>
-          </div>
-          <div class="maintenance-section">
-            <span class="maintenance-title">Поиск треков</span>
-            <div class="toolbar compact">
-              <input id="search" placeholder="Поиск трека">
-              <select id="limit" title="Сколько треков показывать в списке">
-                <option>20</option>
-                <option selected>40</option>
-                <option>60</option>
-                <option>80</option>
-                <option>100</option>
-                <option>120</option>
-                <option>140</option>
-                <option>160</option>
-                <option>180</option>
-                <option>200</option>
-              </select>
-              <button id="clearSearch" title="Сбросить поиск и вернуться к папкам">Папки</button>
-            </div>
-          </div>
           <div class="maintenance-section">
             <span class="maintenance-title">Жанры текущей папки</span>
             <div class="tag-tools">
@@ -565,6 +566,14 @@
                 <button id="replaceGenreTag" title="Заменить найденный жанр в текущей папке">Заменить</button>
                 <button id="removeGenreTag" title="Удалить найденный жанр из текущей папки">Удалить</button>
               </div>
+            </div>
+          </div>
+          <div class="maintenance-section">
+            <span class="maintenance-title">Синхронизация энергии</span>
+            <div class="buttons">
+              <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Записать звезды в папке</button>
+              <button id="writeAllEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для всей медиатеки Music">Записать все звезды</button>
+              <button id="reloadFolder" title="Заново прочитать текущую папку и обновить список файлов после изменений на диске">Обновить список</button>
             </div>
           </div>
         </div>
