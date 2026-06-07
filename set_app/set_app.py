@@ -208,7 +208,6 @@ if not LASTFM_API_KEY and LASTFM_API_KEY_PATH.exists():
 ONLINE_STYLE_CACHE = {}
 ONLINE_STYLE_CACHE_LOCK = threading.Lock()
 ONLINE_STYLE_LAST_REQUEST = {"musicbrainz": 0.0, "lastfm": 0.0, "discogs": 0.0}
-ONLINE_PREVIEW_LIMIT = 10
 
 
 STYLE_CANONICAL = {
@@ -1595,10 +1594,6 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
         selected = {str(item).lower() for item in selected_files if item}
         files = [path for path in files if str(path).lower() in selected]
     total_files = len(files)
-    lookup_limited = False
-    if source != "local" and not apply and not selected_files and len(files) > ONLINE_PREVIEW_LIMIT:
-        files = files[:ONLINE_PREVIEW_LIMIT]
-        lookup_limited = True
     by_path, unique_name = load_track_maps_for_files(files)
     now = _engine_now_str()
     suggestions = []
@@ -1680,8 +1675,6 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
         f"File tags skipped/failed: {file_failed}",
         f"Not found in Engine DB: {len(missing)}",
     ]
-    if lookup_limited:
-        lines.append(f"Online preview limited to first {ONLINE_PREVIEW_LIMIT} tracks to avoid a long wait.")
     if suggestions:
         lines.append("")
         lines.append("Examples:")

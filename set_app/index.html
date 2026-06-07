@@ -1900,7 +1900,7 @@
       }
       const btn = $(apply ? 'applyStyleDetails' : 'previewStyleDetails');
       btn.disabled = true;
-      $('output').textContent = apply ? 'Добавляю подстили в Engine DB и файлы...' : 'Ищу подстили во внешних источниках...';
+      $('output').textContent = apply ? 'Добавляю подстили в Engine DB и файлы...' : 'Ищу подстили во внешних источниках по всей папке. Это может занять время...';
       try {
         const res = await fetch('/api/detail-styles', {
           method: 'POST',
