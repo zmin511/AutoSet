@@ -192,14 +192,6 @@
       color: #dff8ec;
     }
     .suggest-confidence { color: var(--muted); font-size: 10px; white-space: nowrap; }
-    .suggest-apply {
-      min-height: 24px;
-      height: 24px;
-      padding: 0 7px;
-      font-size: 11px;
-      border-color: rgba(55, 197, 143, .5);
-      color: #dff8ec;
-    }
     .stars {
       color: #8e989f;
       font-size: 13px;
@@ -558,9 +550,9 @@
             <div class="tag-tools">
               <div class="tag-row detail">
                 <button id="previewStyleDetails" title="Показать, какие подстили AutoSet добавит к жанрам текущей папки без записи">Предложить стили</button>
-                <button id="applyCheckedStyleDetails" title="Добавить отмеченные галочками подстили в Engine DB и теги файлов">Применить отмеченные</button>
+                <button id="applyCheckedStyleDetails" title="Добавить отмеченные галочками подстили в Engine DB и теги файлов">Применить выбранные</button>
                 <button id="applyStyleDetails" title="Добавить все предложенные подстили средней и высокой уверенности в Engine DB и теги файлов">Применить все</button>
-                <span class="tag-note">Добавляет подстили к существующим жанрам, не удаляя старые теги.</span>
+                <span class="tag-note">Предложения берутся из жанра и названия трека. Старые теги не удаляются.</span>
               </div>
               <div class="tag-row">
                 <input id="tagAdd" list="genreOptionsList" placeholder="Добавить жанр/тег в папку">
@@ -898,7 +890,6 @@
             <input class="suggest-check" type="checkbox" data-file="${esc(suggestionFile)}" ${suggestionChecked ? 'checked' : ''} ${suggestionAllowed ? '' : 'disabled'}>
             <span class="suggest-tags">+ ${esc((suggestion.additions || []).join(', '))}</span>
             <span class="suggest-confidence">${esc(suggestion.confidence || '')}</span>
-            ${suggestionAllowed ? `<button class="suggest-apply" type="button" data-file="${esc(suggestionFile)}" title="Применить подстили только к этому треку">OK</button>` : ''}
           ` : '<span class="suggest-tags">-</span>'}
         </div>
         <div class="cell">${energyStars(track)}</div>
@@ -915,9 +906,6 @@
           const file = event.target.dataset.file || '';
           if (event.target.checked) selectedStyleFiles.add(file);
           else selectedStyleFiles.delete(file);
-        } else if (event.target.classList.contains('suggest-apply')) {
-          event.stopPropagation();
-          applyStyleDetailsForFiles([event.target.dataset.file || ''], false);
         } else {
           selectTrack(track);
         }
@@ -1847,7 +1835,6 @@
       (data.suggestions || []).forEach(item => {
         if (!item.file) return;
         styleSuggestions.set(normPath(item.file), item);
-        if (selectableSuggestion(item)) selectedStyleFiles.add(item.file);
       });
       renderRows();
     }
@@ -1896,6 +1883,11 @@
     }
 
     async function detailStyles(apply = false, checkedOnly = false) {
+      if (apply && checkedOnly && !styleSuggestions.size) {
+        $('status').className = 'status bad';
+        $('status').textContent = 'Сначала нажми "Предложить стили" и отметь нужные треки';
+        return;
+      }
       if (apply && styleSuggestions.size) {
         const files = selectedSuggestionFiles(!checkedOnly);
         await applyStyleDetailsForFiles(files);

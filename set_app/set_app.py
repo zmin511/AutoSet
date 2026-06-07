@@ -1239,7 +1239,6 @@ def _text_has_any(text, needles):
 
 def _track_style_text(track, path):
     return " ".join([
-        str(path),
         str(track.get("genre") or ""),
         str(track.get("artist") or ""),
         str(track.get("title") or ""),
@@ -1309,14 +1308,9 @@ def suggest_style_details(track, path):
     if _text_has_any(text, ["trance"]):
         add(["Trance"], "high", "найден Trance")
     if _text_has_any(text, ["nu disco", "nudisco"]):
-        add(["Dance", "Nu Disco"], "high", "найден Nu Disco")
+        add(["Nu Disco"], "high", "найден Nu Disco")
     if _text_has_any(text, ["indie dance"]):
-        add(["Dance", "Indie Dance"], "high", "найден Indie Dance")
-
-    broad = {"club", "dance", "electronic", "electronics", "edm"}
-    bpm = track.get("bpm")
-    if not additions and existing_norms & broad and bpm and 118 <= float(bpm or 0) <= 132:
-        add(["Dance"], "low", "широкий клубный тег и клубный BPM")
+        add(["Indie Dance"], "high", "найден Indie Dance")
 
     return {
         "additions": additions,
