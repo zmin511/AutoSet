@@ -549,10 +549,10 @@
             <span class="maintenance-title">Жанры текущей папки</span>
             <div class="tag-tools">
               <div class="tag-row detail">
-                <button id="previewStyleDetails" title="Показать, какие подстили AutoSet добавит к жанрам текущей папки без записи">Предложить стили</button>
+                <button id="previewStyleDetails" title="Найти подстили треков во внешних источниках без записи">Найти стили онлайн</button>
                 <button id="applyCheckedStyleDetails" title="Добавить отмеченные галочками подстили в Engine DB и теги файлов">Применить выбранные</button>
                 <button id="applyStyleDetails" title="Добавить все предложенные подстили средней и высокой уверенности в Engine DB и теги файлов">Применить все</button>
-                <span class="tag-note">Предложения берутся из жанра и названия трека. Старые теги не удаляются.</span>
+                <span class="tag-note">Ищет artist/title во внешних источниках. Старые теги не удаляются.</span>
               </div>
               <div class="tag-row">
                 <input id="tagAdd" list="genreOptionsList" placeholder="Добавить жанр/тег в папку">
@@ -874,7 +874,7 @@
       const suggestionFile = suggestion?.file || '';
       const suggestionChecked = suggestionAllowed && selectedStyleFiles.has(suggestionFile);
       const suggestionTitle = suggestion
-        ? `${suggestion.additions.join(', ')} -> ${suggestion.new_genre} (${suggestion.confidence})\n${suggestion.reason || ''}`
+        ? `${suggestion.additions.join(', ')} -> ${suggestion.new_genre} (${suggestion.source || 'Online'}; ${suggestion.confidence})\n${suggestion.reason || ''}`
         : 'Нет предложений по подстилям';
       const marks = [
         track.has_cue ? '<span class="dot cue" title="Есть cue"></span>' : '',
@@ -889,7 +889,7 @@
           ${suggestion ? `
             <input class="suggest-check" type="checkbox" data-file="${esc(suggestionFile)}" ${suggestionChecked ? 'checked' : ''} ${suggestionAllowed ? '' : 'disabled'}>
             <span class="suggest-tags">+ ${esc((suggestion.additions || []).join(', '))}</span>
-            <span class="suggest-confidence">${esc(suggestion.confidence || '')}</span>
+            <span class="suggest-confidence">${esc(suggestion.source || suggestion.confidence || '')}</span>
           ` : '<span class="suggest-tags">-</span>'}
         </div>
         <div class="cell">${energyStars(track)}</div>
@@ -1862,6 +1862,7 @@
             recursive: $('tagRecursive').checked,
             apply: true,
             min_confidence: 'medium',
+            source: 'online',
             files: cleanFiles
           })
         });
@@ -1885,7 +1886,7 @@
     async function detailStyles(apply = false, checkedOnly = false) {
       if (apply && checkedOnly && !styleSuggestions.size) {
         $('status').className = 'status bad';
-        $('status').textContent = 'Сначала нажми "Предложить стили" и отметь нужные треки';
+        $('status').textContent = 'Сначала нажми "Найти стили онлайн" и отметь нужные треки';
         return;
       }
       if (apply && styleSuggestions.size) {
@@ -1899,7 +1900,7 @@
       }
       const btn = $(apply ? 'applyStyleDetails' : 'previewStyleDetails');
       btn.disabled = true;
-      $('output').textContent = apply ? 'Добавляю подстили в Engine DB и файлы...' : 'Анализирую подстили текущей папки...';
+      $('output').textContent = apply ? 'Добавляю подстили в Engine DB и файлы...' : 'Ищу подстили во внешних источниках...';
       try {
         const res = await fetch('/api/detail-styles', {
           method: 'POST',
@@ -1908,7 +1909,8 @@
             path: currentPath,
             recursive: $('tagRecursive').checked,
             apply,
-            min_confidence: 'medium'
+            min_confidence: 'medium',
+            source: 'online'
           })
         });
         const data = await res.json();

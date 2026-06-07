@@ -8,12 +8,14 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 import zlib
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -31,7 +33,7 @@ DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.6"
+APP_VERSION = "1.5.7"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -194,6 +196,19 @@ STYLE_GROUPS = [
 
 RUS_ALLOW_DESCRIPTION = "Допускает в подбор треки с тегом Rus/рус вместе с выбранными стилями, BPM и Camelot."
 DETAIL_CONFIDENCE_ORDER = {"low": 1, "medium": 2, "high": 3}
+MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
+DISCOGS_BASE_URL = "https://api.discogs.com"
+LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY", "").strip()
+LASTFM_API_KEY_PATH = APP_DIR / "lastfm_api_key.txt"
+if not LASTFM_API_KEY and LASTFM_API_KEY_PATH.exists():
+    try:
+        LASTFM_API_KEY = LASTFM_API_KEY_PATH.read_text(encoding="utf-8").strip()
+    except Exception:
+        LASTFM_API_KEY = ""
+ONLINE_STYLE_CACHE = {}
+ONLINE_STYLE_CACHE_LOCK = threading.Lock()
+ONLINE_STYLE_LAST_REQUEST = {"musicbrainz": 0.0, "lastfm": 0.0, "discogs": 0.0}
+ONLINE_PREVIEW_LIMIT = 10
 
 
 STYLE_CANONICAL = {
@@ -215,6 +230,34 @@ STYLE_CANONICAL = {
     "soul_and_funk": "soul_and_funk",
     "russian": "rus",
     "рус": "rus",
+}
+
+ONLINE_BROAD_STYLE_NORMS = {
+    "club",
+    "dance",
+    "electronic",
+    "electronics",
+    "electronica",
+    "edm",
+    "other",
+}
+
+ONLINE_STYLE_ALIASES = {
+    "drum and bass": "Drum & Bass",
+    "drum n bass": "Drum & Bass",
+    "dnb": "Drum & Bass",
+    "break beat": "Breakbeat",
+    "breaks": "Breakbeat",
+    "minimal techno": "Minimal / Deep Tech",
+    "minimal deep tech": "Minimal / Deep Tech",
+    "deep tech": "Minimal / Deep Tech",
+    "techhouse": "Tech House",
+    "nudisco": "Nu Disco",
+    "synth pop": "Synth-pop",
+    "trip hop": "Trip-Hop",
+    "hiphop": "Hip Hop",
+    "russian pop": "RusPop",
+    "rus pop": "RusPop",
 }
 
 
@@ -242,6 +285,214 @@ def normalize_style(value):
     value = re.sub(r"[^a-zа-я0-9]+", "_", value, flags=re.I)
     normalized = re.sub(r"_+", "_", value).strip("_")
     return STYLE_CANONICAL.get(normalized, normalized)
+
+
+def _known_online_styles():
+    styles = {}
+    for _, labels in STYLE_GROUPS:
+        for label in labels:
+            norm = normalize_style(label)
+            if norm in ONLINE_BROAD_STYLE_NORMS or norm == "rus":
+                continue
+            styles.setdefault(norm, label)
+    for alias, label in ONLINE_STYLE_ALIASES.items():
+        norm = normalize_style(alias)
+        if normalize_style(label) not in ONLINE_BROAD_STYLE_NORMS:
+            styles[norm] = label
+    return styles
+
+
+def _canonical_online_style(tag):
+    raw = re.sub(r"\s+", " ", str(tag or "")).strip()
+    if not raw:
+        return ""
+    alias = ONLINE_STYLE_ALIASES.get(raw.casefold())
+    if alias:
+        raw = alias
+    known = _known_online_styles()
+    norm = normalize_style(raw)
+    if norm in ONLINE_BROAD_STYLE_NORMS:
+        return ""
+    if norm in known:
+        return known[norm]
+    return ""
+
+
+def _http_json(url, source, min_interval=0.25, timeout=8):
+    if source == "musicbrainz":
+        min_interval = 1.05
+    elif source == "discogs":
+        min_interval = 1.0
+    with ONLINE_STYLE_CACHE_LOCK:
+        elapsed = time.monotonic() - ONLINE_STYLE_LAST_REQUEST.get(source, 0.0)
+        wait = max(0.0, min_interval - elapsed)
+    if wait:
+        time.sleep(wait)
+    req = Request(
+        url,
+        headers={
+            "User-Agent": f"{APP_NAME}/{APP_VERSION} ({APP_REPOSITORY_URL})",
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(req, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8", errors="replace"))
+    with ONLINE_STYLE_CACHE_LOCK:
+        ONLINE_STYLE_LAST_REQUEST[source] = time.monotonic()
+    return data
+
+
+def _clean_lookup_text(value):
+    value = re.sub(r"\[[^\]]+\]|\([^\)]*(?:mix|remix|edit|version|radio|extended|original)[^\)]*\)", " ", str(value or ""), flags=re.I)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _track_lookup_terms(track):
+    artist = _clean_lookup_text(track.get("artist") or "")
+    title = _clean_lookup_text(track.get("title") or "")
+    if (not artist or not title) and track.get("label"):
+        parts = re.split(r"\s+-\s+", str(track.get("label") or ""), maxsplit=1)
+        if len(parts) == 2:
+            artist = artist or _clean_lookup_text(parts[0])
+            title = title or _clean_lookup_text(parts[1])
+    if not title:
+        title = _clean_lookup_text(Path(str(track.get("filename") or "")).stem)
+    return artist, title
+
+
+def _style_decision_from_tags(track, candidates, source):
+    current_tags = split_genre_tags(track.get("genre") or "")
+    existing_norms = {normalize_style(tag) for tag in current_tags}
+    additions = []
+    seen = set()
+    source_tags = []
+    for tag in candidates or []:
+        name = tag.get("name") if isinstance(tag, dict) else str(tag or "")
+        label = _canonical_online_style(name)
+        if not label:
+            continue
+        norm = normalize_style(label)
+        source_tags.append(name)
+        if norm in existing_norms or norm in seen:
+            continue
+        additions.append(label)
+        seen.add(norm)
+    if not additions:
+        return None
+    confidence = "high" if len(additions) == 1 else "medium"
+    return {
+        "additions": additions[:4],
+        "new_genre": join_genre_tags(current_tags + additions[:4]),
+        "confidence": confidence,
+        "reason": f"online source tags: {', '.join(source_tags[:6])}",
+        "source": source,
+    }
+
+
+def _lastfm_style_details(track):
+    if not LASTFM_API_KEY:
+        return None
+    artist, title = _track_lookup_terms(track)
+    if not artist or not title:
+        return None
+    cache_key = ("lastfm", artist.casefold(), title.casefold())
+    with ONLINE_STYLE_CACHE_LOCK:
+        if cache_key in ONLINE_STYLE_CACHE:
+            return ONLINE_STYLE_CACHE[cache_key]
+    url = "https://ws.audioscrobbler.com/2.0/?" + urlencode({
+        "method": "track.getInfo",
+        "artist": artist,
+        "track": title,
+        "api_key": LASTFM_API_KEY,
+        "format": "json",
+        "autocorrect": "1",
+    })
+    try:
+        data = _http_json(url, "lastfm")
+        tags = (((data.get("track") or {}).get("toptags") or {}).get("tag") or [])
+        result = _style_decision_from_tags(track, tags, "Last.fm")
+    except Exception:
+        result = None
+    with ONLINE_STYLE_CACHE_LOCK:
+        ONLINE_STYLE_CACHE[cache_key] = result
+    return result
+
+
+def _discogs_style_details(track):
+    artist, title = _track_lookup_terms(track)
+    if not artist or not title:
+        return None
+    cache_key = ("discogs", artist.casefold(), title.casefold())
+    with ONLINE_STYLE_CACHE_LOCK:
+        if cache_key in ONLINE_STYLE_CACHE:
+            return ONLINE_STYLE_CACHE[cache_key]
+    url = f"{DISCOGS_BASE_URL}/database/search?" + urlencode({
+        "artist": artist,
+        "track": title,
+        "type": "release",
+        "per_page": "5",
+    })
+    try:
+        data = _http_json(url, "discogs")
+        collected = []
+        for item in data.get("results") or []:
+            collected.extend(item.get("style") or [])
+        if not collected:
+            for item in data.get("results") or []:
+                collected.extend(item.get("genre") or [])
+        result = _style_decision_from_tags(track, [{"name": tag} for tag in collected], "Discogs")
+    except Exception:
+        result = None
+    with ONLINE_STYLE_CACHE_LOCK:
+        ONLINE_STYLE_CACHE[cache_key] = result
+    return result
+
+
+def _musicbrainz_style_details(track):
+    artist, title = _track_lookup_terms(track)
+    if not artist or not title:
+        return None
+    cache_key = ("musicbrainz", artist.casefold(), title.casefold())
+    with ONLINE_STYLE_CACHE_LOCK:
+        if cache_key in ONLINE_STYLE_CACHE:
+            return ONLINE_STYLE_CACHE[cache_key]
+    query = f'recording:"{title}" AND artist:"{artist}"'
+    url = f"{MUSICBRAINZ_BASE_URL}/recording?fmt=json&limit=5&inc=genres+tags+releases&query={quote(query)}"
+    try:
+        data = _http_json(url, "musicbrainz")
+        recordings = data.get("recordings") or []
+        result = None
+        release_group_ids = []
+        for recording in recordings:
+            tags = list(recording.get("genres") or []) + list(recording.get("tags") or [])
+            result = _style_decision_from_tags(track, tags, "MusicBrainz")
+            if result:
+                break
+            for release in recording.get("releases") or []:
+                group = release.get("release-group") or {}
+                secondary = {str(item).casefold() for item in group.get("secondary-types") or []}
+                if "compilation" in secondary:
+                    continue
+                gid = group.get("id")
+                if gid and gid not in release_group_ids:
+                    release_group_ids.append(gid)
+        if not result:
+            for gid in release_group_ids[:4]:
+                group_url = f"{MUSICBRAINZ_BASE_URL}/release-group/{quote(gid)}?fmt=json&inc=genres+tags"
+                group_data = _http_json(group_url, "musicbrainz")
+                tags = list(group_data.get("genres") or []) + list(group_data.get("tags") or [])
+                result = _style_decision_from_tags(track, tags, "MusicBrainz")
+                if result:
+                    break
+    except Exception:
+        result = None
+    with ONLINE_STYLE_CACHE_LOCK:
+        ONLINE_STYLE_CACHE[cache_key] = result
+    return result
+
+
+def suggest_online_style_details(track):
+    return _lastfm_style_details(track) or _discogs_style_details(track) or _musicbrainz_style_details(track)
 
 
 def open_db():
@@ -1325,14 +1576,14 @@ def _audio_files_for_genre_bulk(rel, recursive):
     if not target.exists() or not target.is_dir():
         raise ValueError("Folder does not exist")
     iterator = target.rglob("*") if bool(recursive) else target.iterdir()
-    return [
+    return sorted([
         path
         for path in iterator
         if path.is_file() and path.suffix.lower() in AUDIO_EXTS
-    ]
+    ], key=lambda p: str(p).casefold())
 
 
-def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medium", selected_files=None):
+def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medium", selected_files=None, source="online"):
     target = safe_music_path(rel)
     if _is_protected_set_path(target):
         raise ValueError("Set/Sets folders are protected from style updates")
@@ -1343,6 +1594,11 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
     if selected_files:
         selected = {str(item).lower() for item in selected_files if item}
         files = [path for path in files if str(path).lower() in selected]
+    total_files = len(files)
+    lookup_limited = False
+    if source != "local" and not apply and not selected_files and len(files) > ONLINE_PREVIEW_LIMIT:
+        files = files[:ONLINE_PREVIEW_LIMIT]
+        lookup_limited = True
     by_path, unique_name = load_track_maps_for_files(files)
     now = _engine_now_str()
     suggestions = []
@@ -1360,7 +1616,17 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
             if not track.get("id"):
                 missing.append(str(path))
                 continue
-            decision = suggest_style_details(track, path)
+            if source == "local":
+                decision = suggest_style_details(track, path)
+                decision["source"] = "AutoSet local"
+            else:
+                decision = suggest_online_style_details(track) or {
+                    "additions": [],
+                    "new_genre": track.get("genre") or "",
+                    "confidence": "low",
+                    "reason": "online sources did not return a known AutoSet style",
+                    "source": "Online",
+                }
             if not decision["additions"]:
                 unchanged += 1
                 continue
@@ -1393,6 +1659,7 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
                 "new_genre": decision["new_genre"],
                 "confidence": decision["confidence"],
                 "reason": decision["reason"],
+                "source": decision.get("source") or ("AutoSet local" if source == "local" else "Online"),
                 "action": action,
             })
         if apply:
@@ -1401,7 +1668,9 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
     scope = "current folder and subfolders" if recursive else "current folder"
     lines = [
         f"Style detail {'applied' if apply else 'preview'} for {scope}.",
-        f"Audio files: {len(files)}",
+        f"Source: {'local AutoSet rules' if source == 'local' else 'online lookup'}",
+        f"Online providers: Discogs + MusicBrainz{' + Last.fm' if LASTFM_API_KEY else ' (Last.fm API key not set)'}",
+        f"Audio files scanned: {len(files)} of {total_files}",
         f"Matched in Engine DB: {len(files) - len(missing)}",
         f"Tracks with suggestions: {eligible}",
         f"Updated: {updated}",
@@ -1411,12 +1680,14 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
         f"File tags skipped/failed: {file_failed}",
         f"Not found in Engine DB: {len(missing)}",
     ]
+    if lookup_limited:
+        lines.append(f"Online preview limited to first {ONLINE_PREVIEW_LIMIT} tracks to avoid a long wait.")
     if suggestions:
         lines.append("")
         lines.append("Examples:")
         for item in suggestions[:18]:
             add_text = ", ".join(item["additions"])
-            lines.append(f"- {item['label']}: + {add_text} -> {item['new_genre']} [{item['confidence']}; {item['action']}]")
+            lines.append(f"- {item['label']}: + {add_text} -> {item['new_genre']} [{item['source']}; {item['confidence']}; {item['action']}]")
     if missing:
         lines.append("")
         lines.append("Missing examples:")
@@ -2322,6 +2593,7 @@ class Handler(BaseHTTPRequestHandler):
                     bool(data.get("apply", False)),
                     data.get("min_confidence", "medium"),
                     data.get("files") or None,
+                    data.get("source", "online"),
                 ))
             else:
                 self.send_json(update_genre(data["track_id"], data["genre"]))
