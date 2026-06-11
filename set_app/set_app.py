@@ -35,7 +35,7 @@ AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.7"
+APP_VERSION = "1.5.8"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -210,13 +210,13 @@ def active_library_provider():
 
 
 STYLE_GROUPS = [
-    ("House", ["House", "Tech House", "Deep House", "Progressive House", "Afro House", "Disco House", "Funky House", "Funky", "Groove", "Club House", "Electro House", "Future House", "Jackin House", "Soulful House", "Jazz House", "Chill House", "Euro-House"]),
-    ("Electronic / Dance", ["Electronic", "electronics", "Electronica", "Dance", "EDM", "Indie Dance", "Nu Disco", "Electro", "Eurodance", "Synth-pop"]),
-    ("Techno", ["Techno", "techno", "Minimal", "Minimal / Deep Tech", "Deep Tech", "Melodic Techno"]),
-    ("Bass / Breaks", ["Drum & Bass", "dnb", "Break Beat", "Breakbeat", "Garage", "UK Garage", "Trip-Hop", "Hip Hop", "Rap"]),
-    ("Rock", ["Rock", "rock", "Alternative", "Alternative Rock", "Punk", "Punk Rock", "Folk Rock", "Hard Rock", "Horror Punk", "rusrock"]),
-    ("Pop", ["Pop", "pop", "Europop", "RusPop", "ruspop", "Рор", "Shanson"]),
-    ("Chill / Other", ["Chill Out", "Chillout", "chill", "Ambient", "Downtempo", "Lounge", "Jazz", "Funk", "Disco", "Soul", "Soul & Funk", "Reggae", "Blues", "Easy Listening", "Soundtrack", "Other"]),
+    ("House: основа и поджанры", ["House", "Deep House", "Tech House", "Progressive House", "Afro House", "Disco House", "Funky House", "Soulful House", "Jackin House", "Electro House", "Future House", "Club House", "Chill House", "Jazz House", "Euro-House"]),
+    ("Techno / Deep Tech", ["Techno", "Melodic Techno", "Minimal", "Minimal / Deep Tech", "Deep Tech"]),
+    ("Disco / Dance / Electronic", ["Disco", "Nu Disco", "Indie Dance", "Electro", "Electronic", "electronics", "Electronica", "Eurodance", "Synth-pop", "Dance", "EDM"]),
+    ("Trance / Progressive", ["Trance", "Progressive Trance", "Psy-Trance", "Uplifting Trance"]),
+    ("Bass / Breaks / Garage", ["Drum & Bass", "dnb", "Break Beat", "Breakbeat", "Garage", "UK Garage", "Trip-Hop", "Hip Hop", "Rap"]),
+    ("Chill / Lounge / Downtempo", ["Chill Out", "Chillout", "chill", "Ambient", "Downtempo", "Lounge", "Easy Listening"]),
+    ("Pop / Rock / Other", ["Pop", "pop", "Europop", "RusPop", "ruspop", "Shanson", "Rock", "rock", "Alternative", "Alternative Rock", "Punk", "Punk Rock", "Folk Rock", "Hard Rock", "Horror Punk", "rusrock", "Jazz", "Funk", "Soul", "Soul & Funk", "Reggae", "Blues", "Soundtrack", "Other"]),
 ]
 
 RUS_ALLOW_DESCRIPTION = "Допускает в подбор треки с тегом Rus/рус вместе с выбранными стилями, BPM и Camelot."
