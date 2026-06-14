@@ -35,7 +35,7 @@ AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.9"
+APP_VERSION = "1.5.10"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -1044,6 +1044,9 @@ def get_track_waveform_detail(track_id):
         "path": resolve_track_path(row["path"]),
         "duration_sec": duration_sec,
         "bpm": None if bpm is None else round(float(bpm), 3),
+        # TODO: add optional backend cache for hi-res waveform:
+        # set_app/cache/waveforms/<track_id>.json
+        "waveform_resolution": "engine_overview_1024",
         "waveform": (overview or {}).get("peaks") or [],
         "waveform_rgb": (overview or {}).get("rgb") or None,
         "waveform_energy": (overview or {}).get("energy"),
