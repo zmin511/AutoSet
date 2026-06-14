@@ -368,6 +368,33 @@
     .waveform-head .title { font-size: 12px; color: var(--muted); }
     .waveform-head .meta { font-size: 11px; color: var(--muted); }
     canvas#waveCanvas { width: 100%; height: 84px; display: block; cursor: pointer; }
+    .wave-detail-tools {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .wave-detail-tools button {
+      min-height: 28px;
+      height: 28px;
+      padding: 3px 9px;
+      font-size: 12px;
+    }
+    .wave-detail-tools input[type="range"] {
+      height: 24px;
+      min-height: 24px;
+      flex: 1;
+      padding: 0;
+    }
+    canvas#waveZoomCanvas {
+      width: 100%;
+      height: 168px;
+      display: block;
+      cursor: ew-resize;
+      border-top: 1px solid rgba(255,255,255,.08);
+    }
     .playerbar {
       display: flex;
       align-items: center;
@@ -507,6 +534,13 @@
           <div class="meta" id="waveMeta"></div>
         </div>
         <canvas id="waveCanvas" width="1024" height="84"></canvas>
+        <div class="wave-detail-tools">
+          <button id="waveZoomOut" type="button" title="Уменьшить масштаб waveform">-</button>
+          <button id="waveZoomIn" type="button" title="Увеличить масштаб waveform">+</button>
+          <span id="waveZoomLabel">1x</span>
+          <input id="waveScroll" type="range" min="0" max="1000" value="0" title="Прокрутка zoom-участка waveform">
+        </div>
+        <canvas id="waveZoomCanvas" width="1024" height="168"></canvas>
       </div>
     </div>
 
@@ -1272,8 +1306,12 @@
     window.__waveCues = [];
     window.__waveLoops = [];
     window.__waveRGB = null;
+    window.__waveDetail = null;
     let waveDragActive = false;
+    let waveDragMode = '';
     let waveLastFrac = null;
+    let waveZoom = 1;
+    let waveOffsetSec = 0;
 
     function drawWaveform(peaks) {
       const canvas = $('waveCanvas');
@@ -1536,6 +1574,19 @@
       return Math.max(0, Math.min(1, x / Math.max(1, rect.width)));
     }
 
+    function _waveZoomTimeFromEvent(event) {
+      const canvas = $('waveZoomCanvas');
+      const detail = window.__waveDetail;
+      if (!canvas || !detail) return null;
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const duration = Number(detail.duration_sec || 0);
+      if (!Number.isFinite(x) || duration <= 0) return null;
+      const zoom = Math.max(1, Math.min(32, Number(waveZoom) || 1));
+      const windowSec = duration / zoom;
+      return Math.max(0, Math.min(duration, waveOffsetSec + (x / Math.max(1, rect.width)) * windowSec));
+    }
+
     function _seekPlayerToFrac(frac) {
       const player = $('player');
       if (!player) return;
@@ -1545,6 +1596,7 @@
       try { player.currentTime = t; } catch {}
       waveLastFrac = frac;
       if (lastWavePeaks) drawWaveform(lastWavePeaks);
+      drawZoomWaveform();
     }
 
     function fmtTime(seconds) {
@@ -1607,20 +1659,41 @@
         const frac = _waveFracFromEvent(e);
         if (frac == null) return;
         waveDragActive = true;
+        waveDragMode = 'overview';
         _seekPlayerToFrac(frac);
       });
       window.addEventListener('mousemove', (e) => {
-        if (!waveDragActive) return;
+        if (!waveDragActive || waveDragMode !== 'overview') return;
         const frac = _waveFracFromEvent(e);
         if (frac == null) return;
         _seekPlayerToFrac(frac);
       });
-      window.addEventListener('mouseup', () => { waveDragActive = false; });
+      window.addEventListener('mouseup', () => { waveDragActive = false; waveDragMode = ''; });
       canvas.addEventListener('click', (e) => {
         const frac = _waveFracFromEvent(e);
         if (frac == null) return;
         _seekPlayerToFrac(frac);
       });
+      const zoomCanvas = $('waveZoomCanvas');
+      if (zoomCanvas && !zoomCanvas.__wired) {
+        zoomCanvas.__wired = true;
+        const seekZoom = (e) => {
+          const t = _waveZoomTimeFromEvent(e);
+          const detail = window.__waveDetail;
+          if (t == null || !detail?.duration_sec) return;
+          _seekPlayerToFrac(t / Number(detail.duration_sec));
+        };
+        zoomCanvas.addEventListener('mousedown', (e) => {
+          waveDragActive = true;
+          waveDragMode = 'zoom';
+          seekZoom(e);
+        });
+        zoomCanvas.addEventListener('mousemove', (e) => {
+          if (!waveDragActive || waveDragMode !== 'zoom') return;
+          seekZoom(e);
+        });
+        zoomCanvas.addEventListener('click', seekZoom);
+      }
     }
 
     function startWaveformPlayheadLoop() {
@@ -1629,46 +1702,116 @@
       if (player.__waveLoop) return;
       player.__waveLoop = true;
       const tick = () => {
-        if (lastWavePeaks) drawWaveform(lastWavePeaks);
+        if (lastWavePeaks) {
+          drawWaveform(lastWavePeaks);
+          drawZoomWaveform();
+        }
         window.requestAnimationFrame(tick);
       };
       window.requestAnimationFrame(tick);
+    }
+
+    function syncWaveScrollControl() {
+      const detail = window.__waveDetail;
+      const scroll = $('waveScroll');
+      const label = $('waveZoomLabel');
+      if (!detail || !scroll) return;
+      const duration = Number(detail.duration_sec || 0);
+      const zoom = Math.max(1, Math.min(32, Number(waveZoom) || 1));
+      const windowSec = duration > 0 ? duration / zoom : 0;
+      const maxOffset = Math.max(0, duration - windowSec);
+      scroll.disabled = maxOffset <= 0;
+      scroll.value = maxOffset > 0 ? String(Math.round((waveOffsetSec / maxOffset) * 1000)) : '0';
+      if (label) label.textContent = `${zoom.toFixed(1)}x`;
+    }
+
+    function wireWaveformDetailControls() {
+      if (window.__waveDetailControlsWired) return;
+      window.__waveDetailControlsWired = true;
+      const zoomIn = $('waveZoomIn');
+      const zoomOut = $('waveZoomOut');
+      const scroll = $('waveScroll');
+      const applyZoom = (nextZoom) => {
+        const detail = window.__waveDetail;
+        const duration = Number(detail?.duration_sec || 0);
+        const player = $('player');
+        const center = player && Number.isFinite(Number(player.currentTime)) ? Number(player.currentTime) : waveOffsetSec;
+        waveZoom = Math.max(1, Math.min(32, Number(nextZoom) || 1));
+        const windowSec = duration > 0 ? duration / waveZoom : 0;
+        waveOffsetSec = Math.max(0, Math.min(Math.max(0, duration - windowSec), center - windowSec / 2));
+        syncWaveScrollControl();
+        drawZoomWaveform();
+      };
+      if (zoomIn) zoomIn.addEventListener('click', () => applyZoom(waveZoom * 1.6));
+      if (zoomOut) zoomOut.addEventListener('click', () => applyZoom(waveZoom / 1.6));
+      if (scroll) scroll.addEventListener('input', () => {
+        const detail = window.__waveDetail;
+        const duration = Number(detail?.duration_sec || 0);
+        const windowSec = duration > 0 ? duration / Math.max(1, waveZoom) : 0;
+        const maxOffset = Math.max(0, duration - windowSec);
+        waveOffsetSec = maxOffset * ((Number(scroll.value) || 0) / 1000);
+        drawZoomWaveform();
+      });
     }
 
     async function loadWaveform(trackId) {
       trackId = Number(trackId) || 0;
       lastWaveTrackId = trackId;
       lastWavePeaks = null;
+      window.__waveDetail = null;
+      waveZoom = 1;
+      waveOffsetSec = 0;
       $('waveBox').hidden = true;
       $('waveMeta').textContent = '';
       if (!trackId) return;
       try {
         wirePlayerBar();
-        const res = await fetch(`/api/performance?track_id=${encodeURIComponent(trackId)}`);
+        wireWaveformDetailControls();
+        const res = await fetch(`/api/track_waveform_detail?track_id=${encodeURIComponent(trackId)}`);
         const data = await res.json();
         if (lastWaveTrackId !== trackId) return;
-        const overview = data?.overview || null;
+        if (!data?.ok) return;
+        window.__waveDetail = data;
+        const overview = {
+          peaks: Array.isArray(data?.waveform) ? data.waveform : [],
+          rgb: data?.waveform_rgb || null,
+          energy: data?.waveform_energy
+        };
         const peaks = overview?.peaks || null;
         window.__waveRGB = overview?.rgb || null;
-        window.__waveMarkers = Array.isArray(data?.markers) ? data.markers : [];
+        const duration = Number(data?.duration_sec || 0);
+        window.__waveMarkers = Array.isArray(data?.beat_grid)
+          ? data.beat_grid.map(b => ({
+              kind: 'beat',
+              pos_s: Number(b.time_sec),
+              pos_frac: duration > 0 ? Math.max(0, Math.min(1, Number(b.time_sec) / duration)) : 0
+            }))
+          : [];
+        if (Array.isArray(data?.cues)) {
+          window.__waveMarkers.push(...data.cues.map(c => ({
+            kind: 'cue',
+            pos_s: Number(c.time_sec),
+            pos_frac: duration > 0 ? Math.max(0, Math.min(1, Number(c.time_sec) / duration)) : 0
+          })));
+        }
         if (Array.isArray(data?.cues)) {
           window.__waveCues = data.cues.map(c => {
-            const pos = Number(c?.pos_s);
-            const len = Number(data?.track_length_s) || 0;
+            const pos = Number(c?.time_sec);
+            const len = Number(data?.duration_sec) || 0;
             const frac = (len > 0 && Number.isFinite(pos)) ? Math.max(0, Math.min(1, pos / len)) : null;
-            return { slot: c?.slot, label: c?.label, pos_s: pos, pos_frac: frac };
+            return { slot: c?.slot, label: c?.name, pos_s: pos, pos_frac: frac };
           }).filter(c => Number.isFinite(c.pos_frac));
         } else {
           window.__waveCues = [];
         }
-        if (Array.isArray(data?.loops) && Number(data?.track_length_s)) {
-          const len = Number(data.track_length_s) || 0;
+        if (Array.isArray(data?.loops) && Number(data?.duration_sec)) {
+          const len = Number(data.duration_sec) || 0;
           window.__waveLoops = data.loops.map(l => {
-            const s = Number(l?.start_s);
-            const e = Number(l?.end_s);
+            const s = Number(l?.start_sec);
+            const e = Number(l?.end_sec);
             const a = (len > 0 && Number.isFinite(s)) ? Math.max(0, Math.min(1, s / len)) : null;
             const b = (len > 0 && Number.isFinite(e)) ? Math.max(0, Math.min(1, e / len)) : null;
-            return { slot: l?.slot, label: l?.label, start_s: s, end_s: e, start_frac: a, end_frac: b };
+            return { slot: l?.slot, label: l?.name, start_s: s, end_s: e, start_frac: a, end_frac: b };
           }).filter(l => Number.isFinite(l.start_frac) && Number.isFinite(l.end_frac));
         } else {
           window.__waveLoops = [];
@@ -1677,18 +1820,20 @@
         lastWavePeaks = peaks;
         $('waveBox').hidden = false;
         const energy = (typeof overview?.energy === 'number') ? overview.energy : null;
-        const p = data?.present || {};
+        const p = data?.source || {};
         const cueCount = Array.isArray(data?.cues) ? data.cues.length : 0;
         const loopCount = Array.isArray(data?.loops) ? data.loops.length : 0;
         const markCounts = [];
         if (cueCount) markCounts.push(`cues:${cueCount}`);
         if (loopCount) markCounts.push(`loops:${loopCount}`);
-        if (p.beatData) markCounts.push('beats');
+        if (p.beat_grid) markCounts.push(`beats:${p.beat_grid}`);
         const marksText = markCounts.length ? ` · ${markCounts.join(' ')}` : '';
         $('waveMeta').textContent = energy == null ? `${peaks.length} pts${marksText}` : `${peaks.length} pts · energy ${energy}${marksText}`;
+        syncWaveScrollControl();
         wireWaveformScrub();
         startWaveformPlayheadLoop();
         drawWaveform(peaks);
+        drawZoomWaveform();
       } catch (e) {
         // ignore
       }
@@ -1911,6 +2056,131 @@
       } finally {
         buttons.forEach(btn => { btn.disabled = false; });
       }
+    }
+
+    function drawZoomWaveform() {
+      const canvas = $('waveZoomCanvas');
+      const detail = window.__waveDetail;
+      if (!canvas || !detail) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const cssW = canvas.clientWidth || 1;
+      const cssH = canvas.clientHeight || 1;
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.max(1, Math.floor(cssW * dpr));
+      const h = Math.max(1, Math.floor(cssH * dpr));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#0b0d0f';
+      ctx.fillRect(0, 0, w, h);
+
+      const peaks = Array.isArray(detail.waveform) ? detail.waveform : [];
+      const duration = Number(detail.duration_sec || 0);
+      if (!peaks.length || !duration) return;
+      const zoom = Math.max(1, Math.min(32, Number(waveZoom) || 1));
+      const windowSec = duration / zoom;
+      const maxOffset = Math.max(0, duration - windowSec);
+      waveOffsetSec = Math.max(0, Math.min(maxOffset, Number(waveOffsetSec) || 0));
+      const start = waveOffsetSec;
+      const end = Math.min(duration, start + windowSec);
+      const span = Math.max(0.001, end - start);
+      const mid = h * 0.55;
+      const ampMax = h * 0.40;
+      const rgb = detail.waveform_rgb;
+      const hasRgb = rgb && Array.isArray(rgb.r) && Array.isArray(rgb.g) && Array.isArray(rgb.b) && rgb.r.length === peaks.length;
+
+      const timeToX = (sec) => ((Number(sec) - start) / span) * w;
+      const drawLayer = (arr, color, gain, alpha) => {
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = alpha;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let x = 0; x < w; x++) {
+          const sec = start + (x / Math.max(1, w - 1)) * span;
+          const idx = Math.max(0, Math.min(peaks.length - 1, Math.floor((sec / duration) * peaks.length)));
+          const p = Math.max(0, Math.min(255, Number(arr[idx]) || 0));
+          const amp = (p / 255) * ampMax * gain;
+          ctx.moveTo(x + 0.5, mid - amp);
+          ctx.lineTo(x + 0.5, mid + amp * 0.38);
+        }
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      };
+      if (hasRgb) {
+        drawLayer(rgb.b, 'rgba(73,160,236,1)', 1.0, 0.95);
+        drawLayer(rgb.g, 'rgba(55,197,143,1)', 0.88, 0.95);
+        drawLayer(rgb.r, 'rgba(238,242,245,1)', 0.74, 0.9);
+      } else {
+        drawLayer(peaks, 'rgba(73,160,236,1)', 1.0, 0.95);
+      }
+
+      const beats = Array.isArray(detail.beat_grid) ? detail.beat_grid : [];
+      for (const beat of beats) {
+        const t = Number(beat.time_sec);
+        if (!Number.isFinite(t) || t < start || t > end) continue;
+        const x = Math.floor(timeToX(t)) + 0.5;
+        const phrase = !!beat.is_phrase_start;
+        const bar = !!beat.is_bar_start;
+        ctx.strokeStyle = phrase ? 'rgba(255,255,255,0.55)' : (bar ? 'rgba(255,255,255,0.34)' : 'rgba(255,255,255,0.13)');
+        ctx.lineWidth = phrase ? 2.2 : (bar ? 1.6 : 1);
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+
+      const cues = Array.isArray(detail.cues) ? detail.cues : [];
+      ctx.font = `${Math.max(10, Math.floor(11 * dpr))}px Segoe UI, Inter, Arial, sans-serif`;
+      ctx.textBaseline = 'top';
+      for (const cue of cues) {
+        const t = Number(cue.time_sec);
+        if (!Number.isFinite(t) || t < start || t > end) continue;
+        const x = Math.floor(timeToX(t)) + 0.5;
+        ctx.strokeStyle = cue.color || 'rgba(73,160,236,0.95)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+        const label = cue.name || 'Cue';
+        ctx.fillStyle = 'rgba(8,12,16,0.82)';
+        ctx.fillRect(Math.max(0, x + 4), 4 * dpr, Math.min(120 * dpr, ctx.measureText(label).width + 10 * dpr), 18 * dpr);
+        ctx.fillStyle = '#e7f0f5';
+        ctx.fillText(label, Math.max(2 * dpr, x + 8), 7 * dpr);
+      }
+
+      const loops = Array.isArray(detail.loops) ? detail.loops : [];
+      for (const loop of loops) {
+        const a = Number(loop.start_sec);
+        const b = Number(loop.end_sec);
+        if (!Number.isFinite(a) || !Number.isFinite(b) || b < start || a > end) continue;
+        const x1 = Math.max(0, Math.min(w, timeToX(a)));
+        const x2 = Math.max(0, Math.min(w, timeToX(b)));
+        ctx.fillStyle = 'rgba(255,138,61,0.18)';
+        ctx.strokeStyle = loop.color || 'rgba(255,138,61,0.82)';
+        ctx.fillRect(x1, 0, Math.max(1, x2 - x1), h);
+        ctx.strokeRect(x1, 0, Math.max(1, x2 - x1), h);
+      }
+
+      const player = $('player');
+      const cur = player ? Number(player.currentTime) : NaN;
+      if (Number.isFinite(cur) && cur >= start && cur <= end) {
+        const x = Math.floor(timeToX(cur)) + 0.5;
+        ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+
+      ctx.fillStyle = 'rgba(154,167,178,0.95)';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`${fmtTime(start)} - ${fmtTime(end)} · ${zoom.toFixed(1)}x`, 8 * dpr, h - 6 * dpr);
     }
 
     async function detailStyles(apply = false, checkedOnly = false) {

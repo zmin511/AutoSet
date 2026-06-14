@@ -35,7 +35,7 @@ AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.8"
+APP_VERSION = "1.5.9"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -894,6 +894,174 @@ def _positions_to_markers(positions, *, kind, track_len_s):
         frac = max(0.0, min(1.0, p / max_s))
         markers.append({"kind": kind, "pos_s": p, "pos_frac": round(frac, 6)})
     return markers
+
+
+def _beat_grid_from_positions(positions):
+    out = []
+    for idx, pos in enumerate(sorted({round(float(p), 3) for p in positions if _finite_number(p) and p >= 0.0}), start=1):
+        out.append({
+            "time_sec": round(pos, 3),
+            "beat": idx,
+            "bar": int((idx - 1) // 4) + 1,
+            "is_bar_start": ((idx - 1) % 4) == 0,
+            "is_phrase_start": ((idx - 1) % 16) == 0,
+        })
+    return out
+
+
+def _beat_grid_from_bpm(bpm, duration_sec, offset_sec=0.0):
+    try:
+        bpm = float(bpm or 0)
+        duration_sec = float(duration_sec or 0)
+        offset_sec = float(offset_sec or 0)
+    except Exception:
+        return []
+    if bpm <= 0 or duration_sec <= 0:
+        return []
+    interval = 60.0 / bpm
+    if interval <= 0:
+        return []
+    out = []
+    beat = 1
+    t = max(0.0, offset_sec)
+    while t <= duration_sec + 0.001 and beat <= 20000:
+        out.append({
+            "time_sec": round(t, 3),
+            "beat": beat,
+            "bar": int((beat - 1) // 4) + 1,
+            "is_bar_start": ((beat - 1) % 4) == 0,
+            "is_phrase_start": ((beat - 1) % 16) == 0,
+        })
+        beat += 1
+        t += interval
+    return out
+
+
+def _cue_color_hex(value):
+    if value is None:
+        return ""
+    try:
+        n = int(value) & 0xFFFFFF
+        return f"#{n:06x}"
+    except Exception:
+        return ""
+
+
+def engine_db_diagnostics(limit=2):
+    limit = max(0, min(10, int(limit or 0)))
+    out = {"ok": True, "db_path": str(DB_PATH), "tables": []}
+    with open_db() as con:
+        rows = con.execute(
+            "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name"
+        ).fetchall()
+        for row in rows:
+            name = row["name"]
+            item = {
+                "name": name,
+                "type": row["type"],
+                "columns": [dict(c) for c in con.execute(f"PRAGMA table_info({name})")],
+                "samples": [],
+            }
+            if row["type"] == "table" and limit:
+                try:
+                    for sample in con.execute(f"SELECT * FROM {name} LIMIT ?", (limit,)):
+                        item["samples"].append({
+                            k: (f"BLOB {len(v)} bytes" if isinstance(v, bytes) else v)
+                            for k, v in dict(sample).items()
+                        })
+                except Exception as exc:
+                    item["sample_error"] = repr(exc)
+            out["tables"].append(item)
+    return out
+
+
+def get_track_waveform_detail(track_id):
+    track_id = int(track_id)
+    checked = ["Track", "PerformanceData"]
+    with open_db() as con:
+        row = con.execute(
+            """
+            SELECT
+              Track.id, Track.title, Track.artist, Track.filename, Track.length,
+              Track.bpmAnalyzed, Track.bpm, Track.path,
+              PerformanceData.overviewWaveFormData,
+              PerformanceData.beatData,
+              PerformanceData.quickCues,
+              PerformanceData.loops
+            FROM Track
+            LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
+            WHERE Track.id = ?
+            """,
+            (track_id,),
+        ).fetchone()
+    if not row:
+        raise ValueError("Track not found")
+
+    duration_sec = int(row["length"] or 0)
+    bpm = row["bpmAnalyzed"] if row["bpmAnalyzed"] is not None else row["bpm"]
+    overview_raw = _decode_engine_zlib_blob(row["overviewWaveFormData"])
+    overview = _parse_overview_waveform(overview_raw)
+    beat_raw = _decode_engine_zlib_blob(row["beatData"])
+    beat_positions = _extract_positions_seconds(beat_raw, duration_sec, endian=">", aligned_offset=8)
+    beat_grid = _beat_grid_from_positions(beat_positions)
+    beat_source = "engine_db" if beat_grid else "not_found"
+    if len(beat_grid) < 4:
+        beat_grid = _beat_grid_from_bpm(bpm, duration_sec, 0.0)
+        beat_source = "bpm_fallback" if beat_grid else "not_found"
+
+    qc_raw = _decode_engine_zlib_blob(row["quickCues"])
+    cues_raw = _parse_quick_cues(qc_raw, duration_sec)
+    cues = [{
+        "time_sec": c["pos_s"],
+        "name": c.get("label") or (f"Cue {c.get('slot')}" if c.get("slot") else "Cue"),
+        "color": _cue_color_hex(c.get("color")),
+        "type": "cue",
+        "slot": c.get("slot"),
+    } for c in cues_raw]
+    loops_raw = _parse_loops(row["loops"], duration_sec)
+    loops = [{
+        "start_sec": l["start_s"],
+        "end_sec": l["end_s"],
+        "name": l.get("label") or (f"Loop {l.get('slot')}" if l.get("slot") else "Loop"),
+        "type": "loop",
+        "slot": l.get("slot"),
+        "color": _cue_color_hex(l.get("color")),
+    } for l in loops_raw if "start_s" in l and "end_s" in l]
+
+    source = {
+        "waveform": "engine_db" if overview else "not_found",
+        "beat_grid": beat_source,
+        "cues": "engine_db" if cues else "not_found",
+        "loops": "engine_db" if loops else "not_found",
+        "checked_tables": checked,
+    }
+    return {
+        "ok": True,
+        "track_id": track_id,
+        "title": row["title"] or row["filename"] or "",
+        "artist": row["artist"] or "",
+        "filename": row["filename"] or "",
+        "path": resolve_track_path(row["path"]),
+        "duration_sec": duration_sec,
+        "bpm": None if bpm is None else round(float(bpm), 3),
+        "waveform": (overview or {}).get("peaks") or [],
+        "waveform_rgb": (overview or {}).get("rgb") or None,
+        "waveform_energy": (overview or {}).get("energy"),
+        "beat_grid": beat_grid,
+        "cues": cues,
+        "loops": loops,
+        "source": source,
+        "diagnostics": {
+            "performance_fields_present": {
+                "overviewWaveFormData": row["overviewWaveFormData"] is not None,
+                "beatData": row["beatData"] is not None,
+                "quickCues": row["quickCues"] is not None,
+                "loops": row["loops"] is not None,
+            },
+            "engine_beat_count": len(beat_positions),
+            "checked_tables": checked,
+        },
+    }
 
 
 def get_track_performance(track_id):
@@ -2526,6 +2694,13 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/genres":
             self.send_json({"genres": genre_options()})
             return
+        if parsed.path == "/api/db-diagnostics":
+            qs = parse_qs(parsed.query)
+            try:
+                self.send_json(engine_db_diagnostics(qs.get("limit", ["2"])[0]))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": repr(exc)}, status=400)
+            return
         if parsed.path == "/api/disk-tree":
             qs = parse_qs(parsed.query)
             kind = qs.get("kind", ["folder"])[0]
@@ -2548,6 +2723,14 @@ class Handler(BaseHTTPRequestHandler):
             track_id = qs.get("track_id", [""])[0]
             try:
                 self.send_json(get_track_performance(track_id))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": repr(exc)}, status=400)
+            return
+        if parsed.path == "/api/track_waveform_detail":
+            qs = parse_qs(parsed.query)
+            track_id = qs.get("track_id", [""])[0]
+            try:
+                self.send_json(get_track_waveform_detail(track_id))
             except Exception as exc:
                 self.send_json({"ok": False, "error": repr(exc)}, status=400)
             return
