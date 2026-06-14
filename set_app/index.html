@@ -406,7 +406,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      margin: 6px 0 6px;
+      margin: 4px 0;
       color: var(--muted);
       font-size: 11px;
     }
@@ -434,7 +434,7 @@
     }
     canvas#waveZoomCanvas {
       width: 100%;
-      height: 148px;
+      height: 128px;
       display: block;
       cursor: ew-resize;
       border-top: 1px solid rgba(255,255,255,.08);
@@ -582,12 +582,12 @@
         <div class="wave-detail-tools">
           <button id="waveZoomOut" type="button" title="Уменьшить масштаб waveform">-</button>
           <button id="waveZoomIn" type="button" title="Увеличить масштаб waveform">+</button>
-          <span id="waveZoomLabel">1x</span>
+          <span id="waveZoomLabel">4.0x</span>
           <span class="wave-resolution" id="waveResolutionLabel">Engine overview 1024 pts</span>
           <button id="waveFollow" type="button" class="active" title="Следовать за playhead как в Engine DJ">Follow</button>
           <input id="waveScroll" type="range" min="0" max="1000" value="0" title="Прокрутка zoom-участка waveform">
         </div>
-        <canvas id="waveZoomCanvas" width="1024" height="168"></canvas>
+        <canvas id="waveZoomCanvas" width="1024" height="128"></canvas>
       </div>
     </div>
 
@@ -1364,7 +1364,9 @@
     let waveDragActive = false;
     let waveDragMode = '';
     let waveLastFrac = null;
-    let waveZoom = 1;
+    const DEFAULT_WAVE_ZOOM = 4.0;
+    const MAX_WAVE_ZOOM = 12;
+    let waveZoom = DEFAULT_WAVE_ZOOM;
     let waveOffsetSec = 0;
     let followPlayhead = true;
 
@@ -1384,8 +1386,7 @@
     }
 
     function maxWaveZoom() {
-      const detail = window.__waveDetail;
-      return detail?.waveform_resolution === 'engine_overview_1024' ? 8 : 32;
+      return MAX_WAVE_ZOOM;
     }
 
     function sampleWave(arr, sec, duration) {
@@ -1867,7 +1868,7 @@
       lastWaveTrackId = trackId;
       lastWavePeaks = null;
       window.__waveDetail = null;
-      waveZoom = 1;
+      waveZoom = DEFAULT_WAVE_ZOOM;
       waveOffsetSec = 0;
       followPlayhead = true;
       $('waveBox').hidden = true;
