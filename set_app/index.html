@@ -1752,8 +1752,6 @@
       canvas.addEventListener('mousedown', (e) => {
         const frac = _waveFracFromEvent(e);
         if (frac == null) return;
-        followPlayhead = false;
-        syncWaveScrollControl();
         waveDragActive = true;
         waveDragMode = 'overview';
         _seekPlayerToFrac(frac);
@@ -1856,8 +1854,8 @@
         drawZoomWaveform();
       });
       if (follow) follow.addEventListener('click', () => {
-        followPlayhead = true;
-        updateFollowWaveWindow();
+        followPlayhead = !followPlayhead;
+        if (followPlayhead) updateFollowWaveWindow();
         syncWaveScrollControl();
         drawZoomWaveform();
       });
