@@ -845,6 +845,13 @@
       return `<input class="genre-select" id="selectedGenre" list="genreOptionsList" value="${esc(current)}" placeholder="Жанр">`;
     }
 
+    function tagWriteStatusMessage(data, successText) {
+      if (!data?.ok) return successText;
+      if (data.file_tags_warning) return `В Engine DB записано, но файл не обновлён: ${data.file_tags_warning}`;
+      if (data.file_tags_updated || data.engine_db_updated) return `${successText}: Engine DB и файл`;
+      return successText;
+    }
+
     function selectedMarkup(track, withStatus = true) {
       const title = track.label || track.filename || '';
       const initials = (String(title).match(/[A-Za-zА-Яа-я0-9]/g) || ['A']).slice(0, 2).join('').toUpperCase();
@@ -886,8 +893,8 @@
           selectedTrack.genre = genre;
           lastSaved = genre;
           applyInferredStyles(selectedTrack);
-          $('status').className = 'status ok';
-          $('status').textContent = 'Жанр сохранён';
+          $('status').className = data.file_tags_warning ? 'status bad' : 'status ok';
+          $('status').textContent = tagWriteStatusMessage(data, 'Жанр сохранён');
           if ($('search').value.trim()) search(); else browse(currentPath);
         } catch (err) {
           $('status').className = 'status bad';
@@ -2082,8 +2089,8 @@
         });
         const data = await res.json();
         $('output').textContent = data.output || data.error || 'Нет вывода.';
-        $('status').className = data.ok ? 'status ok' : 'status bad';
-        $('status').textContent = data.ok ? 'Звездочки энергии обновлены' : 'Не удалось обновить звездочки';
+        $('status').className = data.ok && !data.file_tags_warning ? 'status ok' : 'status bad';
+        $('status').textContent = data.ok ? tagWriteStatusMessage(data, 'Звездочки энергии обновлены') : 'Не удалось обновить звездочки';
         await browse(currentPath);
       } catch (err) {
         $('output').textContent = String(err);
@@ -2107,8 +2114,8 @@
         });
         const data = await res.json();
         $('output').textContent = data.output || data.error || 'Нет вывода.';
-        $('status').className = data.ok ? 'status ok' : 'status bad';
-        $('status').textContent = data.ok ? 'Все звездочки энергии обновлены' : 'Не удалось обновить все звездочки';
+        $('status').className = data.ok && !data.file_tags_warning ? 'status ok' : 'status bad';
+        $('status').textContent = data.ok ? tagWriteStatusMessage(data, 'Все звездочки энергии обновлены') : 'Не удалось обновить все звездочки';
         await browse(currentPath);
       } catch (err) {
         $('output').textContent = String(err);
@@ -2158,8 +2165,8 @@
         });
         const data = await res.json();
         $('output').textContent = data.output || data.error || 'Нет вывода.';
-        $('status').className = data.ok ? 'status ok' : 'status bad';
-        $('status').textContent = data.ok ? `Подстили добавлены: ${data.updated}` : 'Не удалось применить подстили';
+        $('status').className = data.ok && !data.file_tags_warning ? 'status ok' : 'status bad';
+        $('status').textContent = data.ok ? tagWriteStatusMessage(data, `Подстили добавлены: ${data.updated}`) : 'Не удалось применить подстили';
         if (data.ok) {
           await loadStyles();
           await browse(currentPath);
@@ -2341,9 +2348,9 @@
         });
         const data = await res.json();
         $('output').textContent = data.output || data.error || 'Нет вывода.';
-        $('status').className = data.ok ? 'status ok' : 'status bad';
+        $('status').className = data.ok && !data.file_tags_warning ? 'status ok' : 'status bad';
         $('status').textContent = data.ok
-          ? (apply ? `Подстили добавлены: ${data.updated}` : `Предложений по стилям: ${data.suggestion_count || 0}`)
+          ? (apply ? tagWriteStatusMessage(data, `Подстили добавлены: ${data.updated}`) : `Предложений по стилям: ${data.suggestion_count || 0}`)
           : 'Не удалось детализировать стили';
         if (data.ok && !apply) {
           rememberStyleSuggestions(data);
@@ -2394,8 +2401,8 @@
         });
         const data = await res.json();
         $('output').textContent = data.output || data.error || 'Нет вывода.';
-        $('status').className = data.ok ? 'status ok' : 'status bad';
-        $('status').textContent = data.ok ? 'Жанры обновлены' : 'Не удалось обновить жанры';
+        $('status').className = data.ok && !data.file_tags_warning ? 'status ok' : 'status bad';
+        $('status').textContent = data.ok ? tagWriteStatusMessage(data, 'Жанры обновлены') : 'Не удалось обновить жанры';
         await loadStyles();
         await browse(currentPath);
       } catch (err) {

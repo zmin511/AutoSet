@@ -1,5 +1,6 @@
 import argparse
 import csv
+import json
 import os
 import shutil
 import sqlite3
@@ -26,6 +27,225 @@ class TrackRow:
     bpm_analyzed: Optional[float]
     key: Optional[int]
     path: Optional[str]
+
+
+@dataclass
+class TagWriteResult:
+    ok: bool
+    file_tags_updated: bool
+    file_tags_warning: Optional[str]
+    written_fields: List[str]
+    skipped_fields: List[str]
+    path: str
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "ok": self.ok,
+            "file_tags_updated": self.file_tags_updated,
+            "file_tags_warning": self.file_tags_warning,
+            "written_fields": self.written_fields,
+            "skipped_fields": self.skipped_fields,
+            "path": self.path,
+        }
+
+
+def _clean_text(value: object) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _bpm_arg_to_text(value: object) -> Optional[str]:
+    text = _clean_text(value)
+    if not text:
+        return None
+    try:
+        return _bpm_to_text(float(text))
+    except Exception:
+        return text
+
+
+def _rating_to_popm(value: object) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        raw = int(float(value))
+    except Exception:
+        return None
+    if raw <= 0:
+        return 0
+    if raw <= 5:
+        return max(1, min(255, int(round(raw * 255 / 5))))
+    return max(0, min(255, raw))
+
+
+def _ensure_writable_file(fp: Path, dry_run: bool = False) -> Optional[str]:
+    if not fp.exists():
+        return f"File does not exist: {fp}"
+    if not fp.is_file():
+        return f"Path is not a file: {fp}"
+    if dry_run:
+        return None
+    try:
+        mode = fp.stat().st_mode
+        if not (mode & 0o200):
+            return f"File is read-only: {fp}"
+        with fp.open("ab"):
+            pass
+    except PermissionError:
+        return f"File is read-only or locked: {fp}"
+    except OSError as exc:
+        return f"Cannot write file tags: {exc}"
+    return None
+
+
+def _set_mp3_text(tags, frame_id: str, frame_cls, value: Optional[str], written: List[str], field: str) -> None:
+    if value is None:
+        return
+    old = str(tags.get(frame_id)) if tags.get(frame_id) else ""
+    if old.strip() == value:
+        return
+    tags.delall(frame_id)
+    tags.add(frame_cls(encoding=3, text=[value]))
+    written.append(field)
+
+
+def write_audio_tags(
+    file_path: object,
+    *,
+    genre: object = None,
+    bpm: object = None,
+    key: object = None,
+    autoset_styles: object = None,
+    rating: object = None,
+    dry_run: bool = False,
+) -> TagWriteResult:
+    """Write AutoSet metadata to one audio file.
+
+    Engine DB remains the app's browse/cache source, but audio files must also
+    carry user edits so Engine DJ rescans do not overwrite them later.
+    """
+    fp = Path(str(file_path))
+    ext = fp.suffix.lower()
+    warning = _ensure_writable_file(fp, dry_run=dry_run)
+    if warning:
+        return TagWriteResult(False, False, warning, [], [], str(fp))
+
+    genre_text = _clean_text(genre)
+    bpm_text = _bpm_arg_to_text(bpm)
+    key_text = _clean_text(key)
+    style_text = _clean_text(autoset_styles)
+    popm_rating = _rating_to_popm(rating)
+    written: List[str] = []
+    skipped: List[str] = []
+
+    try:
+        if ext == ".mp3":
+            from mutagen.id3 import COMM, ID3, ID3NoHeaderError, POPM, TBPM, TCON, TKEY, TXXX
+
+            try:
+                tags = ID3(str(fp))
+            except ID3NoHeaderError:
+                tags = ID3()
+            _set_mp3_text(tags, "TCON", TCON, genre_text, written, "genre")
+            _set_mp3_text(tags, "TBPM", TBPM, bpm_text, written, "bpm")
+            _set_mp3_text(tags, "TKEY", TKEY, key_text, written, "key")
+            if style_text is not None:
+                old_style = ""
+                for frame in tags.getall("TXXX"):
+                    if getattr(frame, "desc", "") == "AutoSet Styles":
+                        old_style = (frame.text[0] if getattr(frame, "text", None) else "") or ""
+                        break
+                if old_style.strip() != style_text:
+                    tags.delall("TXXX:AutoSet Styles")
+                    tags.add(TXXX(encoding=3, desc="AutoSet Styles", text=[style_text]))
+                    tags.delall("COMM:AutoSet:eng")
+                    tags.add(COMM(encoding=3, lang="eng", desc="AutoSet", text=f"AutoSet Styles: {style_text}"))
+                    written.append("autoset_styles")
+            if popm_rating is not None:
+                tags.delall("POPM:autoset")
+                tags.add(POPM(email="autoset", rating=popm_rating, count=0))
+                written.append("rating")
+            if written and not dry_run:
+                tags.save(str(fp), v2_version=3)
+            return TagWriteResult(True, bool(written), None, written, skipped, str(fp))
+
+        if ext == ".flac":
+            from mutagen.flac import FLAC
+
+            audio = FLAC(str(fp))
+            updates = {
+                "genre": ("GENRE", genre_text),
+                "bpm": ("BPM", bpm_text),
+                "key": ("INITIALKEY", key_text),
+                "autoset_styles": ("AUTOSET_STYLES", style_text),
+                "rating": ("RATING", None if rating is None else str(rating)),
+            }
+            for field, (tag_name, value) in updates.items():
+                if value is None:
+                    continue
+                old = (audio.get(tag_name, [""])[0] or "").strip()
+                if old != value:
+                    audio[tag_name] = [value]
+                    if field == "key":
+                        audio["KEY"] = [value]
+                    written.append(field)
+            if written and not dry_run:
+                audio.save()
+            return TagWriteResult(True, bool(written), None, written, skipped, str(fp))
+
+        if ext in {".m4a", ".mp4"}:
+            from mutagen.mp4 import MP4, MP4FreeForm
+
+            audio = MP4(str(fp))
+            if audio.tags is None:
+                audio.add_tags()
+
+            def set_mp4_atom(field: str, atom: str, value: Optional[str]) -> None:
+                if value is None:
+                    return
+                old_value = audio.tags.get(atom, [""])[0] if audio.tags else ""
+                if isinstance(old_value, bytes):
+                    old_value = old_value.decode("utf-8", "replace")
+                if str(old_value or "").strip() != value:
+                    audio[atom] = [value]
+                    written.append(field)
+
+            set_mp4_atom("genre", "\xa9gen", genre_text)
+            if bpm_text is not None:
+                try:
+                    bpm_int = int(round(float(bpm_text)))
+                    if audio.tags.get("tmpo", [None])[0] != bpm_int:
+                        audio["tmpo"] = [bpm_int]
+                        written.append("bpm")
+                except Exception:
+                    skipped.append("bpm")
+            for field, name, value in [
+                ("key", "initialkey", key_text),
+                ("autoset_styles", "AutoSet Styles", style_text),
+            ]:
+                if value is None:
+                    continue
+                atom = f"----:com.apple.iTunes:{name}"
+                old = audio.tags.get(atom, [b""])[0] if audio.tags else b""
+                if isinstance(old, MP4FreeForm):
+                    old = bytes(old)
+                old_text = old.decode("utf-8", "replace") if isinstance(old, bytes) else str(old or "")
+                if old_text.strip() != value:
+                    audio[atom] = [MP4FreeForm(value.encode("utf-8"))]
+                    written.append(field)
+            if rating is not None:
+                skipped.append("rating")
+            if written and not dry_run:
+                audio.save()
+            warning = "MP4 rating tag is not written" if "rating" in skipped else None
+            return TagWriteResult(True, bool(written), warning, written, skipped, str(fp))
+
+        if ext in {".wav", ".aiff", ".aif"}:
+            return TagWriteResult(False, False, "File tag writing is not supported for this format yet", [], [], str(fp))
+
+        return TagWriteResult(False, False, f"Unsupported file format: {ext or '(none)'}", [], [], str(fp))
+    except Exception as exc:
+        return TagWriteResult(False, False, f"File tag writing failed for {fp}: {exc}", written, skipped, str(fp))
 
 
 def _iter_audio_files(root: Path) -> Iterable[Path]:
@@ -353,6 +573,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--music-root", default=DEFAULT_MUSIC_ROOT)
     p.add_argument("--report-dir", default=DEFAULT_REPORT_DIR)
     p.add_argument("--backup-dir", default=DEFAULT_BACKUP_DIR)
+    p.add_argument("--file", dest="single_file", help="Write explicit tags to one audio file.")
+    p.add_argument("--genre", help="Genre tag for --file mode.")
+    p.add_argument("--bpm", help="BPM tag for --file mode.")
+    p.add_argument("--key", help="Key/InitialKey tag for --file mode.")
+    p.add_argument("--autoset-styles", help="AutoSet style/substyle tag for --file mode.")
+    p.add_argument("--rating", help="Rating value for --file mode (best-effort).")
+    p.add_argument("--dry-run", action="store_true", help="Preview explicit --file tag write without saving.")
     p.add_argument("--apply", action="store_true", help="Реально записать теги (иначе dry-run).")
     p.add_argument(
         "--key-format",
@@ -385,6 +612,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     backup_files = bool(args.backup_files)
     key_format = str(args.key_format or "standard")
     write_bitrate_tag = bool(args.write_bitrate_tag)
+
+    if args.single_file:
+        result = write_audio_tags(
+            args.single_file,
+            genre=args.genre,
+            bpm=args.bpm,
+            key=args.key,
+            autoset_styles=args.autoset_styles,
+            rating=args.rating,
+            dry_run=bool(args.dry_run),
+        )
+        print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+        return 0 if result.ok else 1
 
     if not music_root.exists():
         print(f"music-root не существует: {music_root}", file=sys.stderr)

@@ -23,6 +23,9 @@ PROJECT_DIR = APP_DIR.parent
 SSD_ROOT = PROJECT_DIR.parent
 TOOLS_DIR = PROJECT_DIR / "tools"
 BUILDER = TOOLS_DIR / "engine_set_builder.py"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+from engine_write_tags import write_audio_tags
 CONFIG_PATH = APP_DIR / "paths.json"
 DEFAULT_MUSIC_ROOT = SSD_ROOT / "Music" if (SSD_ROOT / "Music").exists() else SSD_ROOT
 DEFAULT_SETS_DIR = DEFAULT_MUSIC_ROOT / "Sets"
@@ -35,7 +38,7 @@ AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.11"
+APP_VERSION = "1.5.12"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -1620,38 +1623,44 @@ def _normalize_genre_value(value):
     return genre
 
 
-def update_file_genre(path, genre):
-    suffix = path.suffix.lower()
-    if suffix == ".mp3":
-        from mutagen.id3 import ID3, ID3NoHeaderError, TCON
-
+def _track_file_tag_result(path, genre=None, bpm=None, key=None, rating=None):
+    key_text = None
+    if key is not None and str(key).strip():
         try:
-            tags = ID3(str(path))
-        except ID3NoHeaderError:
-            tags = ID3()
-        tags.delall("TCON")
-        if str(genre or "").strip():
-            tags.add(TCON(encoding=3, text=[genre]))
-        tags.save(str(path), v2_version=3)
-        return True
-    if suffix == ".flac":
-        from mutagen.flac import FLAC
+            key_text = engine_key_to_camelot(int(key))
+        except Exception:
+            key_text = str(key).strip()
+    rating_stars = None
+    try:
+        rating_stars = _engine_rating_to_stars(rating)
+    except Exception:
+        rating_stars = None
+    result = write_audio_tags(
+        path,
+        genre=genre,
+        bpm=bpm,
+        key=key_text,
+        autoset_styles=genre,
+        rating=rating_stars,
+    ).as_dict()
+    return result
 
-        audio = FLAC(str(path))
-        if str(genre or "").strip():
-            audio["GENRE"] = [genre]
-        elif "GENRE" in audio:
-            del audio["GENRE"]
-        audio.save()
-        return True
-    return False
+
+def _file_tag_summary(result):
+    result = result or {}
+    warning = result.get("file_tags_warning")
+    return {
+        "file_tags_updated": bool(result.get("file_tags_updated")) or (bool(result.get("ok")) and not warning),
+        "file_tags_warning": warning,
+        "written_fields": result.get("written_fields") or [],
+    }
 
 
 def update_genre(track_id, genre):
     genre = _normalize_genre_value(genre)
     with open_db() as con:
         row = con.execute(
-            "SELECT id, filename, length, bitrate, bpmAnalyzed, key, genre, artist, title, path FROM Track WHERE id = ?",
+            "SELECT id, filename, length, bitrate, bpmAnalyzed, key, rating, genre, artist, title, path FROM Track WHERE id = ?",
             (int(track_id),),
         ).fetchone()
         if not row:
@@ -1660,9 +1669,22 @@ def update_genre(track_id, genre):
         con.commit()
     track = row_to_track(row)
     path = safe_media_path(track["rel"] or track["path"])
-    file_written = update_file_genre(path, genre)
+    file_result = _track_file_tag_result(
+        path,
+        genre=genre,
+        bpm=row["bpmAnalyzed"],
+        key=row["key"],
+        rating=_row_value(row, "rating", 0),
+    )
     track["genre"] = genre
-    return {"ok": True, "track": track, "file_written": file_written}
+    summary = _file_tag_summary(file_result)
+    return {
+        "ok": True,
+        "track": track,
+        "engine_db_updated": True,
+        **summary,
+        "file_tag_result": file_result,
+    }
 
 
 def _genre_after_bulk_action(current, action, tag, find, replace):
@@ -1812,6 +1834,7 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
     skipped_confidence = 0
     file_written = 0
     file_failed = 0
+    file_warnings = []
 
     with open_db() as con:
         for path in files:
@@ -1846,13 +1869,18 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
                 )
                 updated += 1
                 action = "updated"
-                try:
-                    if update_file_genre(path, decision["new_genre"]):
-                        file_written += 1
-                    else:
-                        file_failed += 1
-                except Exception:
+                file_result = _track_file_tag_result(
+                    path,
+                    genre=decision["new_genre"],
+                    bpm=track.get("bpm"),
+                    key=track.get("camelot"),
+                    rating=track.get("rating_raw", 0),
+                )
+                if file_result.get("file_tags_warning"):
                     file_failed += 1
+                    file_warnings.append(f"{path}: {file_result.get('file_tags_warning')}")
+                else:
+                    file_written += 1
             suggestions.append({
                 "track_id": int(track["id"]),
                 "file": str(path),
@@ -1883,6 +1911,10 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
         f"File tags skipped/failed: {file_failed}",
         f"Not found in Engine DB: {len(missing)}",
     ]
+    if file_warnings:
+        lines.append("")
+        lines.append("File tag warnings:")
+        lines.extend(f"- {item}" for item in file_warnings[:10])
     if suggestions:
         lines.append("")
         lines.append("Examples:")
@@ -1902,6 +1934,9 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
         "unchanged": unchanged,
         "skipped_confidence": skipped_confidence,
         "missing": len(missing),
+        "file_tags_updated": file_written > 0,
+        "file_tags_warning": "; ".join(file_warnings[:3]) if file_warnings else None,
+        "written_fields": ["genre", "bpm", "key", "autoset_styles", "rating"] if file_written else [],
         "output": "\n".join(lines),
     }
 
@@ -1925,9 +1960,10 @@ def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
     unchanged = 0
     file_written = 0
     file_failed = 0
+    file_warnings = []
     with open_db() as con:
         for track_id, path in targets:
-            row = con.execute("SELECT genre FROM Track WHERE id = ?", (int(track_id),)).fetchone()
+            row = con.execute("SELECT genre, bpmAnalyzed, key, rating FROM Track WHERE id = ?", (int(track_id),)).fetchone()
             if not row:
                 missing.append(str(path))
                 continue
@@ -1945,13 +1981,18 @@ def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
                 (new_genre, now, int(track_id)),
             )
             updated += 1
-            try:
-                if update_file_genre(path, new_genre):
-                    file_written += 1
-                else:
-                    file_failed += 1
-            except Exception:
+            file_result = _track_file_tag_result(
+                path,
+                genre=new_genre,
+                bpm=row["bpmAnalyzed"],
+                key=row["key"],
+                rating=row["rating"],
+            )
+            if file_result.get("file_tags_warning"):
                 file_failed += 1
+                file_warnings.append(f"{path}: {file_result.get('file_tags_warning')}")
+            else:
+                file_written += 1
         con.commit()
 
     scope = "current folder and subfolders" if recursive else "current folder"
@@ -1965,6 +2006,8 @@ def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
         f"File tags skipped/failed: {file_failed}\n"
         f"Not found in Engine DB: {len(missing)}"
     )
+    if file_warnings:
+        output += "\n\nFile tag warnings:\n" + "\n".join(f"- {item}" for item in file_warnings[:10])
     if missing:
         output += "\n\nMissing examples:\n" + "\n".join(f"- {p}" for p in missing[:12])
     return {
@@ -1973,6 +2016,10 @@ def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
         "unchanged": unchanged,
         "file_written": file_written,
         "file_failed": file_failed,
+        "engine_db_updated": updated > 0,
+        "file_tags_updated": file_written > 0,
+        "file_tags_warning": "; ".join(file_warnings[:3]) if file_warnings else None,
+        "written_fields": ["genre", "bpm", "key", "autoset_styles", "rating"] if file_written else [],
         "missing": len(missing),
         "output": output,
     }
@@ -2478,12 +2525,18 @@ def _write_energy_ratings_for_paths(paths, scope_label):
     updated = 0
     skipped = 0
     unchanged = 0
+    file_written = 0
+    file_failed = 0
+    file_warnings = []
     with open_db() as con:
         rows = con.execute(
             """
             SELECT
               Track.id,
               Track.path,
+              Track.genre,
+              Track.bpmAnalyzed,
+              Track.key,
               Track.rating,
               PerformanceData.overviewWaveFormData AS overviewWaveFormData
             FROM Track
@@ -2510,6 +2563,18 @@ def _write_energy_ratings_for_paths(paths, scope_label):
                 (int(engine_rating), now, int(row["id"])),
             )
             updated += 1
+            file_result = _track_file_tag_result(
+                path,
+                genre=row["genre"],
+                bpm=row["bpmAnalyzed"],
+                key=row["key"],
+                rating=rating,
+            )
+            if file_result.get("file_tags_warning"):
+                file_failed += 1
+                file_warnings.append(f"{path}: {file_result.get('file_tags_warning')}")
+            else:
+                file_written += 1
         con.commit()
 
     missing = max(0, len(wanted) - matched)
@@ -2518,10 +2583,14 @@ def _write_energy_ratings_for_paths(paths, scope_label):
         f"Audio files: {len(wanted)}\n"
         f"Matched in Engine DB: {matched}\n"
         f"Updated Track.rating: {updated}\n"
+        f"File tags written: {file_written}\n"
+        f"File tags skipped/failed: {file_failed}\n"
         f"Already correct: {unchanged}\n"
         f"Skipped without waveform: {skipped}\n"
         f"Not found in Engine DB: {missing}"
     )
+    if file_warnings:
+        output += "\n\nFile tag warnings:\n" + "\n".join(f"- {item}" for item in file_warnings[:10])
     return {
         "ok": True,
         "updated": updated,
@@ -2529,6 +2598,10 @@ def _write_energy_ratings_for_paths(paths, scope_label):
         "skipped": skipped,
         "unchanged": unchanged,
         "missing": missing,
+        "engine_db_updated": updated > 0,
+        "file_tags_updated": file_written > 0,
+        "file_tags_warning": "; ".join(file_warnings[:3]) if file_warnings else None,
+        "written_fields": ["genre", "bpm", "key", "autoset_styles", "rating"] if file_written else [],
         "output": output,
     }
 
