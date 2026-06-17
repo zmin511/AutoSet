@@ -2,6 +2,13 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.12
+
+- Tags: AutoSet now writes genre/style, BPM, key and rating changes back to supported audio files, not only to Engine DB.
+- Tags: Added MP3/FLAC/M4A tag writing via mutagen with warnings for unsupported formats.
+- UI: Tag write warnings are shown when Engine DB was updated but the audio file could not be updated.
+- Waveform: Follow mode keeps overview seek from disabling follow behavior.
+
 ## 1.5.6
 
 - Tags UI: галочка `С подпапками` перенесена в строку добавления тега.
