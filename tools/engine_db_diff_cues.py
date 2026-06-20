@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Read-only Engine DJ cue/loop storage diff tool for AutoSet.
 
@@ -28,6 +28,11 @@ import sys
 import zlib
 from pathlib import Path
 from typing import Any
+
+from engine_cue_loop_codec import (
+    parse_loops as codec_parse_loops,
+    parse_quick_cues as codec_parse_quick_cues,
+)
 
 CANDIDATE_TERMS = ("cue", "loop", "marker", "performance", "beat")
 ALWAYS_TABLES = {"PerformanceData", "Track"}
@@ -212,36 +217,19 @@ def parse_quick_cues(blob: bytes) -> dict[str, Any] | None:
     decoded = decode_engine_zlib(blob)
     if not decoded:
         return None
-    raw = zlib.decompress(blob[4:])
-    if len(raw) < 8:
-        return {"zlib": decoded}
     try:
-        slots = int(struct.unpack(">Q", raw[:8])[0])
+        cues = codec_parse_quick_cues(blob)
     except Exception:
         return {"zlib": decoded}
-    items: list[dict[str, Any]] = []
-    offset = 8
-    if 0 < slots <= 32:
-        for slot in range(1, slots + 1):
-            if offset >= len(raw):
-                break
-            label_len = raw[offset]
-            offset += 1
-            if offset + label_len > len(raw):
-                break
-            label = raw[offset : offset + label_len].decode("utf-8", "replace") if label_len else ""
-            offset += label_len
-            if offset + 8 > len(raw):
-                break
-            pos_raw = struct.unpack(">d", raw[offset : offset + 8])[0]
-            offset += 8
-            color = None
-            if offset + 4 <= len(raw):
-                color = struct.unpack(">I", raw[offset : offset + 4])[0]
-                offset += 4
-            items.append({"slot": slot, "label": label, "pos_raw": pos_raw, "color": color})
-    return {"zlib": decoded, "slots": slots, "items": items[:16]}
-
+    return {
+        "zlib": decoded,
+        "slots": cues.slot_count,
+        "trailing_len": len(cues.trailing_bytes),
+        "items": [
+            {"slot": item.slot, "label": item.label, "pos_raw": item.pos_raw, "color": item.color}
+            for item in cues.slots[:16]
+        ],
+    }
 
 def parse_beat_data(blob: bytes) -> dict[str, Any] | None:
     decoded = decode_engine_zlib(blob)
@@ -258,47 +246,26 @@ def parse_beat_data(blob: bytes) -> dict[str, Any] | None:
 
 
 def parse_loops(blob: bytes) -> dict[str, Any] | None:
-    if len(blob) < 8:
-        return None
     try:
-        slots = int(struct.unpack("<I", blob[:4])[0])
-        unknown = int(struct.unpack("<I", blob[4:8])[0])
+        loops = codec_parse_loops(blob)
     except Exception:
         return None
-    items: list[dict[str, Any]] = []
-    offset = 8
-    if 0 < slots <= 32:
-        for slot in range(1, slots + 1):
-            if offset >= len(blob):
-                break
-            label_len = blob[offset]
-            offset += 1
-            if offset + label_len > len(blob):
-                break
-            label = blob[offset : offset + label_len].decode("utf-8", "replace") if label_len else ""
-            offset += label_len
-            if offset + 16 > len(blob):
-                break
-            start_raw = struct.unpack("<d", blob[offset : offset + 8])[0]
-            end_raw = struct.unpack("<d", blob[offset + 8 : offset + 16])[0]
-            offset += 16
-            enabled = []
-            color = None
-            if offset + 6 <= len(blob):
-                enabled = [int(blob[offset]), int(blob[offset + 1])]
-                offset += 2
-                color = struct.unpack(">I", blob[offset : offset + 4])[0]
-                offset += 4
-            items.append({
-                "slot": slot,
-                "label": label,
-                "start_raw": start_raw,
-                "end_raw": end_raw,
-                "enabled_bytes": enabled,
-                "color": color,
-            })
-    return {"slots_le_u32": slots, "unknown_le_u32": unknown, "items": items[:16]}
-
+    return {
+        "slots_le_u32": loops.slot_count,
+        "unknown_le_u32": loops.unknown_u32,
+        "trailing_len": len(loops.trailing_bytes),
+        "items": [
+            {
+                "slot": item.slot,
+                "label": item.label,
+                "start_raw": item.start_raw,
+                "end_raw": item.end_raw,
+                "enabled_bytes": [item.enabled_1, item.enabled_2],
+                "color": item.color,
+            }
+            for item in loops.slots[:16]
+        ],
+    }
 
 def summarize_blob(blob: bytes, field_name: str = "") -> dict[str, Any]:
     out: dict[str, Any] = {
