@@ -439,6 +439,81 @@
       cursor: ew-resize;
       border-top: 1px solid rgba(255,255,255,.08);
     }
+    .track-prep {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255,255,255,.08);
+      display: grid;
+      gap: 7px;
+    }
+    .track-prep-head, .track-prep-row, .track-prep-actions {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+    .track-prep-title {
+      color: #dff8ec;
+      font-size: 12px;
+      font-weight: 720;
+      margin-right: auto;
+    }
+    .track-prep label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin: 0;
+      font-size: 11px;
+    }
+    .track-prep select {
+      width: auto;
+      height: 30px;
+      min-height: 30px;
+      padding: 4px 22px 4px 8px;
+      font-size: 11px;
+    }
+    .track-prep button {
+      min-height: 30px;
+      height: 30px;
+      padding: 4px 8px;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .track-prep button.primary {
+      font-weight: 720;
+    }
+    .track-prep-list {
+      min-height: 24px;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .prep-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 26px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 3px 4px 3px 8px;
+      background: rgba(255,255,255,.035);
+      color: #dbe7ee;
+    }
+    .prep-item.mark { border-color: rgba(55,197,143,.52); }
+    .prep-item.loop { border-color: rgba(255,138,61,.58); }
+    .prep-delete {
+      width: 20px;
+      min-width: 20px;
+      padding: 0;
+      color: var(--muted);
+    }
+    .track-prep-status {
+      color: var(--muted);
+      font-size: 11px;
+      min-height: 14px;
+    }
     .playerbar {
       grid-area: player;
       display: flex;
@@ -588,6 +663,45 @@
           <input id="waveScroll" type="range" min="0" max="1000" value="0" title="Прокрутка zoom-участка waveform">
         </div>
         <canvas id="waveZoomCanvas" width="1024" height="128"></canvas>
+        <div class="track-prep" id="trackPrep">
+          <div class="track-prep-head">
+            <div class="track-prep-title">Track Prep</div>
+            <label for="trackPrepSnap">Snap
+              <select id="trackPrepSnap">
+                <option value="beat">Beat</option>
+                <option value="bar">Bar</option>
+                <option value="phrase16">16 beats</option>
+                <option value="phrase32">32 beats</option>
+              </select>
+            </label>
+            <label for="trackPrepLoopType">Loop
+              <select id="trackPrepLoopType">
+                <option value="OUTRO_LOOP">Outro</option>
+                <option value="EMERGENCY_LOOP">Emergency</option>
+              </select>
+            </label>
+          </div>
+          <div class="track-prep-row">
+            <button type="button" data-prep-mark="MIX_IN">MIX IN</button>
+            <button type="button" data-prep-mark="VOCAL_IN">VOCAL</button>
+            <button type="button" data-prep-mark="DROP">DROP</button>
+            <button type="button" data-prep-mark="BREAK">BREAK</button>
+            <button type="button" data-prep-mark="MIX_OUT">MIX OUT</button>
+            <button type="button" data-prep-mark="OUTRO">OUTRO</button>
+          </div>
+          <div class="track-prep-row">
+            <button type="button" data-prep-loop="4">Loop 4</button>
+            <button type="button" data-prep-loop="8">Loop 8</button>
+            <button type="button" data-prep-loop="16">Loop 16</button>
+            <button type="button" data-prep-loop="32">Loop 32</button>
+          </div>
+          <div class="track-prep-actions">
+            <button class="primary" type="button" id="trackPrepSave">Save Marks</button>
+            <button type="button" id="trackPrepReset">Reset Marks</button>
+            <span class="track-prep-status" id="trackPrepStatus"></span>
+          </div>
+          <div class="track-prep-list" id="trackPrepList"></div>
+        </div>
       </div>
     </div>
 
@@ -1368,6 +1482,25 @@
     window.__waveLoops = [];
     window.__waveRGB = null;
     window.__waveDetail = null;
+    const PREP_MARKS = [
+      { type: 'MIX_IN', label: 'MIX IN' },
+      { type: 'VOCAL_IN', label: 'VOCAL' },
+      { type: 'DROP', label: 'DROP' },
+      { type: 'BREAK', label: 'BREAK' },
+      { type: 'MIX_OUT', label: 'MIX OUT' },
+      { type: 'OUTRO', label: 'OUTRO' }
+    ];
+    const PREP_MARK_COLORS = {
+      MIX_IN: '#37c58f',
+      VOCAL_IN: '#49a0ec',
+      DROP: '#f5c84b',
+      BREAK: '#bd7deb',
+      MIX_OUT: '#ef6b73',
+      OUTRO: '#ff8a3d'
+    };
+    let trackPrep = { marks: [], loops: [], exists: false, source: 'manual', confidence: 1 };
+    let trackPrepSnap = 'beat';
+    let trackPrepDirty = false;
     let waveDragActive = false;
     let waveDragMode = '';
     let waveLastFrac = null;
@@ -1405,6 +1538,475 @@
       const a = Math.max(0, Math.min(255, Number(arr[i]) || 0));
       const b = Math.max(0, Math.min(255, Number(arr[j]) || 0));
       return a + (b - a) * f;
+    }
+
+    function prepMarkLabel(type) {
+      const item = PREP_MARKS.find(m => m.type === String(type || '').toUpperCase());
+      return item ? item.label : String(type || '').replace(/_/g, ' ');
+    }
+
+    function prepStatus(text, bad = false) {
+      const el = $('trackPrepStatus');
+      if (!el) return;
+      el.textContent = text || '';
+      el.className = `track-prep-status ${bad ? 'bad' : ''}`;
+    }
+
+    function currentPrepDuration() {
+      const detailDuration = Number(window.__waveDetail?.duration_sec || 0);
+      if (Number.isFinite(detailDuration) && detailDuration > 0) return detailDuration;
+      const playerDuration = Number($('player')?.duration || 0);
+      if (Number.isFinite(playerDuration) && playerDuration > 0) return playerDuration;
+      const trackDuration = Number(selectedTrack?.length || 0);
+      return Number.isFinite(trackDuration) && trackDuration > 0 ? trackDuration : 0;
+    }
+
+    function currentPrepBpm() {
+      const detailBpm = Number(window.__waveDetail?.bpm || 0);
+      if (Number.isFinite(detailBpm) && detailBpm > 0) return detailBpm;
+      const trackBpm = Number(selectedTrack?.bpm || 0);
+      return Number.isFinite(trackBpm) && trackBpm > 0 ? trackBpm : 0;
+    }
+
+    function clampTrackTime(value) {
+      const duration = currentPrepDuration();
+      const max = duration > 0 ? duration : 24 * 60 * 60;
+      const time = Number(value);
+      return Number.isFinite(time) ? Math.max(0, Math.min(max, time)) : 0;
+    }
+
+    function median(values) {
+      const clean = values.filter(v => Number.isFinite(v)).sort((a, b) => a - b);
+      if (!clean.length) return 0;
+      return clean[Math.floor(clean.length / 2)];
+    }
+
+    function estimateBeatSeconds() {
+      const bpm = currentPrepBpm();
+      if (bpm > 0) return 60 / bpm;
+      const beats = Array.isArray(window.__waveDetail?.beat_grid) ? window.__waveDetail.beat_grid : [];
+      const times = beats.map(b => Number(b?.time_sec)).filter(t => Number.isFinite(t)).sort((a, b) => a - b);
+      const diffs = [];
+      for (let i = 1; i < Math.min(times.length, 80); i++) {
+        const diff = times[i] - times[i - 1];
+        if (diff > 0.15 && diff < 2.5) diffs.push(diff);
+      }
+      return median(diffs);
+    }
+
+    function snapUnitBeats(snap = trackPrepSnap) {
+      if (snap === 'bar') return 4;
+      if (snap === 'phrase16') return 16;
+      if (snap === 'phrase32') return 32;
+      return 1;
+    }
+
+    function snapTimeToGrid(value, snap = trackPrepSnap) {
+      const time = clampTrackTime(value);
+      const duration = currentPrepDuration();
+      const beats = Array.isArray(window.__waveDetail?.beat_grid) ? window.__waveDetail.beat_grid : [];
+      const unitBeats = snapUnitBeats(snap);
+      const candidates = beats
+        .filter(b => {
+          const beatNo = Number(b?.beat || 0);
+          if (!Number.isFinite(Number(b?.time_sec))) return false;
+          if (unitBeats === 1) return true;
+          if (unitBeats === 4) return !!b?.is_bar_start || ((beatNo - 1) % 4 === 0);
+          return ((beatNo - 1) % unitBeats) === 0 || (unitBeats === 16 && !!b?.is_phrase_start);
+        })
+        .map(b => Number(b.time_sec));
+      if (candidates.length) {
+        let best = candidates[0];
+        let bestDist = Math.abs(time - best);
+        for (const candidate of candidates) {
+          const dist = Math.abs(time - candidate);
+          if (dist < bestDist) {
+            best = candidate;
+            bestDist = dist;
+          }
+        }
+        return clampTrackTime(best);
+      }
+      const beatSec = estimateBeatSeconds();
+      if (beatSec > 0) {
+        const step = beatSec * unitBeats;
+        return clampTrackTime(Math.round(time / step) * step);
+      }
+      return duration ? Math.min(duration, time) : time;
+    }
+
+    function normalizePrepMark(mark) {
+      const type = String(mark?.type || '').toUpperCase();
+      if (!PREP_MARKS.some(item => item.type === type)) return null;
+      const time = clampTrackTime(mark?.time_sec);
+      const raw = mark?.raw_time_sec == null ? time : clampTrackTime(mark.raw_time_sec);
+      return {
+        id: type.toLowerCase(),
+        type,
+        name: mark?.name || prepMarkLabel(type),
+        time_sec: Number(time.toFixed(3)),
+        raw_time_sec: Number(raw.toFixed(3)),
+        snap: mark?.snap || trackPrepSnap,
+        source: 'manual',
+        confidence: Number(mark?.confidence ?? 1)
+      };
+    }
+
+    function normalizePrepLoop(loop) {
+      const start = clampTrackTime(loop?.start_sec);
+      const end = clampTrackTime(loop?.end_sec);
+      if (!(end > start)) return null;
+      const lengthBeats = Math.max(0, Math.min(512, Number(loop?.length_beats || 0)));
+      const type = String(loop?.type || 'OUTRO_LOOP').toUpperCase() === 'EMERGENCY_LOOP' ? 'EMERGENCY_LOOP' : 'OUTRO_LOOP';
+      return {
+        id: String(loop?.id || `${type.toLowerCase()}_${Math.round(start * 1000)}_${lengthBeats || 'manual'}`),
+        type,
+        name: loop?.name || (type === 'EMERGENCY_LOOP' ? `Emergency Loop ${lengthBeats}` : `Loop ${lengthBeats}`),
+        start_sec: Number(start.toFixed(3)),
+        end_sec: Number(end.toFixed(3)),
+        raw_start_sec: Number((loop?.raw_start_sec == null ? start : clampTrackTime(loop.raw_start_sec)).toFixed(3)),
+        length_beats: lengthBeats,
+        snap: loop?.snap || trackPrepSnap,
+        source: 'manual',
+        confidence: Number(loop?.confidence ?? 1)
+      };
+    }
+
+    function resetTrackPrepState() {
+      trackPrep = { marks: [], loops: [], exists: false, source: 'manual', confidence: 1 };
+      trackPrepDirty = false;
+      renderTrackPrepList();
+      syncTrackPrepControls();
+    }
+
+    function renderTrackPrepList() {
+      const box = $('trackPrepList');
+      if (!box) return;
+      const marks = [...(trackPrep.marks || [])].sort((a, b) => {
+        const ai = PREP_MARKS.findIndex(m => m.type === a.type);
+        const bi = PREP_MARKS.findIndex(m => m.type === b.type);
+        return ai - bi;
+      });
+      const loops = [...(trackPrep.loops || [])].sort((a, b) => Number(a.start_sec) - Number(b.start_sec));
+      const rows = [];
+      for (const mark of marks) {
+        rows.push(`<span class="prep-item mark">${esc(prepMarkLabel(mark.type))} ${esc(fmtTime(mark.time_sec))}<button class="prep-delete" type="button" data-prep-delete="mark" data-id="${esc(mark.type)}" title="Delete">x</button></span>`);
+      }
+      for (const loop of loops) {
+        const role = loop.type === 'EMERGENCY_LOOP' ? 'Emergency' : 'Outro';
+        rows.push(`<span class="prep-item loop">${esc(role)} ${esc(loop.length_beats || '')} ${esc(fmtTime(loop.start_sec))}-${esc(fmtTime(loop.end_sec))}<button class="prep-delete" type="button" data-prep-delete="loop" data-id="${esc(loop.id)}" title="Delete">x</button></span>`);
+      }
+      box.innerHTML = rows.length ? rows.join('') : '<span>No manual marks</span>';
+    }
+
+    function syncTrackPrepControls() {
+      const ready = !!selectedTrack?.id && !!window.__waveDetail;
+      const prep = $('trackPrep');
+      if (!prep) return;
+      prep.querySelectorAll('button, select').forEach(el => {
+        el.disabled = !ready;
+      });
+      const snap = $('trackPrepSnap');
+      if (snap && snap.value !== trackPrepSnap) snap.value = trackPrepSnap;
+      if (!ready) prepStatus(selectedTrack?.id ? 'Waveform loading...' : 'Select an Engine track');
+      else if (trackPrepDirty) prepStatus('Unsaved manual marks');
+      else if (trackPrep.exists) prepStatus('Manual marks loaded');
+      else prepStatus('No saved manual marks');
+    }
+
+    function refreshWaveDisplayItems() {
+      const detail = window.__waveDetail;
+      const duration = Number(detail?.duration_sec || 0);
+      const fracFor = (time) => duration > 0 ? Math.max(0, Math.min(1, Number(time) / duration)) : 0;
+      window.__waveMarkers = Array.isArray(detail?.beat_grid)
+        ? detail.beat_grid.map(b => ({
+            kind: 'beat',
+            pos_s: Number(b.time_sec),
+            pos_frac: fracFor(b.time_sec)
+          }))
+        : [];
+
+      const engineCues = Array.isArray(detail?.cues) ? detail.cues.map(c => {
+        const pos = Number(c?.time_sec);
+        return {
+          slot: c?.slot,
+          label: c?.name || 'Cue',
+          name: c?.name || 'Cue',
+          pos_s: pos,
+          time_sec: pos,
+          pos_frac: fracFor(pos),
+          color: c?.color || 'rgba(73,160,236,0.95)',
+          source: 'engine',
+          type: c?.type || 'cue'
+        };
+      }).filter(c => Number.isFinite(c.pos_frac)) : [];
+
+      const manualCues = (trackPrep.marks || []).map(mark => {
+        const pos = Number(mark.time_sec);
+        const label = mark.name || prepMarkLabel(mark.type);
+        return {
+          id: mark.id,
+          label,
+          name: label,
+          pos_s: pos,
+          time_sec: pos,
+          pos_frac: fracFor(pos),
+          color: PREP_MARK_COLORS[mark.type] || '#37c58f',
+          source: 'manual',
+          type: mark.type
+        };
+      }).filter(c => Number.isFinite(c.pos_frac));
+
+      window.__waveCues = [...engineCues, ...manualCues].sort((a, b) => Number(a.pos_s) - Number(b.pos_s));
+      window.__waveMarkers.push(...window.__waveCues.map(c => ({
+        kind: c.source === 'manual' ? 'prep' : 'cue',
+        pos_s: Number(c.pos_s),
+        pos_frac: Number(c.pos_frac)
+      })));
+
+      const engineLoops = Array.isArray(detail?.loops) ? detail.loops.map(l => {
+        const s = Number(l?.start_sec);
+        const e = Number(l?.end_sec);
+        return {
+          slot: l?.slot,
+          label: l?.name || 'Loop',
+          name: l?.name || 'Loop',
+          start_s: s,
+          end_s: e,
+          start_sec: s,
+          end_sec: e,
+          start_frac: fracFor(s),
+          end_frac: fracFor(e),
+          color: l?.color || 'rgba(255,138,61,0.82)',
+          source: 'engine',
+          type: l?.type || 'loop'
+        };
+      }).filter(l => Number.isFinite(l.start_frac) && Number.isFinite(l.end_frac)) : [];
+
+      const manualLoops = (trackPrep.loops || []).map(loop => {
+        const s = Number(loop.start_sec);
+        const e = Number(loop.end_sec);
+        return {
+          id: loop.id,
+          label: loop.name || 'Loop',
+          name: loop.name || 'Loop',
+          start_s: s,
+          end_s: e,
+          start_sec: s,
+          end_sec: e,
+          start_frac: fracFor(s),
+          end_frac: fracFor(e),
+          length_beats: loop.length_beats,
+          color: loop.type === 'EMERGENCY_LOOP' ? 'rgba(239,107,115,0.9)' : 'rgba(255,138,61,0.86)',
+          source: 'manual',
+          type: loop.type
+        };
+      }).filter(l => Number.isFinite(l.start_frac) && Number.isFinite(l.end_frac));
+
+      window.__waveLoops = [...engineLoops, ...manualLoops].sort((a, b) => Number(a.start_s) - Number(b.start_s));
+    }
+
+    function redrawTrackPrep() {
+      refreshWaveDisplayItems();
+      renderTrackPrepList();
+      syncTrackPrepControls();
+      if (lastWavePeaks) drawWaveform(lastWavePeaks);
+      drawZoomWaveform();
+    }
+
+    async function loadTrackPrepMarks(trackId) {
+      resetTrackPrepState();
+      if (!trackId) return;
+      try {
+        const res = await fetch(`/api/track_marks?track_id=${encodeURIComponent(trackId)}`);
+        const data = await res.json();
+        if (lastWaveTrackId !== Number(trackId)) return;
+        if (!data?.ok) {
+          prepStatus('Could not load manual marks', true);
+          return;
+        }
+        trackPrep = {
+          marks: (data.marks || []).map(normalizePrepMark).filter(Boolean),
+          loops: (data.loops || []).map(normalizePrepLoop).filter(Boolean),
+          exists: !!data.exists,
+          source: data.source || 'manual',
+          confidence: Number(data.confidence ?? 1)
+        };
+        trackPrepDirty = false;
+        syncTrackPrepControls();
+      } catch {
+        prepStatus('Could not load manual marks', true);
+      }
+    }
+
+    function normalizeTrackPrepForSave() {
+      trackPrep.marks = (trackPrep.marks || []).map(mark => {
+        const raw = mark.raw_time_sec == null ? mark.time_sec : mark.raw_time_sec;
+        const snapped = snapTimeToGrid(raw, mark.snap || trackPrepSnap);
+        return normalizePrepMark({ ...mark, time_sec: snapped, raw_time_sec: raw }) || mark;
+      });
+      const beatSec = estimateBeatSeconds();
+      trackPrep.loops = (trackPrep.loops || []).map(loop => {
+        const raw = loop.raw_start_sec == null ? loop.start_sec : loop.raw_start_sec;
+        const start = snapTimeToGrid(raw, loop.snap || trackPrepSnap);
+        const lengthBeats = Number(loop.length_beats || 0);
+        const end = beatSec > 0 && lengthBeats > 0 ? clampTrackTime(start + beatSec * lengthBeats) : loop.end_sec;
+        return normalizePrepLoop({ ...loop, start_sec: start, end_sec: end, raw_start_sec: raw }) || loop;
+      }).filter(Boolean);
+    }
+
+    function trackPrepPayload() {
+      const detail = window.__waveDetail || {};
+      return {
+        track_id: selectedTrack?.id,
+        file_path: detail.path || selectedTrack?.path || selectedTrack?.rel || '',
+        duration_sec: currentPrepDuration(),
+        bpm: currentPrepBpm() || detail.bpm || selectedTrack?.bpm || null,
+        marks: trackPrep.marks || [],
+        loops: trackPrep.loops || [],
+        source: 'manual',
+        confidence: 1
+      };
+    }
+
+    async function saveTrackPrepMarks() {
+      if (!selectedTrack?.id || !window.__waveDetail) return;
+      normalizeTrackPrepForSave();
+      redrawTrackPrep();
+      const btn = $('trackPrepSave');
+      if (btn) btn.disabled = true;
+      prepStatus('Saving manual marks...');
+      try {
+        const res = await fetch('/api/track_marks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(trackPrepPayload())
+        });
+        const data = await res.json();
+        if (!data?.ok) throw new Error(data?.error || 'Save failed');
+        trackPrep = {
+          marks: (data.marks || []).map(normalizePrepMark).filter(Boolean),
+          loops: (data.loops || []).map(normalizePrepLoop).filter(Boolean),
+          exists: true,
+          source: data.source || 'manual',
+          confidence: Number(data.confidence ?? 1)
+        };
+        trackPrepDirty = false;
+        redrawTrackPrep();
+        prepStatus('Manual marks saved');
+      } catch (err) {
+        prepStatus(String(err), true);
+      } finally {
+        syncTrackPrepControls();
+      }
+    }
+
+    async function resetTrackPrepMarks() {
+      if (!selectedTrack?.id) return;
+      if (!window.confirm('Reset manual marks and loops for this track?')) return;
+      const btn = $('trackPrepReset');
+      if (btn) btn.disabled = true;
+      try {
+        await fetch(`/api/track_marks?track_id=${encodeURIComponent(selectedTrack.id)}`, { method: 'DELETE' });
+      } catch {}
+      resetTrackPrepState();
+      refreshWaveDisplayItems();
+      if (lastWavePeaks) drawWaveform(lastWavePeaks);
+      drawZoomWaveform();
+      prepStatus('Manual marks reset');
+    }
+
+    function addTrackPrepMark(type) {
+      if (!window.__waveDetail) return;
+      const markType = String(type || '').toUpperCase();
+      if (!PREP_MARKS.some(item => item.type === markType)) return;
+      const player = $('player');
+      const raw = clampTrackTime(Number(player?.currentTime || 0));
+      const snapped = snapTimeToGrid(raw, trackPrepSnap);
+      const existing = (trackPrep.marks || []).findIndex(mark => mark.type === markType);
+      if (existing >= 0 && !window.confirm(`${prepMarkLabel(markType)} already exists. Replace it?`)) return;
+      const mark = normalizePrepMark({
+        type: markType,
+        name: prepMarkLabel(markType),
+        time_sec: snapped,
+        raw_time_sec: raw,
+        snap: trackPrepSnap,
+        confidence: 1
+      });
+      if (!mark) return;
+      if (existing >= 0) trackPrep.marks.splice(existing, 1, mark);
+      else trackPrep.marks.push(mark);
+      trackPrepDirty = true;
+      redrawTrackPrep();
+    }
+
+    function addTrackPrepLoop(lengthBeats) {
+      if (!window.__waveDetail) return;
+      const beats = Math.max(1, Math.min(512, Number(lengthBeats) || 0));
+      const beatSec = estimateBeatSeconds();
+      if (!(beatSec > 0)) {
+        prepStatus('BPM or beat-grid is required for loops', true);
+        return;
+      }
+      const player = $('player');
+      const raw = clampTrackTime(Number(player?.currentTime || 0));
+      const start = snapTimeToGrid(raw, trackPrepSnap);
+      const end = clampTrackTime(start + beatSec * beats);
+      if (!(end > start)) {
+        prepStatus('Loop end is outside track duration', true);
+        return;
+      }
+      const type = $('trackPrepLoopType')?.value === 'EMERGENCY_LOOP' ? 'EMERGENCY_LOOP' : 'OUTRO_LOOP';
+      const role = type === 'EMERGENCY_LOOP' ? 'Emergency Loop' : 'Loop';
+      const loop = normalizePrepLoop({
+        id: `${type.toLowerCase()}_${beats}_${Math.round(start * 1000)}`,
+        type,
+        name: `${role} ${beats}`,
+        start_sec: start,
+        end_sec: end,
+        raw_start_sec: raw,
+        length_beats: beats,
+        snap: trackPrepSnap,
+        confidence: 1
+      });
+      if (!loop) return;
+      trackPrep.loops.push(loop);
+      trackPrepDirty = true;
+      redrawTrackPrep();
+    }
+
+    function deleteTrackPrepItem(kind, id) {
+      if (kind === 'mark') {
+        trackPrep.marks = (trackPrep.marks || []).filter(mark => mark.type !== id);
+      } else if (kind === 'loop') {
+        trackPrep.loops = (trackPrep.loops || []).filter(loop => loop.id !== id);
+      }
+      trackPrepDirty = true;
+      redrawTrackPrep();
+    }
+
+    function wireTrackPrepControls() {
+      if (window.__trackPrepWired) return;
+      window.__trackPrepWired = true;
+      document.querySelectorAll('[data-prep-mark]').forEach(btn => {
+        btn.addEventListener('click', () => addTrackPrepMark(btn.dataset.prepMark));
+      });
+      document.querySelectorAll('[data-prep-loop]').forEach(btn => {
+        btn.addEventListener('click', () => addTrackPrepLoop(btn.dataset.prepLoop));
+      });
+      const snap = $('trackPrepSnap');
+      if (snap) snap.addEventListener('change', () => {
+        trackPrepSnap = snap.value || 'beat';
+        syncTrackPrepControls();
+      });
+      $('trackPrepSave')?.addEventListener('click', saveTrackPrepMarks);
+      $('trackPrepReset')?.addEventListener('click', resetTrackPrepMarks);
+      $('trackPrepList')?.addEventListener('click', (event) => {
+        const btn = event.target.closest('[data-prep-delete]');
+        if (!btn) return;
+        deleteTrackPrepItem(btn.dataset.prepDelete, btn.dataset.id || '');
+      });
+      syncTrackPrepControls();
     }
 
     function updateFollowWaveWindow() {
@@ -1498,6 +2100,9 @@
           } else if (kind === 'cue') {
             ctx.strokeStyle = 'rgba(30,110,200,0.72)';
             ctx.lineWidth = 2;
+          } else if (kind === 'prep') {
+            ctx.strokeStyle = 'rgba(55,197,143,0.88)';
+            ctx.lineWidth = 2;
           } else if (kind === 'loop') {
             ctx.strokeStyle = 'rgba(236,196,76,0.95)';
             ctx.lineWidth = 2;
@@ -1580,8 +2185,10 @@
           }
 
           // Draw label pill.
-          ctx.fillStyle = 'rgba(73,160,236,0.22)';
-          ctx.strokeStyle = 'rgba(73,160,236,0.55)';
+          const manualCue = cue?.source === 'manual';
+          const cueColor = cue?.color || (manualCue ? 'rgba(55,197,143,0.9)' : 'rgba(73,160,236,0.95)');
+          ctx.fillStyle = manualCue ? 'rgba(55,197,143,0.18)' : 'rgba(73,160,236,0.22)';
+          ctx.strokeStyle = cueColor;
           ctx.lineWidth = 1;
           ctx.beginPath();
           roundRect(ctx, pillLeft, cueTop, boxW, boxH, 6 * dpr);
@@ -1615,8 +2222,9 @@
           const x2 = Math.floor(rightFrac * (w - 1)) + 0.5;
           const yTop = waveBase + 1;
           const yBot = h - 1;
-          ctx.fillStyle = 'rgba(255,138,61,0.18)';
-          ctx.strokeStyle = 'rgba(255,138,61,0.70)';
+          const manualLoop = loop?.source === 'manual';
+          ctx.fillStyle = manualLoop ? 'rgba(255,138,61,0.24)' : 'rgba(255,138,61,0.18)';
+          ctx.strokeStyle = loop?.color || 'rgba(255,138,61,0.70)';
           ctx.lineWidth = 1;
           ctx.fillRect(x1, yTop, Math.max(1, x2 - x1), yBot - yTop);
           ctx.beginPath();
@@ -1873,6 +2481,10 @@
       lastWaveTrackId = trackId;
       lastWavePeaks = null;
       window.__waveDetail = null;
+      window.__waveMarkers = [];
+      window.__waveCues = [];
+      window.__waveLoops = [];
+      resetTrackPrepState();
       waveZoom = DEFAULT_WAVE_ZOOM;
       waveOffsetSec = 0;
       followPlayhead = true;
@@ -1884,6 +2496,7 @@
       try {
         wirePlayerBar();
         wireWaveformDetailControls();
+        wireTrackPrepControls();
         const res = await fetch(`/api/track_waveform_detail?track_id=${encodeURIComponent(trackId)}`);
         const data = await res.json();
         if (lastWaveTrackId !== trackId) return;
@@ -1896,43 +2509,8 @@
         };
         const peaks = overview?.peaks || null;
         window.__waveRGB = overview?.rgb || null;
-        const duration = Number(data?.duration_sec || 0);
-        window.__waveMarkers = Array.isArray(data?.beat_grid)
-          ? data.beat_grid.map(b => ({
-              kind: 'beat',
-              pos_s: Number(b.time_sec),
-              pos_frac: duration > 0 ? Math.max(0, Math.min(1, Number(b.time_sec) / duration)) : 0
-            }))
-          : [];
-        if (Array.isArray(data?.cues)) {
-          window.__waveMarkers.push(...data.cues.map(c => ({
-            kind: 'cue',
-            pos_s: Number(c.time_sec),
-            pos_frac: duration > 0 ? Math.max(0, Math.min(1, Number(c.time_sec) / duration)) : 0
-          })));
-        }
-        if (Array.isArray(data?.cues)) {
-          window.__waveCues = data.cues.map(c => {
-            const pos = Number(c?.time_sec);
-            const len = Number(data?.duration_sec) || 0;
-            const frac = (len > 0 && Number.isFinite(pos)) ? Math.max(0, Math.min(1, pos / len)) : null;
-            return { slot: c?.slot, label: c?.name, pos_s: pos, pos_frac: frac };
-          }).filter(c => Number.isFinite(c.pos_frac));
-        } else {
-          window.__waveCues = [];
-        }
-        if (Array.isArray(data?.loops) && Number(data?.duration_sec)) {
-          const len = Number(data.duration_sec) || 0;
-          window.__waveLoops = data.loops.map(l => {
-            const s = Number(l?.start_sec);
-            const e = Number(l?.end_sec);
-            const a = (len > 0 && Number.isFinite(s)) ? Math.max(0, Math.min(1, s / len)) : null;
-            const b = (len > 0 && Number.isFinite(e)) ? Math.max(0, Math.min(1, e / len)) : null;
-            return { slot: l?.slot, label: l?.name, start_s: s, end_s: e, start_frac: a, end_frac: b };
-          }).filter(l => Number.isFinite(l.start_frac) && Number.isFinite(l.end_frac));
-        } else {
-          window.__waveLoops = [];
-        }
+        await loadTrackPrepMarks(trackId);
+        refreshWaveDisplayItems();
         if (!Array.isArray(peaks) || !peaks.length) return;
         lastWavePeaks = peaks;
         $('waveBox').hidden = false;
@@ -1940,9 +2518,13 @@
         const p = data?.source || {};
         const cueCount = Array.isArray(data?.cues) ? data.cues.length : 0;
         const loopCount = Array.isArray(data?.loops) ? data.loops.length : 0;
+        const prepCount = (trackPrep.marks || []).length;
+        const prepLoopCount = (trackPrep.loops || []).length;
         const markCounts = [];
         if (cueCount) markCounts.push(`cues:${cueCount}`);
         if (loopCount) markCounts.push(`loops:${loopCount}`);
+        if (prepCount) markCounts.push(`prep:${prepCount}`);
+        if (prepLoopCount) markCounts.push(`prep loops:${prepLoopCount}`);
         if (p.beat_grid) markCounts.push(`beats:${p.beat_grid}`);
         const marksText = markCounts.length ? ` · ${markCounts.join(' ')}` : '';
         $('waveMeta').textContent = energy == null ? `${peaks.length} pts${marksText}` : `${peaks.length} pts · energy ${energy}${marksText}`;
@@ -2265,34 +2847,36 @@
       }
       ctx.lineWidth = 1;
 
-      const cues = Array.isArray(detail.cues) ? detail.cues : [];
+      const cues = Array.isArray(window.__waveCues) ? window.__waveCues : [];
       ctx.font = `${Math.max(10, Math.floor(11 * dpr))}px Segoe UI, Inter, Arial, sans-serif`;
       ctx.textBaseline = 'top';
       for (const cue of cues) {
-        const t = Number(cue.time_sec);
+        const t = Number(cue.time_sec ?? cue.pos_s);
         if (!Number.isFinite(t) || t < start || t > end) continue;
         const x = Math.floor(timeToX(t)) + 0.5;
-        ctx.strokeStyle = cue.color || 'rgba(73,160,236,0.95)';
+        const manualCue = cue.source === 'manual';
+        ctx.strokeStyle = cue.color || (manualCue ? 'rgba(55,197,143,0.95)' : 'rgba(73,160,236,0.95)');
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
         ctx.stroke();
-        const label = cue.name || 'Cue';
+        const label = cue.name || cue.label || 'Cue';
         ctx.fillStyle = 'rgba(8,12,16,0.82)';
         ctx.fillRect(Math.max(0, x + 4), 4 * dpr, Math.min(120 * dpr, ctx.measureText(label).width + 10 * dpr), 18 * dpr);
         ctx.fillStyle = '#e7f0f5';
         ctx.fillText(label, Math.max(2 * dpr, x + 8), 7 * dpr);
       }
 
-      const loops = Array.isArray(detail.loops) ? detail.loops : [];
+      const loops = Array.isArray(window.__waveLoops) ? window.__waveLoops : [];
       for (const loop of loops) {
-        const a = Number(loop.start_sec);
-        const b = Number(loop.end_sec);
+        const a = Number(loop.start_sec ?? loop.start_s);
+        const b = Number(loop.end_sec ?? loop.end_s);
         if (!Number.isFinite(a) || !Number.isFinite(b) || b < start || a > end) continue;
         const x1 = Math.max(0, Math.min(w, timeToX(a)));
         const x2 = Math.max(0, Math.min(w, timeToX(b)));
-        ctx.fillStyle = 'rgba(255,138,61,0.18)';
+        const manualLoop = loop.source === 'manual';
+        ctx.fillStyle = manualLoop ? 'rgba(255,138,61,0.24)' : 'rgba(255,138,61,0.18)';
         ctx.strokeStyle = loop.color || 'rgba(255,138,61,0.82)';
         ctx.fillRect(x1, 0, Math.max(1, x2 - x1), h);
         ctx.strokeRect(x1, 0, Math.max(1, x2 - x1), h);

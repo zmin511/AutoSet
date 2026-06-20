@@ -2,6 +2,12 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.13
+
+- Track Prep: добавлена ручная разметка MIX_IN/VOCAL_IN/DROP/BREAK/MIX_OUT/OUTRO и loop 4/8/16/32 поверх overview/zoom waveform.
+- Track Prep: ручные marks/loops сохраняются во внутренние JSON-файлы `set_app/track_marks`, без записи в Engine DB и без изменения аудиофайлов.
+- API: добавлены `GET/POST/DELETE /api/track_marks` для чтения, сохранения и удаления внутренней разметки.
+
 ## 1.5.12
 
 - Tags: AutoSet now writes genre/style, BPM, key and rating changes back to supported audio files, not only to Engine DB.

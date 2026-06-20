@@ -1,3 +1,4 @@
+import hashlib
 import json
 import mimetypes
 import os
@@ -34,11 +35,12 @@ MUSIC_ROOT = DEFAULT_MUSIC_ROOT
 SETS_DIR = DEFAULT_SETS_DIR
 DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
+TRACK_MARKS_DIR = APP_DIR / "track_marks"
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.12"
+APP_VERSION = "1.5.13"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -1068,6 +1070,228 @@ def get_track_waveform_detail(track_id):
             "checked_tables": checked,
         },
     }
+
+
+MANUAL_MARK_ORDER = ["MIX_IN", "VOCAL_IN", "DROP", "BREAK", "MIX_OUT", "OUTRO"]
+MANUAL_MARK_TYPES = set(MANUAL_MARK_ORDER)
+MANUAL_LOOP_TYPES = {"OUTRO_LOOP", "EMERGENCY_LOOP", "LOOP"}
+
+
+def _track_mark_meta(track_id):
+    track_id = int(track_id)
+    with open_db() as con:
+        row = con.execute(
+            """
+            SELECT id, title, artist, filename, length, bpmAnalyzed, bpm, path
+            FROM Track
+            WHERE id = ?
+            """,
+            (track_id,),
+        ).fetchone()
+    if not row:
+        raise ValueError("Track not found")
+
+    file_path = resolve_track_path(row["path"])
+    file_size = None
+    try:
+        candidate = Path(file_path)
+        if file_path and candidate.exists() and candidate.is_file():
+            file_size = int(candidate.stat().st_size)
+    except OSError:
+        file_size = None
+    bpm = row["bpmAnalyzed"] if row["bpmAnalyzed"] is not None else row["bpm"]
+    return {
+        "track_id": track_id,
+        "title": row["title"] or row["filename"] or "",
+        "artist": row["artist"] or "",
+        "filename": row["filename"] or "",
+        "file_path": file_path,
+        "file_size": file_size,
+        "duration_sec": int(row["length"] or 0),
+        "bpm": None if bpm is None else round(float(bpm), 3),
+    }
+
+
+def _track_marks_file(meta):
+    track_id = int(meta["track_id"])
+    key_text = "|".join([
+        str(track_id),
+        str(meta.get("file_path") or "").casefold(),
+        str(meta.get("file_size") or ""),
+    ])
+    digest = hashlib.sha1(key_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return TRACK_MARKS_DIR / f"track_{track_id}_{digest}.json"
+
+
+def _track_marks_default(meta):
+    return {
+        "track_id": int(meta["track_id"]),
+        "file_path": meta.get("file_path") or "",
+        "file_size": meta.get("file_size"),
+        "duration_sec": int(meta.get("duration_sec") or 0),
+        "bpm": meta.get("bpm"),
+        "marks": [],
+        "loops": [],
+        "source": "manual",
+        "confidence": 1.0,
+    }
+
+
+def _clamp_float(value, lo, hi, default=0.0):
+    try:
+        number = float(value)
+    except Exception:
+        return default
+    if not _finite_number(number):
+        return default
+    return max(lo, min(hi, number))
+
+
+def _mark_label(mark_type):
+    labels = {
+        "MIX_IN": "MIX IN",
+        "VOCAL_IN": "VOCAL",
+        "DROP": "DROP",
+        "BREAK": "BREAK",
+        "MIX_OUT": "MIX OUT",
+        "OUTRO": "OUTRO",
+    }
+    return labels.get(mark_type, mark_type.replace("_", " "))
+
+
+def _sanitize_manual_marks(items, duration_sec):
+    duration = max(0.0, float(duration_sec or 0))
+    by_type = {}
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        mark_type = str(item.get("type") or "").strip().upper()
+        if mark_type not in MANUAL_MARK_TYPES:
+            continue
+        time_sec = _clamp_float(item.get("time_sec"), 0.0, duration or 24 * 60 * 60)
+        raw_time = item.get("raw_time_sec")
+        raw_time_sec = None
+        if raw_time is not None:
+            raw_time_sec = _clamp_float(raw_time, 0.0, duration or 24 * 60 * 60)
+        by_type[mark_type] = {
+            "id": mark_type.lower(),
+            "type": mark_type,
+            "name": str(item.get("name") or _mark_label(mark_type)).strip()[:48],
+            "time_sec": round(time_sec, 3),
+            "raw_time_sec": None if raw_time_sec is None else round(raw_time_sec, 3),
+            "snap": str(item.get("snap") or "").strip()[:24],
+            "source": "manual" if str(item.get("source") or "manual") != "auto" else "auto",
+            "confidence": round(_clamp_float(item.get("confidence", 1.0), 0.0, 1.0, 1.0), 3),
+        }
+    return [by_type[key] for key in MANUAL_MARK_ORDER if key in by_type]
+
+
+def _sanitize_manual_loops(items, duration_sec):
+    duration = max(0.0, float(duration_sec or 0))
+    out = []
+    for idx, item in enumerate(items or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        loop_type = str(item.get("type") or "OUTRO_LOOP").strip().upper()
+        if loop_type not in MANUAL_LOOP_TYPES:
+            loop_type = "OUTRO_LOOP"
+        start_sec = _clamp_float(item.get("start_sec"), 0.0, duration or 24 * 60 * 60)
+        end_sec = _clamp_float(item.get("end_sec"), 0.0, duration or 24 * 60 * 60)
+        if end_sec <= start_sec:
+            continue
+        try:
+            length_beats = int(item.get("length_beats") or 0)
+        except Exception:
+            length_beats = 0
+        length_beats = max(0, min(512, length_beats))
+        loop_id = str(item.get("id") or f"loop_{idx}_{length_beats or 'manual'}").strip()
+        loop_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", loop_id)[:64] or f"loop_{idx}"
+        out.append({
+            "id": loop_id,
+            "type": loop_type,
+            "name": str(item.get("name") or (f"Loop {length_beats}" if length_beats else "Loop")).strip()[:48],
+            "start_sec": round(start_sec, 3),
+            "end_sec": round(end_sec, 3),
+            "length_beats": length_beats,
+            "snap": str(item.get("snap") or "").strip()[:24],
+            "source": "manual" if str(item.get("source") or "manual") != "auto" else "auto",
+            "confidence": round(_clamp_float(item.get("confidence", 1.0), 0.0, 1.0, 1.0), 3),
+        })
+    return out
+
+
+def get_track_marks(track_id):
+    meta = _track_mark_meta(track_id)
+    storage = _track_marks_file(meta)
+    payload = _track_marks_default(meta)
+    exists = storage.exists()
+    if exists:
+        try:
+            raw = json.loads(storage.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                payload["marks"] = _sanitize_manual_marks(raw.get("marks") or [], payload["duration_sec"])
+                payload["loops"] = _sanitize_manual_loops(raw.get("loops") or [], payload["duration_sec"])
+                payload["source"] = "manual" if str(raw.get("source") or "manual") != "auto" else "auto"
+                payload["confidence"] = round(_clamp_float(raw.get("confidence", 1.0), 0.0, 1.0, 1.0), 3)
+                payload["saved_at"] = raw.get("saved_at")
+        except Exception as exc:
+            payload["warning"] = f"Could not read saved marks: {exc!r}"
+    payload.update({
+        "ok": True,
+        "exists": exists,
+        "storage_key": storage.stem,
+    })
+    return payload
+
+
+def write_track_marks(data):
+    if not isinstance(data, dict):
+        raise ValueError("JSON object expected")
+    meta = _track_mark_meta(data.get("track_id"))
+    payload = _track_marks_default(meta)
+    duration = _clamp_float(data.get("duration_sec", payload["duration_sec"]), 0.0, 24 * 60 * 60, payload["duration_sec"])
+    bpm = data.get("bpm", payload.get("bpm"))
+    try:
+        bpm_value = None if bpm in ("", None) else round(float(bpm), 3)
+    except Exception:
+        bpm_value = payload.get("bpm")
+    payload.update({
+        "duration_sec": round(duration, 3),
+        "bpm": bpm_value,
+        "marks": _sanitize_manual_marks(data.get("marks") or [], duration),
+        "loops": _sanitize_manual_loops(data.get("loops") or [], duration),
+        "source": "manual" if str(data.get("source") or "manual") != "auto" else "auto",
+        "confidence": round(_clamp_float(data.get("confidence", 1.0), 0.0, 1.0, 1.0), 3),
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    storage = _track_marks_file(meta)
+    TRACK_MARKS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = storage.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(storage)
+    payload.update({
+        "ok": True,
+        "exists": True,
+        "storage_key": storage.stem,
+    })
+    return payload
+
+
+def delete_track_marks(track_id):
+    meta = _track_mark_meta(track_id)
+    storage = _track_marks_file(meta)
+    deleted = False
+    if storage.exists():
+        storage.unlink()
+        deleted = True
+    payload = _track_marks_default(meta)
+    payload.update({
+        "ok": True,
+        "exists": False,
+        "deleted": deleted,
+        "storage_key": storage.stem,
+    })
+    return payload
 
 
 def get_track_performance(track_id):
@@ -2810,6 +3034,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": repr(exc)}, status=400)
             return
+        if parsed.path == "/api/track_marks":
+            qs = parse_qs(parsed.query)
+            track_id = qs.get("track_id", [""])[0]
+            try:
+                self.send_json(get_track_marks(track_id))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": repr(exc)}, status=400)
+            return
         if parsed.path == "/media":
             qs = parse_qs(parsed.query)
             try:
@@ -2821,7 +3053,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -2836,6 +3068,8 @@ class Handler(BaseHTTPRequestHandler):
                     "db_ready": DB_PATH.exists(),
                     "ready": DB_PATH.exists() and MUSIC_ROOT.exists() and BUILDER.exists(),
                 })
+            elif parsed_path == "/api/track_marks":
+                self.send_json(write_track_marks(data))
             elif parsed_path == "/api/build":
                 self.send_json(build_set(data["track_id"], data.get("role", "start"), data.get("minutes", 90), data.get("max_key_step", 3), data.get("bpm_window", 5), data.get("style_filter", [])))
             elif parsed_path == "/api/engine-playlist":
@@ -2888,6 +3122,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(update_genre(data["track_id"], data["genre"]))
         except Exception as exc:
             self.send_json({"ok": False, "error": repr(exc)}, status=500)
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/track_marks":
+            self.send_error(404)
+            return
+        qs = parse_qs(parsed.query)
+        track_id = qs.get("track_id", [""])[0]
+        try:
+            self.send_json(delete_track_marks(track_id))
+        except Exception as exc:
+            self.send_json({"ok": False, "error": repr(exc)}, status=400)
 
 
 def main():
