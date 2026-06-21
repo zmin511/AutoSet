@@ -698,6 +698,8 @@
           <div class="track-prep-actions">
             <button class="primary" type="button" id="trackPrepSave">Save Marks</button>
             <button type="button" id="trackPrepReset">Reset Marks</button>
+            <button type="button" id="trackPrepExport">Export to Engine DJ</button>
+            <button type="button" id="trackPrepOverwrite" hidden>Overwrite Engine slots</button>
             <span class="track-prep-status" id="trackPrepStatus"></span>
           </div>
           <div class="track-prep-list" id="trackPrepList"></div>
@@ -1501,6 +1503,10 @@
     let trackPrep = { marks: [], loops: [], exists: false, source: 'manual', confidence: 1 };
     let trackPrepSnap = 'beat';
     let trackPrepDirty = false;
+    let trackPrepExportStatus = '';
+    let trackPrepExportBad = false;
+    let trackPrepExportConflict = false;
+    let trackPrepExportBusy = false;
     let waveDragActive = false;
     let waveDragMode = '';
     let waveLastFrac = null;
@@ -1550,6 +1556,20 @@
       if (!el) return;
       el.textContent = text || '';
       el.className = `track-prep-status ${bad ? 'bad' : ''}`;
+    }
+
+    function clearTrackPrepExportState() {
+      trackPrepExportStatus = '';
+      trackPrepExportBad = false;
+      trackPrepExportConflict = false;
+      trackPrepExportBusy = false;
+    }
+
+    function setTrackPrepExportStatus(text = '', bad = false, conflict = false) {
+      trackPrepExportStatus = text || '';
+      trackPrepExportBad = !!bad;
+      trackPrepExportConflict = !!conflict;
+      syncTrackPrepControls();
     }
 
     function currentPrepDuration() {
@@ -1675,6 +1695,7 @@
     function resetTrackPrepState() {
       trackPrep = { marks: [], loops: [], exists: false, source: 'manual', confidence: 1 };
       trackPrepDirty = false;
+      clearTrackPrepExportState();
       renderTrackPrepList();
       syncTrackPrepControls();
     }
@@ -1703,14 +1724,19 @@
       const ready = !!selectedTrack?.id && !!window.__waveDetail;
       const prep = $('trackPrep');
       if (!prep) return;
+      const overwrite = $('trackPrepOverwrite');
+      if (overwrite) overwrite.hidden = !trackPrepExportConflict;
       prep.querySelectorAll('button, select').forEach(el => {
-        el.disabled = !ready;
+        const exportButton = el.id === 'trackPrepExport' || el.id === 'trackPrepOverwrite';
+        el.disabled = !ready || (trackPrepExportBusy && exportButton);
       });
+      if (overwrite) overwrite.disabled = !ready || !trackPrepExportConflict || trackPrepExportBusy;
       const snap = $('trackPrepSnap');
       if (snap && snap.value !== trackPrepSnap) snap.value = trackPrepSnap;
       if (!ready) prepStatus(selectedTrack?.id ? 'Waveform loading...' : 'Select an Engine track');
       else if (trackPrepDirty) prepStatus('Unsaved manual marks');
-      else if (trackPrep.exists) prepStatus('Manual marks loaded');
+      else if (trackPrepExportStatus) prepStatus(trackPrepExportStatus, trackPrepExportBad);
+      else if (trackPrep.exists) prepStatus('AutoSet only');
       else prepStatus('No saved manual marks');
     }
 
@@ -1892,11 +1918,69 @@
           confidence: Number(data.confidence ?? 1)
         };
         trackPrepDirty = false;
+        trackPrepExportStatus = 'AutoSet only';
+        trackPrepExportBad = false;
+        trackPrepExportConflict = false;
         redrawTrackPrep();
         prepStatus('Manual marks saved');
       } catch (err) {
         prepStatus(String(err), true);
       } finally {
+        syncTrackPrepControls();
+      }
+    }
+
+    function trackPrepConflictMessage(conflicts) {
+      const first = Array.isArray(conflicts) ? conflicts[0] : null;
+      if (!first) return 'Conflict: cue slot already used';
+      const kind = first.type === 'loop' ? 'loop' : 'cue';
+      return `Conflict: ${kind} slot already used`;
+    }
+
+    function trackPrepExportError(data) {
+      const reason = data?.reason || data?.error || 'export_failed';
+      const labels = {
+        missing_db: 'Engine DB not found',
+        missing_track_marks: 'Save Marks before export',
+        empty_track_marks: 'No Track Prep marks to export',
+        missing_performance_data: 'Engine PerformanceData is missing',
+        db_locked: 'Engine DB is locked',
+        backup_failed: 'Could not create Engine DB backup',
+        codec_error: 'Could not decode Engine cue/loop data',
+        nothing_to_export: 'Nothing to export'
+      };
+      return labels[reason] || String(data?.error || reason || 'Export failed');
+    }
+
+    async function exportTrackPrepToEngine(overwriteExisting = false) {
+      if (!selectedTrack?.id) return;
+      if (trackPrepDirty || !trackPrep.exists) {
+        setTrackPrepExportStatus('Save Marks before export', true, false);
+        return;
+      }
+      trackPrepExportBusy = true;
+      setTrackPrepExportStatus(overwriteExisting ? 'Overwriting Engine slots...' : 'Exporting to Engine DJ');
+      try {
+        const res = await fetch('/api/export_track_marks_to_engine', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ track_id: selectedTrack.id, overwrite_existing: !!overwriteExisting })
+        });
+        const data = await res.json();
+        if (data?.ok) {
+          const backup = data.backup_path ? ` - Backup created: ${data.backup_path}` : '';
+          setTrackPrepExportStatus(`Exported to Engine DJ${backup}`, false, false);
+          return;
+        }
+        if (data?.reason === 'conflict') {
+          setTrackPrepExportStatus(trackPrepConflictMessage(data.conflicts), true, true);
+          return;
+        }
+        setTrackPrepExportStatus(trackPrepExportError(data), true, false);
+      } catch (err) {
+        setTrackPrepExportStatus(`Export failed: ${err}`, true, false);
+      } finally {
+        trackPrepExportBusy = false;
         syncTrackPrepControls();
       }
     }
@@ -1925,6 +2009,7 @@
       const snapped = snapTimeToGrid(raw, trackPrepSnap);
       const existing = (trackPrep.marks || []).findIndex(mark => mark.type === markType);
       if (existing >= 0 && !window.confirm(`${prepMarkLabel(markType)} already exists. Replace it?`)) return;
+      clearTrackPrepExportState();
       const mark = normalizePrepMark({
         type: markType,
         name: prepMarkLabel(markType),
@@ -1970,6 +2055,7 @@
         confidence: 1
       });
       if (!loop) return;
+      clearTrackPrepExportState();
       trackPrep.loops.push(loop);
       trackPrepDirty = true;
       redrawTrackPrep();
@@ -1981,6 +2067,7 @@
       } else if (kind === 'loop') {
         trackPrep.loops = (trackPrep.loops || []).filter(loop => loop.id !== id);
       }
+      clearTrackPrepExportState();
       trackPrepDirty = true;
       redrawTrackPrep();
     }
@@ -2001,6 +2088,8 @@
       });
       $('trackPrepSave')?.addEventListener('click', saveTrackPrepMarks);
       $('trackPrepReset')?.addEventListener('click', resetTrackPrepMarks);
+      $('trackPrepExport')?.addEventListener('click', () => exportTrackPrepToEngine(false));
+      $('trackPrepOverwrite')?.addEventListener('click', () => exportTrackPrepToEngine(true));
       $('trackPrepList')?.addEventListener('click', (event) => {
         const btn = event.target.closest('[data-prep-delete]');
         if (!btn) return;

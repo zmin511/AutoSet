@@ -2,6 +2,11 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.14
+
+- Track Prep: added safe one-track export of saved manual marks and loops to Engine DJ PerformanceData quickCues/loops.
+- Safety: export creates an Engine DB backup first, checks slot conflicts by default, and only overwrites target slots after explicit confirmation.
+
 ## 1.5.13
 
 - Track Prep: добавлена ручная разметка MIX_IN/VOCAL_IN/DROP/BREAK/MIX_OUT/OUTRO и loop 4/8/16/32 поверх overview/zoom waveform.

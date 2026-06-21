@@ -3,6 +3,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import socket
 import sqlite3
 import struct
@@ -27,6 +28,14 @@ BUILDER = TOOLS_DIR / "engine_set_builder.py"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 from engine_write_tags import write_audio_tags
+from engine_cue_loop_codec import (
+    build_loops,
+    build_quick_cues,
+    empty_loops,
+    empty_quick_cues,
+    parse_loops,
+    parse_quick_cues,
+)
 CONFIG_PATH = APP_DIR / "paths.json"
 DEFAULT_MUSIC_ROOT = SSD_ROOT / "Music" if (SSD_ROOT / "Music").exists() else SSD_ROOT
 DEFAULT_SETS_DIR = DEFAULT_MUSIC_ROOT / "Sets"
@@ -36,11 +45,41 @@ SETS_DIR = DEFAULT_SETS_DIR
 DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
 TRACK_MARKS_DIR = APP_DIR / "track_marks"
+ENGINE_DB_BACKUP_DIR = APP_DIR / "backups" / "engine_db"
+# Engine cue/loop raw positions are stored as frames at 44100 Hz based on diff diagnostics.
+ENGINE_CUE_TIME_SCALE = 44100.0
+ENGINE_MARK_TO_CUE_SLOT = {
+    "MIX_IN": 1,
+    "VOCAL_IN": 2,
+    "DROP": 3,
+    "BREAK": 4,
+    "MIX_OUT": 5,
+    "OUTRO": 6,
+}
+ENGINE_CUE_SLOT_LABELS = {
+    "MIX_IN": "MIX IN",
+    "VOCAL_IN": "VOCAL",
+    "DROP": "DROP",
+    "BREAK": "BREAK",
+    "MIX_OUT": "MIX OUT",
+    "OUTRO": "OUTRO",
+}
+ENGINE_LOOP_TYPE_TO_SLOT = {"OUTRO_LOOP": 1, "EMERGENCY_LOOP": 2}
+ENGINE_LOOP_TYPE_LABELS = {"OUTRO_LOOP": "OUTRO LOOP", "EMERGENCY_LOOP": "EMERGENCY"}
+ENGINE_CUE_SLOT_COLORS = {
+    1: 0xFFF4D338,
+    2: 0xFF4FC3F7,
+    3: 0xFF5AD66F,
+    4: 0xFFAA55C4,
+    5: 0xFFEF6B73,
+    6: 0xFFFF8A3D,
+}
+ENGINE_LOOP_SLOT_COLORS = {1: 0xFFF4D338, 2: 0xFFEF8130}
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.13"
+APP_VERSION = "1.5.14"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -1293,6 +1332,294 @@ def delete_track_marks(track_id):
     })
     return payload
 
+
+def _engine_backup_db():
+    if not DB_PATH.exists():
+        raise FileNotFoundError(str(DB_PATH))
+    ENGINE_DB_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = ENGINE_DB_BACKUP_DIR / f"{stamp}_m.db"
+    counter = 1
+    while backup.exists():
+        backup = ENGINE_DB_BACKUP_DIR / f"{stamp}_{counter}_m.db"
+        counter += 1
+    shutil.copy2(DB_PATH, backup)
+    return backup
+
+
+def _engine_track_export_row(con, track_id):
+    return con.execute(
+        """
+        SELECT
+          Track.id,
+          Track.lastEditTime,
+          Track.path,
+          Track.length,
+          Track.bpmAnalyzed,
+          Track.bpm,
+          PerformanceData.trackId AS performance_track_id,
+          PerformanceData.quickCues AS quickCues,
+          PerformanceData.loops AS loops
+        FROM Track
+        LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
+        WHERE Track.id = ?
+        """,
+        (int(track_id),),
+    ).fetchone()
+
+
+def _engine_raw_time(time_sec):
+    try:
+        seconds = float(time_sec)
+    except Exception:
+        raise ValueError("Invalid cue/loop time")
+    if not _finite_number(seconds) or seconds < 0:
+        raise ValueError("Invalid cue/loop time")
+    return seconds * ENGINE_CUE_TIME_SCALE
+
+
+def _engine_export_color(existing_color, palette, slot):
+    try:
+        color = int(existing_color or 0)
+    except Exception:
+        color = 0
+    return color or int(palette.get(int(slot), 0))
+
+
+def _engine_existing_slot_conflict(kind, slot, existing):
+    return {
+        "type": kind,
+        "slot": int(slot),
+        "existing_label": getattr(existing, "label", "") or ("Loop" if kind == "loop" else f"Cue {slot}"),
+    }
+
+
+def _engine_loop_export_label(loop, loop_type, fixed_slot):
+    if fixed_slot:
+        return ENGINE_LOOP_TYPE_LABELS.get(loop_type, "LOOP")
+    label = str(loop.get("name") or "").strip()
+    return label[:48] or "MANUAL LOOP"
+
+
+def _next_free_loop_slot(loops_blob, assigned_slots):
+    for slot in range(1, int(loops_blob.slot_count) + 1):
+        if slot in assigned_slots:
+            continue
+        if loops_blob.slot(slot).empty:
+            return slot
+    return None
+
+
+def _build_engine_export_payload(marks_payload, row, overwrite_existing):
+    marks = list(marks_payload.get("marks") or [])
+    prep_loops = list(marks_payload.get("loops") or [])
+    cues_blob = parse_quick_cues(row["quickCues"]) if row["quickCues"] else empty_quick_cues()
+    loops_blob = parse_loops(row["loops"]) if row["loops"] else empty_loops()
+    conflicts = []
+    warnings = []
+    exported_cues = []
+    exported_loops = []
+    cue_updates = []
+    loop_updates = []
+
+    for mark in marks:
+        mark_type = str(mark.get("type") or "").strip().upper()
+        slot = ENGINE_MARK_TO_CUE_SLOT.get(mark_type)
+        if not slot:
+            continue
+        if slot > cues_blob.slot_count:
+            warnings.append(f"Engine quickCues has no slot {slot} for {mark_type}")
+            continue
+        existing = cues_blob.slot(slot)
+        if not existing.empty and not overwrite_existing:
+            conflicts.append(_engine_existing_slot_conflict("cue", slot, existing))
+            continue
+        time_sec = _clamp_float(mark.get("time_sec"), 0.0, 24 * 60 * 60, 0.0)
+        raw = _engine_raw_time(time_sec)
+        label = ENGINE_CUE_SLOT_LABELS.get(mark_type, mark_type.replace("_", " "))
+        cue_updates.append({
+            "type": mark_type,
+            "slot": slot,
+            "label": label,
+            "time_sec": round(time_sec, 3),
+            "pos_raw": raw,
+            "color": _engine_export_color(existing.color, ENGINE_CUE_SLOT_COLORS, slot),
+        })
+
+    fixed_loop_types = set()
+    assigned_loop_slots = set()
+    for loop in prep_loops:
+        loop_type = str(loop.get("type") or "LOOP").strip().upper()
+        fixed_slot = None
+        if loop_type in ENGINE_LOOP_TYPE_TO_SLOT and loop_type not in fixed_loop_types:
+            fixed_slot = ENGINE_LOOP_TYPE_TO_SLOT[loop_type]
+            fixed_loop_types.add(loop_type)
+        if fixed_slot:
+            if fixed_slot > loops_blob.slot_count:
+                warnings.append(f"Engine loops has no slot {fixed_slot} for {loop_type}")
+                continue
+            slot = fixed_slot
+            assigned_loop_slots.add(slot)
+            existing = loops_blob.slot(slot)
+            if not existing.empty and not overwrite_existing:
+                conflicts.append(_engine_existing_slot_conflict("loop", slot, existing))
+                continue
+        else:
+            slot = _next_free_loop_slot(loops_blob, assigned_loop_slots)
+            if slot is None:
+                warnings.append("No free Engine loop slots for manual loop")
+                continue
+            assigned_loop_slots.add(slot)
+            existing = loops_blob.slot(slot)
+        start_sec = _clamp_float(loop.get("start_sec"), 0.0, 24 * 60 * 60, 0.0)
+        end_sec = _clamp_float(loop.get("end_sec"), 0.0, 24 * 60 * 60, 0.0)
+        if end_sec <= start_sec:
+            warnings.append(f"Skipped invalid loop at {start_sec:.3f}s")
+            continue
+        label = _engine_loop_export_label(loop, loop_type, fixed_slot)
+        loop_updates.append({
+            "type": loop_type,
+            "slot": slot,
+            "label": label,
+            "start_sec": round(start_sec, 3),
+            "end_sec": round(end_sec, 3),
+            "start_raw": _engine_raw_time(start_sec),
+            "end_raw": _engine_raw_time(end_sec),
+            "color": _engine_export_color(existing.color, ENGINE_LOOP_SLOT_COLORS, slot),
+            "fixed_slot": bool(fixed_slot),
+        })
+
+    if conflicts:
+        return {
+            "ok": False,
+            "reason": "conflict",
+            "conflicts": conflicts,
+            "warnings": warnings,
+        }
+
+    next_cues = cues_blob
+    for update in cue_updates:
+        next_cues = next_cues.with_slot(
+            update["slot"],
+            label=update["label"],
+            pos_raw=update["pos_raw"],
+            color=update["color"],
+        )
+        exported_cues.append({key: update[key] for key in ("type", "slot", "label", "time_sec", "pos_raw")})
+
+    next_loops = loops_blob
+    for update in loop_updates:
+        next_loops = next_loops.with_slot(
+            update["slot"],
+            label=update["label"],
+            start_raw=update["start_raw"],
+            end_raw=update["end_raw"],
+            color=update["color"],
+            enabled_1=1,
+            enabled_2=1,
+        )
+        exported_loops.append({key: update[key] for key in ("type", "slot", "label", "start_sec", "end_sec", "start_raw", "end_raw")})
+
+    return {
+        "ok": True,
+        "quickCues": build_quick_cues(next_cues) if exported_cues else row["quickCues"],
+        "loops": build_loops(next_loops) if exported_loops else row["loops"],
+        "exported_cues": exported_cues,
+        "exported_loops": exported_loops,
+        "conflicts": [],
+        "warnings": warnings,
+    }
+
+
+def export_track_marks_to_engine(data):
+    if not isinstance(data, dict):
+        raise ValueError("JSON object expected")
+    if not DB_PATH.exists():
+        return {"ok": False, "reason": "missing_db", "db_path": str(DB_PATH)}
+    try:
+        track_id = int(data.get("track_id"))
+    except Exception:
+        return {"ok": False, "reason": "missing_track_id"}
+    overwrite_existing = data.get("overwrite_existing") is True
+
+    try:
+        marks_payload = get_track_marks(track_id)
+    except ValueError as exc:
+        return {"ok": False, "reason": "missing_track", "error": str(exc)}
+    if not marks_payload.get("exists"):
+        return {"ok": False, "reason": "missing_track_marks", "track_id": track_id}
+    if not (marks_payload.get("marks") or marks_payload.get("loops")):
+        return {"ok": False, "reason": "empty_track_marks", "track_id": track_id}
+
+    try:
+        with sqlite3.connect(str(DB_PATH), timeout=1.0) as con:
+            con.row_factory = sqlite3.Row
+            row = _engine_track_export_row(con, track_id)
+            if not row:
+                return {"ok": False, "reason": "missing_track", "track_id": track_id}
+            if row["performance_track_id"] is None:
+                return {"ok": False, "reason": "missing_performance_data", "track_id": track_id}
+            plan = _build_engine_export_payload(marks_payload, row, overwrite_existing)
+    except sqlite3.OperationalError as exc:
+        reason = "db_locked" if "locked" in str(exc).lower() else "db_error"
+        return {"ok": False, "reason": reason, "error": str(exc), "db_path": str(DB_PATH)}
+    except Exception as exc:
+        return {"ok": False, "reason": "codec_error", "error": str(exc)}
+
+    if not plan.get("ok"):
+        return plan
+    if not (plan.get("exported_cues") or plan.get("exported_loops")):
+        return {"ok": False, "reason": "nothing_to_export", "warnings": plan.get("warnings") or []}
+
+    try:
+        backup = _engine_backup_db()
+    except Exception as exc:
+        return {"ok": False, "reason": "backup_failed", "error": str(exc)}
+
+    con = None
+    try:
+        con = sqlite3.connect(str(DB_PATH), timeout=1.0)
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        row = _engine_track_export_row(con, track_id)
+        if not row:
+            con.rollback()
+            return {"ok": False, "reason": "missing_track", "track_id": track_id, "backup_path": str(backup)}
+        if row["performance_track_id"] is None:
+            con.rollback()
+            return {"ok": False, "reason": "missing_performance_data", "track_id": track_id, "backup_path": str(backup)}
+        plan = _build_engine_export_payload(marks_payload, row, overwrite_existing)
+        if not plan.get("ok"):
+            con.rollback()
+            plan["backup_path"] = str(backup)
+            return plan
+        con.execute(
+            "UPDATE PerformanceData SET quickCues = ?, loops = ? WHERE trackId = ?",
+            (plan["quickCues"], plan["loops"], track_id),
+        )
+        con.execute("UPDATE Track SET lastEditTime = ? WHERE id = ?", (_engine_now_str(), track_id))
+        con.commit()
+    except sqlite3.OperationalError as exc:
+        if con:
+            con.rollback()
+        reason = "db_locked" if "locked" in str(exc).lower() else "db_error"
+        return {"ok": False, "reason": reason, "error": str(exc), "backup_path": str(backup), "db_path": str(DB_PATH)}
+    except Exception as exc:
+        if con:
+            con.rollback()
+        return {"ok": False, "reason": "export_failed", "error": str(exc), "backup_path": str(backup)}
+    finally:
+        if con:
+            con.close()
+
+    return {
+        "ok": True,
+        "backup_path": str(backup),
+        "exported_cues": plan.get("exported_cues") or [],
+        "exported_loops": plan.get("exported_loops") or [],
+        "conflicts": [],
+        "warnings": plan.get("warnings") or [],
+    }
 
 def get_track_performance(track_id):
     track_id = int(track_id)
@@ -3053,7 +3380,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks", "/api/export_track_marks_to_engine"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -3070,6 +3397,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
             elif parsed_path == "/api/track_marks":
                 self.send_json(write_track_marks(data))
+            elif parsed_path == "/api/export_track_marks_to_engine":
+                self.send_json(export_track_marks_to_engine(data))
             elif parsed_path == "/api/build":
                 self.send_json(build_set(data["track_id"], data.get("role", "start"), data.get("minutes", 90), data.get("max_key_step", 3), data.get("bpm_window", 5), data.get("style_filter", [])))
             elif parsed_path == "/api/engine-playlist":
