@@ -79,7 +79,7 @@ AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.15"
+APP_VERSION = "1.5.16"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -1245,7 +1245,7 @@ def _sanitize_manual_loops(items, duration_sec):
         length_beats = max(0, min(512, length_beats))
         loop_id = str(item.get("id") or f"loop_{idx}_{length_beats or 'manual'}").strip()
         loop_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", loop_id)[:64] or f"loop_{idx}"
-        out.append({
+        payload = {
             "id": loop_id,
             "type": loop_type,
             "name": str(item.get("name") or (f"Loop {length_beats}" if length_beats else "Loop")).strip()[:48],
@@ -1255,7 +1255,11 @@ def _sanitize_manual_loops(items, duration_sec):
             "snap": str(item.get("snap") or "").strip()[:24],
             "source": "manual" if str(item.get("source") or "manual") != "auto" else "auto",
             "confidence": round(_clamp_float(item.get("confidence", 1.0), 0.0, 1.0, 1.0), 3),
-        })
+        }
+        from_mark_type = str(item.get("from_mark_type") or "").strip().upper()
+        if from_mark_type in MANUAL_MARK_TYPES:
+            payload["from_mark_type"] = from_mark_type
+        out.append(payload)
     return out
 
 

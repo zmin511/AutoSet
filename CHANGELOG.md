@@ -2,6 +2,11 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.16
+
+- Track Prep: overview seek now centers the zoom waveform while keeping Follow enabled, and zoom waveform supports tape-style drag navigation before playback.
+- Track Prep: added hover time, snap-target preview, selected mark highlighting, loop-from-selected-mark creation, and waveform labels with mark/loop time ranges.
+
 ## 1.5.15
 
 - Waveform: selecting a track now preloads audio metadata so overview/zoom seeking, scroll navigation and Track Prep marks work before pressing Play.

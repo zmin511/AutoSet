@@ -503,6 +503,13 @@
     }
     .prep-item.mark { border-color: rgba(55,197,143,.52); }
     .prep-item.loop { border-color: rgba(255,138,61,.58); }
+    .prep-item[data-prep-select] { cursor: pointer; }
+    .prep-item.selected {
+      border-color: rgba(255,224,108,.92);
+      background: rgba(255,224,108,.12);
+      box-shadow: 0 0 0 1px rgba(255,224,108,.28) inset;
+      color: #fff4c2;
+    }
     .prep-delete {
       width: 20px;
       min-width: 20px;
@@ -1622,6 +1629,7 @@
     let trackPrep = { marks: [], loops: [], exists: false, source: 'manual', confidence: 1 };
     let trackPrepSnap = 'beat';
     let trackPrepDirty = false;
+    let selectedPrepMarkType = '';
     let trackPrepExportStatus = '';
     let trackPrepExportBad = false;
     let trackPrepExportConflict = false;
@@ -1629,6 +1637,9 @@
     let waveDragActive = false;
     let waveDragMode = '';
     let waveLastFrac = null;
+    let waveZoomDrag = null;
+    let waveHover = { active: false, time_sec: null, snap_time_sec: null, snap_kind: '', snapped: false };
+    const WAVE_SNAP_PREVIEW_PX = 10;
     const DEFAULT_WAVE_ZOOM = 4.0;
     const MAX_WAVE_ZOOM = 12;
     let waveZoom = DEFAULT_WAVE_ZOOM;
@@ -1774,6 +1785,145 @@
       return duration ? Math.min(duration, time) : time;
     }
 
+
+    function prepMarkTypeValid(type) {
+      const markType = String(type || '').toUpperCase();
+      return PREP_MARKS.some(item => item.type === markType);
+    }
+
+    function selectedPrepMark() {
+      const markType = String(selectedPrepMarkType || '').toUpperCase();
+      if (!markType) return null;
+      return (trackPrep.marks || []).find(mark => mark.type === markType) || null;
+    }
+
+    function selectPrepMark(type) {
+      const markType = String(type || '').toUpperCase();
+      if (!prepMarkTypeValid(markType)) return false;
+      const exists = (trackPrep.marks || []).some(mark => mark.type === markType);
+      if (!exists) return false;
+      selectedPrepMarkType = markType;
+      renderTrackPrepList();
+      if (lastWavePeaks) drawWaveform(lastWavePeaks);
+      drawZoomWaveform();
+      return true;
+    }
+
+    function loopRoleLabel(loopOrType, upper = false) {
+      const type = String(loopOrType?.type || loopOrType || '').toUpperCase();
+      const label = type === 'EMERGENCY_LOOP' ? 'Emergency' : 'Outro';
+      return upper ? label.toUpperCase() : label;
+    }
+
+    function waveWindowState() {
+      const canvas = $('waveZoomCanvas');
+      const detail = window.__waveDetail;
+      const duration = Number(detail?.duration_sec || 0) || playbackDuration();
+      const zoom = Math.max(1, Math.min(maxWaveZoom(), Number(waveZoom) || 1));
+      const windowSec = duration > 0 ? duration / zoom : 0;
+      const maxOffset = Math.max(0, duration - windowSec);
+      const width = Math.max(1, canvas?.getBoundingClientRect?.().width || canvas?.clientWidth || 1024);
+      return { duration, zoom, windowSec, maxOffset, width };
+    }
+
+    function centerZoomOnTime(timeSec) {
+      const state = waveWindowState();
+      if (!(state.duration > 0) || !(state.windowSec > 0)) return;
+      const t = Math.max(0, Math.min(state.duration, Number(timeSec) || 0));
+      waveOffsetSec = Math.max(0, Math.min(state.maxOffset, t - state.windowSec / 2));
+    }
+
+    function snapLabelForMode(snap = trackPrepSnap) {
+      if (snap === 'bar') return 'Bar';
+      if (snap === 'phrase16') return '16 beats';
+      if (snap === 'phrase32') return '32 beats';
+      return 'Beat';
+    }
+
+    function snapCandidatesForMode(snap = trackPrepSnap) {
+      const beats = Array.isArray(window.__waveDetail?.beat_grid) ? window.__waveDetail.beat_grid : [];
+      const unitBeats = snapUnitBeats(snap);
+      const out = [];
+      beats.forEach((beat, index) => {
+        const time = Number(beat?.time_sec);
+        if (!Number.isFinite(time)) return;
+        const beatNo = Number(beat?.beat || index + 1);
+        const normalizedBeat = Number.isFinite(beatNo) ? beatNo : index + 1;
+        const isBar = !!beat?.is_bar_start || ((normalizedBeat - 1) % 4 === 0);
+        const is16 = !!beat?.is_phrase_start || ((normalizedBeat - 1) % 16 === 0);
+        const is32 = ((normalizedBeat - 1) % 32 === 0);
+        if (unitBeats === 1) {
+          let priority = 1;
+          let kind = 'Beat';
+          if (is32) { priority = 4; kind = '32 beats'; }
+          else if (is16) { priority = 3; kind = '16 beats'; }
+          else if (isBar) { priority = 2; kind = 'Bar'; }
+          out.push({ time_sec: time, priority, kind });
+          return;
+        }
+        if (unitBeats === 4 && isBar) out.push({ time_sec: time, priority: 2, kind: 'Bar' });
+        else if (unitBeats === 16 && is16) out.push({ time_sec: time, priority: 3, kind: '16 beats' });
+        else if (unitBeats === 32 && is32) out.push({ time_sec: time, priority: 4, kind: '32 beats' });
+      });
+      return out;
+    }
+
+    function snapPreviewForTime(value, pixelThreshold = WAVE_SNAP_PREVIEW_PX) {
+      const time = clampTrackTime(value);
+      const state = waveWindowState();
+      const fallbackBeat = estimateBeatSeconds();
+      const thresholdSec = state.windowSec > 0
+        ? (Math.max(1, Number(pixelThreshold) || WAVE_SNAP_PREVIEW_PX) / state.width) * state.windowSec
+        : Math.max(0.05, fallbackBeat > 0 ? fallbackBeat * 0.18 : 0.12);
+      const candidates = snapCandidatesForMode(trackPrepSnap);
+      let best = null;
+      for (const candidate of candidates) {
+        const dist = Math.abs(time - Number(candidate.time_sec));
+        if (dist > thresholdSec) continue;
+        if (!best || dist < best.distance_sec - 0.000001 || (Math.abs(dist - best.distance_sec) <= 0.000001 && candidate.priority > best.priority)) {
+          best = { ...candidate, distance_sec: dist, snapped: true };
+        }
+      }
+      const target = snapTimeToGrid(time, trackPrepSnap);
+      if (best) return { time_sec: clampTrackTime(best.time_sec), kind: best.kind, snapped: true, distance_sec: best.distance_sec };
+      const dist = Math.abs(time - target);
+      return { time_sec: target, kind: snapLabelForMode(trackPrepSnap), snapped: dist <= thresholdSec, distance_sec: dist };
+    }
+
+    function snapTargetForPlacement(raw) {
+      return snapPreviewForTime(raw).time_sec;
+    }
+
+    function manualMarkNearTime(timeSec, thresholdSec) {
+      let best = null;
+      for (const mark of trackPrep.marks || []) {
+        const t = Number(mark?.time_sec);
+        if (!Number.isFinite(t)) continue;
+        const dist = Math.abs(t - timeSec);
+        if (dist > thresholdSec) continue;
+        if (!best || dist < best.dist) best = { mark, dist };
+      }
+      return best?.mark || null;
+    }
+
+    function manualMarkFromOverviewEvent(event) {
+      const frac = _waveFracFromEvent(event);
+      const canvas = $('waveCanvas');
+      const duration = playbackDuration();
+      if (frac == null || !(duration > 0) || !canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const thresholdSec = (WAVE_SNAP_PREVIEW_PX / Math.max(1, rect.width)) * duration;
+      return manualMarkNearTime(frac * duration, thresholdSec);
+    }
+
+    function manualMarkFromZoomEvent(event) {
+      const time = _waveZoomTimeFromEvent(event);
+      const state = waveWindowState();
+      if (time == null || !(state.windowSec > 0)) return null;
+      const thresholdSec = (WAVE_SNAP_PREVIEW_PX / state.width) * state.windowSec;
+      return manualMarkNearTime(time, thresholdSec);
+    }
+
     function normalizePrepMark(mark) {
       const type = String(mark?.type || '').toUpperCase();
       if (!PREP_MARKS.some(item => item.type === type)) return null;
@@ -1797,7 +1947,7 @@
       if (!(end > start)) return null;
       const lengthBeats = Math.max(0, Math.min(512, Number(loop?.length_beats || 0)));
       const type = String(loop?.type || 'OUTRO_LOOP').toUpperCase() === 'EMERGENCY_LOOP' ? 'EMERGENCY_LOOP' : 'OUTRO_LOOP';
-      return {
+      const payload = {
         id: String(loop?.id || `${type.toLowerCase()}_${Math.round(start * 1000)}_${lengthBeats || 'manual'}`),
         type,
         name: loop?.name || (type === 'EMERGENCY_LOOP' ? `Emergency Loop ${lengthBeats}` : `Loop ${lengthBeats}`),
@@ -1809,11 +1959,16 @@
         source: 'manual',
         confidence: Number(loop?.confidence ?? 1)
       };
+      const fromMarkType = String(loop?.from_mark_type || '').toUpperCase();
+      if (prepMarkTypeValid(fromMarkType)) payload.from_mark_type = fromMarkType;
+      return payload;
     }
 
     function resetTrackPrepState() {
       trackPrep = { marks: [], loops: [], exists: false, source: 'manual', confidence: 1 };
       trackPrepDirty = false;
+      selectedPrepMarkType = '';
+      waveHover = { active: false, time_sec: null, snap_time_sec: null, snap_kind: '', snapped: false };
       clearTrackPrepExportState();
       renderTrackPrepList();
       syncTrackPrepControls();
@@ -1830,11 +1985,12 @@
       const loops = [...(trackPrep.loops || [])].sort((a, b) => Number(a.start_sec) - Number(b.start_sec));
       const rows = [];
       for (const mark of marks) {
-        rows.push(`<span class="prep-item mark">${esc(prepMarkLabel(mark.type))} ${esc(fmtTime(mark.time_sec))}<button class="prep-delete" type="button" data-prep-delete="mark" data-id="${esc(mark.type)}" title="Delete">x</button></span>`);
+        const selected = mark.type === selectedPrepMarkType ? ' selected' : '';
+        rows.push(`<span class="prep-item mark${selected}" data-prep-select="mark" data-id="${esc(mark.type)}" title="Select mark">${esc(prepMarkLabel(mark.type))} ${esc(fmtTime(mark.time_sec))}<button class="prep-delete" type="button" data-prep-delete="mark" data-id="${esc(mark.type)}" title="Delete">x</button></span>`);
       }
       for (const loop of loops) {
-        const role = loop.type === 'EMERGENCY_LOOP' ? 'Emergency' : 'Outro';
-        rows.push(`<span class="prep-item loop">${esc(role)} ${esc(loop.length_beats || '')} ${esc(fmtTime(loop.start_sec))}-${esc(fmtTime(loop.end_sec))}<button class="prep-delete" type="button" data-prep-delete="loop" data-id="${esc(loop.id)}" title="Delete">x</button></span>`);
+        const role = loopRoleLabel(loop, true);
+        rows.push(`<span class="prep-item loop" title="${esc(loop.length_beats || '')} beats">${esc(role)} ${esc(fmtTime(loop.start_sec))}–${esc(fmtTime(loop.end_sec))}<button class="prep-delete" type="button" data-prep-delete="loop" data-id="${esc(loop.id)}" title="Delete">x</button></span>`);
       }
       box.innerHTML = rows.length ? rows.join('') : '<span>No manual marks</span>';
     }
@@ -1910,7 +2066,9 @@
       window.__waveMarkers.push(...window.__waveCues.map(c => ({
         kind: c.source === 'manual' ? 'prep' : 'cue',
         pos_s: Number(c.pos_s),
-        pos_frac: Number(c.pos_frac)
+        pos_frac: Number(c.pos_frac),
+        type: c.type,
+        source: c.source
       })));
 
       const engineLoops = Array.isArray(detail?.loops) ? detail.loops.map(l => {
@@ -1946,6 +2104,7 @@
           start_frac: fracFor(s),
           end_frac: fracFor(e),
           length_beats: loop.length_beats,
+          from_mark_type: loop.from_mark_type,
           color: loop.type === 'EMERGENCY_LOOP' ? 'rgba(239,107,115,0.9)' : 'rgba(255,138,61,0.86)',
           source: 'manual',
           type: loop.type
@@ -1981,6 +2140,7 @@
           source: data.source || 'manual',
           confidence: Number(data.confidence ?? 1)
         };
+        if (!selectedPrepMark()) selectedPrepMarkType = '';
         trackPrepDirty = false;
         syncTrackPrepControls();
       } catch {
@@ -2127,9 +2287,8 @@
       if (!window.__waveDetail) return;
       const markType = String(type || '').toUpperCase();
       if (!PREP_MARKS.some(item => item.type === markType)) return;
-      const player = $('player');
-      const raw = clampTrackTime(Number(player?.currentTime || 0));
-      const snapped = snapTimeToGrid(raw, trackPrepSnap);
+      const raw = clampTrackTime(currentPlaybackTime());
+      const snapped = snapTargetForPlacement(raw);
       const existing = (trackPrep.marks || []).findIndex(mark => mark.type === markType);
       if (existing >= 0 && !window.confirm(`${prepMarkLabel(markType)} already exists. Replace it?`)) return;
       clearTrackPrepExportState();
@@ -2144,6 +2303,7 @@
       if (!mark) return;
       if (existing >= 0) trackPrep.marks.splice(existing, 1, mark);
       else trackPrep.marks.push(mark);
+      selectedPrepMarkType = mark.type;
       trackPrepDirty = true;
       redrawTrackPrep();
     }
@@ -2156,9 +2316,9 @@
         prepStatus('BPM or beat-grid is required for loops', true);
         return;
       }
-      const player = $('player');
-      const raw = clampTrackTime(Number(player?.currentTime || 0));
-      const start = snapTimeToGrid(raw, trackPrepSnap);
+      const anchorMark = selectedPrepMark();
+      const raw = clampTrackTime(anchorMark ? Number(anchorMark.time_sec) : currentPlaybackTime());
+      const start = snapTargetForPlacement(raw);
       const end = clampTrackTime(start + beatSec * beats);
       if (!(end > start)) {
         prepStatus('Loop end is outside track duration', true);
@@ -2172,9 +2332,10 @@
         name: `${role} ${beats}`,
         start_sec: start,
         end_sec: end,
-        raw_start_sec: raw,
+        raw_start_sec: anchorMark ? start : raw,
         length_beats: beats,
         snap: trackPrepSnap,
+        from_mark_type: anchorMark?.type || undefined,
         confidence: 1
       });
       if (!loop) return;
@@ -2187,6 +2348,7 @@
     function deleteTrackPrepItem(kind, id) {
       if (kind === 'mark') {
         trackPrep.marks = (trackPrep.marks || []).filter(mark => mark.type !== id);
+        if (selectedPrepMarkType === id) selectedPrepMarkType = '';
       } else if (kind === 'loop') {
         trackPrep.loops = (trackPrep.loops || []).filter(loop => loop.id !== id);
       }
@@ -2215,21 +2377,21 @@
       $('trackPrepOverwrite')?.addEventListener('click', () => exportTrackPrepToEngine(true));
       $('trackPrepList')?.addEventListener('click', (event) => {
         const btn = event.target.closest('[data-prep-delete]');
-        if (!btn) return;
-        deleteTrackPrepItem(btn.dataset.prepDelete, btn.dataset.id || '');
+        if (btn) {
+          deleteTrackPrepItem(btn.dataset.prepDelete, btn.dataset.id || '');
+          return;
+        }
+        const chip = event.target.closest('[data-prep-select="mark"]');
+        if (chip) selectPrepMark(chip.dataset.id || '');
       });
       syncTrackPrepControls();
     }
 
     function updateFollowWaveWindow() {
       if (!followPlayhead) return;
-      const duration = playbackDuration();
       const cur = currentPlaybackTime();
-      if (!duration || !Number.isFinite(cur)) return;
-      const zoom = Math.max(1, Math.min(maxWaveZoom(), Number(waveZoom) || 1));
-      const windowSec = duration / zoom;
-      const maxOffset = Math.max(0, duration - windowSec);
-      waveOffsetSec = Math.max(0, Math.min(maxOffset, cur - windowSec / 2));
+      if (!Number.isFinite(cur)) return;
+      centerZoomOnTime(cur);
     }
 
     function drawWaveform(peaks) {
@@ -2311,8 +2473,9 @@
             ctx.strokeStyle = 'rgba(30,110,200,0.72)';
             ctx.lineWidth = 2;
           } else if (kind === 'prep') {
-            ctx.strokeStyle = 'rgba(55,197,143,0.88)';
-            ctx.lineWidth = 2;
+            const selectedMarker = m?.type === selectedPrepMarkType;
+            ctx.strokeStyle = selectedMarker ? 'rgba(255,224,108,0.98)' : 'rgba(55,197,143,0.88)';
+            ctx.lineWidth = selectedMarker ? 3 : 2;
           } else if (kind === 'loop') {
             ctx.strokeStyle = 'rgba(236,196,76,0.95)';
             ctx.lineWidth = 2;
@@ -2355,8 +2518,12 @@
           const frac = Number(cue.pos_frac);
           const x = Math.floor(frac * (w - 1)) + 0.5;
           const slot = Number(cue?.slot) || 0;
-          const label = (cue?.label || '').trim() || (slot ? `Cue ${slot}` : 'Cue');
-          const time = Number.isFinite(Number(cue?.pos_s)) ? fmtTime(cue.pos_s) : '';
+          const manualCue = cue?.source === 'manual';
+          const baseLabel = (cue?.label || '').trim() || (slot ? `Cue ${slot}` : 'Cue');
+          const cueTime = Number.isFinite(Number(cue?.pos_s)) ? fmtTime(cue.pos_s) : '';
+          const label = manualCue && cueTime ? `${baseLabel} ${cueTime}` : baseLabel;
+          const time = manualCue ? '' : cueTime;
+          const selectedCue = manualCue && cue?.type === selectedPrepMarkType;
 
           const padX = 6 * dpr;
           const padY = 3 * dpr;
@@ -2395,11 +2562,10 @@
           }
 
           // Draw label pill.
-          const manualCue = cue?.source === 'manual';
           const cueColor = cue?.color || (manualCue ? 'rgba(55,197,143,0.9)' : 'rgba(73,160,236,0.95)');
-          ctx.fillStyle = manualCue ? 'rgba(55,197,143,0.18)' : 'rgba(73,160,236,0.22)';
-          ctx.strokeStyle = cueColor;
-          ctx.lineWidth = 1;
+          ctx.fillStyle = selectedCue ? 'rgba(255,224,108,0.20)' : (manualCue ? 'rgba(55,197,143,0.18)' : 'rgba(73,160,236,0.22)');
+          ctx.strokeStyle = selectedCue ? 'rgba(255,224,108,0.98)' : cueColor;
+          ctx.lineWidth = selectedCue ? 2 : 1;
           ctx.beginPath();
           roundRect(ctx, pillLeft, cueTop, boxW, boxH, 6 * dpr);
           ctx.fill();
@@ -2442,8 +2608,10 @@
           ctx.lineTo(x2, yBot);
           ctx.stroke();
           const labelOnly = (loop?.label || '').trim() || (loop?.slot ? `Loop ${loop.slot}` : 'Loop');
-          const time = Number.isFinite(Number(loop?.start_s)) ? fmtTime(loop.start_s) : '';
-          const label = time ? `${time} ${labelOnly}` : labelOnly;
+          const hasRange = Number.isFinite(Number(loop?.start_s)) && Number.isFinite(Number(loop?.end_s));
+          const label = manualLoop && hasRange
+            ? `${loopRoleLabel(loop, true)} ${fmtTime(loop.start_s)}–${fmtTime(loop.end_s)}`
+            : (Number.isFinite(Number(loop?.start_s)) ? `${fmtTime(loop.start_s)} ${labelOnly}` : labelOnly);
           const textW = ctx.measureText(label).width;
           const center = (x1 + x2) / 2;
           const tx = Math.max(2 * dpr, Math.min(w - textW - 2 * dpr, center - textW / 2));
@@ -2502,7 +2670,7 @@
       return Math.max(0, Math.min(duration, waveOffsetSec + (x / Math.max(1, rect.width)) * windowSec));
     }
 
-    function _seekPlayerToTime(timeSec) {
+    function _seekPlayerToTime(timeSec, options = {}) {
       if (!canNavigateWaveform()) return;
       const player = $('player');
       const duration = playbackDuration();
@@ -2517,23 +2685,31 @@
       }
       waveLastFrac = duration > 0 ? t / duration : 0;
       updatePlayerBar();
-      if (followPlayhead) updateFollowWaveWindow();
+      if (options.centerZoom) centerZoomOnTime(t);
+      else if (followPlayhead) updateFollowWaveWindow();
       syncWaveScrollControl();
       if (lastWavePeaks) drawWaveform(lastWavePeaks);
       drawZoomWaveform();
     }
 
-    function _seekPlayerToFrac(frac) {
+    function _seekPlayerToFrac(frac, options = {}) {
       const duration = playbackDuration();
       if (!Number.isFinite(duration) || duration <= 0) return;
-      _seekPlayerToTime(Math.max(0, Math.min(1, Number(frac) || 0)) * duration);
+      _seekPlayerToTime(Math.max(0, Math.min(1, Number(frac) || 0)) * duration, options);
+    }
+
+    function fmtTimePrecise(seconds, withMillis = false) {
+      const value = Math.max(0, Number(seconds) || 0);
+      const whole = Math.floor(value);
+      const m = Math.floor(whole / 60);
+      const s = whole % 60;
+      if (!withMillis) return `${m}:${String(s).padStart(2, '0')}`;
+      const ms = Math.floor((value - whole) * 1000);
+      return `${m}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
     }
 
     function fmtTime(seconds) {
-      const s = Math.max(0, Math.floor(Number(seconds) || 0));
-      const m = Math.floor(s / 60);
-      const r = s % 60;
-      return `${m}:${String(r).padStart(2, '0')}`;
+      return fmtTimePrecise(seconds, false);
     }
 
     function updatePlayerBar() {
@@ -2591,6 +2767,27 @@
       updatePlayerBar();
     }
 
+    function setWaveHoverFromEvent(event) {
+      const t = _waveZoomTimeFromEvent(event);
+      if (t == null) return false;
+      const snap = snapPreviewForTime(t);
+      waveHover = {
+        active: true,
+        time_sec: t,
+        snap_time_sec: snap.time_sec,
+        snap_kind: snap.kind,
+        snapped: !!snap.snapped
+      };
+      drawZoomWaveform();
+      return true;
+    }
+
+    function clearWaveHover() {
+      if (!waveHover.active) return;
+      waveHover = { active: false, time_sec: null, snap_time_sec: null, snap_kind: '', snapped: false };
+      drawZoomWaveform();
+    }
+
     function wireWaveformScrub() {
       const canvas = $('waveCanvas');
       if (!canvas) return;
@@ -2598,44 +2795,78 @@
       canvas.__wired = true;
 
       canvas.addEventListener('mousedown', (e) => {
+        if (!canNavigateWaveform()) return;
+        const mark = manualMarkFromOverviewEvent(e);
+        if (mark && selectPrepMark(mark.type)) return;
         const frac = _waveFracFromEvent(e);
         if (frac == null) return;
         waveDragActive = true;
         waveDragMode = 'overview';
-        _seekPlayerToFrac(frac);
+        _seekPlayerToFrac(frac, { centerZoom: true });
+        e.preventDefault();
       });
       window.addEventListener('mousemove', (e) => {
-        if (!waveDragActive || waveDragMode !== 'overview') return;
-        const frac = _waveFracFromEvent(e);
-        if (frac == null) return;
-        _seekPlayerToFrac(frac);
+        if (!waveDragActive) return;
+        if (waveDragMode === 'overview') {
+          const frac = _waveFracFromEvent(e);
+          if (frac == null) return;
+          _seekPlayerToFrac(frac, { centerZoom: true });
+          return;
+        }
+        if (waveDragMode === 'zoom-pan' && waveZoomDrag) {
+          const zoomCanvas = $('waveZoomCanvas');
+          const rect = zoomCanvas?.getBoundingClientRect?.();
+          const width = Math.max(1, rect?.width || waveZoomDrag.width || 1);
+          const dx = e.clientX - waveZoomDrag.startX;
+          if (Math.abs(dx) > 2) waveZoomDrag.moved = true;
+          const maxOffset = Math.max(0, waveZoomDrag.duration - waveZoomDrag.windowSec);
+          waveOffsetSec = Math.max(0, Math.min(maxOffset, waveZoomDrag.startOffset - (dx / width) * waveZoomDrag.windowSec));
+          const focal = Math.max(0, Math.min(waveZoomDrag.duration, waveOffsetSec + waveZoomDrag.windowSec / 2));
+          _seekPlayerToTime(focal, { centerZoom: false });
+          setWaveHoverFromEvent(e);
+        }
       });
-      window.addEventListener('mouseup', () => { waveDragActive = false; waveDragMode = ''; });
-      canvas.addEventListener('click', (e) => {
-        const frac = _waveFracFromEvent(e);
-        if (frac == null) return;
-        _seekPlayerToFrac(frac);
+      window.addEventListener('mouseup', () => {
+        if (waveDragMode === 'zoom-pan' && waveZoomDrag && !waveZoomDrag.moved) {
+          _seekPlayerToTime(waveZoomDrag.clickTime, { centerZoom: false });
+        }
+        waveDragActive = false;
+        waveDragMode = '';
+        waveZoomDrag = null;
       });
       const zoomCanvas = $('waveZoomCanvas');
       if (zoomCanvas && !zoomCanvas.__wired) {
         zoomCanvas.__wired = true;
-        const seekZoom = (e) => {
+        zoomCanvas.addEventListener('mousemove', (e) => {
+          if (waveDragActive && waveDragMode === 'zoom-pan') return;
+          setWaveHoverFromEvent(e);
+        });
+        zoomCanvas.addEventListener('mouseleave', () => {
+          if (!waveDragActive) clearWaveHover();
+        });
+        zoomCanvas.addEventListener('mousedown', (e) => {
+          if (!canNavigateWaveform()) return;
+          const mark = manualMarkFromZoomEvent(e);
+          if (mark && selectPrepMark(mark.type)) return;
           const t = _waveZoomTimeFromEvent(e);
           if (t == null) return;
-          _seekPlayerToTime(t);
-        };
-        zoomCanvas.addEventListener('mousedown', (e) => {
+          const state = waveWindowState();
           followPlayhead = false;
-          syncWaveScrollControl();
           waveDragActive = true;
-          waveDragMode = 'zoom';
-          seekZoom(e);
+          waveDragMode = 'zoom-pan';
+          waveZoomDrag = {
+            startX: e.clientX,
+            startOffset: waveOffsetSec,
+            windowSec: state.windowSec,
+            duration: state.duration,
+            width: state.width,
+            clickTime: t,
+            moved: false
+          };
+          syncWaveScrollControl();
+          setWaveHoverFromEvent(e);
+          e.preventDefault();
         });
-        zoomCanvas.addEventListener('mousemove', (e) => {
-          if (!waveDragActive || waveDragMode !== 'zoom') return;
-          seekZoom(e);
-        });
-        zoomCanvas.addEventListener('click', seekZoom);
       }
     }
 
@@ -3088,18 +3319,22 @@
         if (!Number.isFinite(t) || t < start || t > end) continue;
         const x = Math.floor(timeToX(t)) + 0.5;
         const manualCue = cue.source === 'manual';
-        ctx.strokeStyle = cue.color || (manualCue ? 'rgba(55,197,143,0.95)' : 'rgba(73,160,236,0.95)');
-        ctx.lineWidth = 2;
+        const selectedCue = manualCue && cue.type === selectedPrepMarkType;
+        ctx.strokeStyle = selectedCue ? 'rgba(255,224,108,0.98)' : (cue.color || (manualCue ? 'rgba(55,197,143,0.95)' : 'rgba(73,160,236,0.95)'));
+        ctx.lineWidth = selectedCue ? 3 : 2;
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
         ctx.stroke();
-        const label = cue.name || cue.label || 'Cue';
-        ctx.fillStyle = 'rgba(8,12,16,0.82)';
-        ctx.fillRect(Math.max(0, x + 4), 4 * dpr, Math.min(120 * dpr, ctx.measureText(label).width + 10 * dpr), 18 * dpr);
-        ctx.fillStyle = '#e7f0f5';
+        const baseLabel = cue.name || cue.label || 'Cue';
+        const label = manualCue ? `${baseLabel} ${fmtTime(t)}` : baseLabel;
+        const labelW = Math.min(150 * dpr, ctx.measureText(label).width + 10 * dpr);
+        ctx.fillStyle = selectedCue ? 'rgba(255,224,108,0.22)' : 'rgba(8,12,16,0.82)';
+        ctx.fillRect(Math.max(0, x + 4), 4 * dpr, labelW, 18 * dpr);
+        ctx.fillStyle = selectedCue ? '#fff4c2' : '#e7f0f5';
         ctx.fillText(label, Math.max(2 * dpr, x + 8), 7 * dpr);
       }
+      ctx.lineWidth = 1;
 
       const loops = Array.isArray(window.__waveLoops) ? window.__waveLoops : [];
       for (const loop of loops) {
@@ -3113,6 +3348,15 @@
         ctx.strokeStyle = loop.color || 'rgba(255,138,61,0.82)';
         ctx.fillRect(x1, 0, Math.max(1, x2 - x1), h);
         ctx.strokeRect(x1, 0, Math.max(1, x2 - x1), h);
+        const label = manualLoop
+          ? `${loopRoleLabel(loop, true)} ${fmtTime(a)}–${fmtTime(b)}`
+          : ((loop.name || loop.label || '').trim() || 'Loop');
+        const textW = ctx.measureText(label).width;
+        const tx = Math.max(2 * dpr, Math.min(w - textW - 2 * dpr, (x1 + x2) / 2 - textW / 2));
+        ctx.fillStyle = 'rgba(8,12,16,0.78)';
+        ctx.fillRect(Math.max(0, tx - 4 * dpr), h - 22 * dpr, Math.min(w, textW + 8 * dpr), 18 * dpr);
+        ctx.fillStyle = '#ffe0aa';
+        ctx.fillText(label, tx, h - 19 * dpr);
       }
 
       const cur = currentPlaybackTime();
@@ -3125,6 +3369,38 @@
         ctx.lineTo(x, h);
         ctx.stroke();
         ctx.lineWidth = 1;
+      }
+
+      if (waveHover.active && Number.isFinite(Number(waveHover.time_sec))) {
+        const hoverTime = Number(waveHover.time_sec);
+        if (hoverTime >= start && hoverTime <= end) {
+          const x = Math.floor(timeToX(hoverTime)) + 0.5;
+          ctx.strokeStyle = 'rgba(231,240,245,0.58)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, h);
+          ctx.stroke();
+        }
+        const snapTime = Number(waveHover.snap_time_sec);
+        if (waveHover.snapped && Number.isFinite(snapTime) && snapTime >= start && snapTime <= end) {
+          const sx = Math.floor(timeToX(snapTime)) + 0.5;
+          ctx.strokeStyle = 'rgba(255,224,108,0.96)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(sx, 0);
+          ctx.lineTo(sx, h);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        }
+        const label = `${fmtTimePrecise(hoverTime, true)}  ${waveHover.snap_kind || 'Snap'} ${fmtTimePrecise(snapTime, true)}`;
+        const labelW = Math.min(w - 12 * dpr, ctx.measureText(label).width + 12 * dpr);
+        const labelX = Math.max(4 * dpr, Math.min(w - labelW - 4 * dpr, timeToX(hoverTime) + 8 * dpr));
+        ctx.fillStyle = 'rgba(8,12,16,0.88)';
+        ctx.fillRect(labelX, 26 * dpr, labelW, 20 * dpr);
+        ctx.fillStyle = '#fff4c2';
+        ctx.textBaseline = 'top';
+        ctx.fillText(label, labelX + 6 * dpr, 29 * dpr);
       }
 
       ctx.fillStyle = 'rgba(154,167,178,0.95)';
