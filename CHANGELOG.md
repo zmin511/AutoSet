@@ -2,6 +2,11 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.15
+
+- Waveform: selecting a track now preloads audio metadata so overview/zoom seeking, scroll navigation and Track Prep marks work before pressing Play.
+- Player: seek state, playhead and time display use Engine duration fallback while metadata is loading.
+
 ## 1.5.14
 
 - Track Prep: added safe one-track export of saved manual marks and loops to Engine DJ PerformanceData quickCues/loops.
