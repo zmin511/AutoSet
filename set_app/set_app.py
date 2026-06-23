@@ -79,7 +79,7 @@ AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.16"
+APP_VERSION = "1.5.17"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -1108,6 +1108,281 @@ def get_track_waveform_detail(track_id):
             "engine_beat_count": len(beat_positions),
             "checked_tables": checked,
         },
+    }
+
+
+def _suggest_percentile(values, pct, default=0.0):
+    clean = sorted(float(v) for v in values if _finite_number(v))
+    if not clean:
+        return default
+    if len(clean) == 1:
+        return clean[0]
+    pos = max(0.0, min(1.0, float(pct))) * (len(clean) - 1)
+    lo = int(pos)
+    hi = min(len(clean) - 1, lo + 1)
+    frac = pos - lo
+    return clean[lo] * (1.0 - frac) + clean[hi] * frac
+
+
+def _suggest_beat_seconds(bpm, beat_grid):
+    if bpm:
+        try:
+            bpm = float(bpm)
+            if bpm > 0:
+                return 60.0 / bpm
+        except Exception:
+            pass
+    times = [float(b.get("time_sec")) for b in beat_grid or [] if _finite_number(b.get("time_sec"))]
+    times = sorted(times)
+    diffs = [b - a for a, b in zip(times, times[1:]) if 0.15 <= (b - a) <= 2.5]
+    return _suggest_percentile(diffs, 0.5, 0.5)
+
+
+def _suggest_snap_time(time_sec, beat_grid, bpm, duration_sec, unit_beats=16):
+    duration = max(0.0, float(duration_sec or 0.0))
+    time_sec = max(0.0, min(duration or 24 * 60 * 60, float(time_sec or 0.0)))
+    unit = max(1, int(unit_beats or 1))
+    candidates = []
+    for idx, beat in enumerate(beat_grid or [], start=1):
+        t = beat.get("time_sec")
+        if not _finite_number(t):
+            continue
+        beat_no = beat.get("beat") or idx
+        try:
+            beat_no = int(beat_no)
+        except Exception:
+            beat_no = idx
+        is_bar = bool(beat.get("is_bar_start")) or ((beat_no - 1) % 4 == 0)
+        is_16 = bool(beat.get("is_phrase_start")) or ((beat_no - 1) % 16 == 0)
+        is_32 = ((beat_no - 1) % 32 == 0)
+        if unit >= 32 and is_32:
+            candidates.append(float(t))
+        elif unit >= 16 and is_16:
+            candidates.append(float(t))
+        elif unit >= 4 and is_bar:
+            candidates.append(float(t))
+        elif unit <= 1:
+            candidates.append(float(t))
+    if candidates:
+        return round(max(0.0, min(duration or max(candidates), min(candidates, key=lambda v: abs(v - time_sec)))), 3)
+    beat_sec = _suggest_beat_seconds(bpm, beat_grid)
+    step = max(0.001, beat_sec * unit)
+    return round(max(0.0, min(duration or time_sec, round(time_sec / step) * step)), 3)
+
+
+def _suggest_energy_curve(detail):
+    peaks = detail.get("waveform") or []
+    duration = float(detail.get("duration_sec") or 0.0)
+    if not isinstance(peaks, list) or len(peaks) < 8 or duration <= 0:
+        return []
+    values = []
+    for value in peaks:
+        try:
+            values.append(max(0.0, min(1.0, float(value) / 255.0)))
+        except Exception:
+            values.append(0.0)
+    radius = max(1, min(8, len(values) // 96))
+    smoothed = []
+    for i in range(len(values)):
+        lo = max(0, i - radius)
+        hi = min(len(values), i + radius + 1)
+        smoothed.append(sum(values[lo:hi]) / max(1, hi - lo))
+    return [(duration * (i / max(1, len(smoothed) - 1)), v) for i, v in enumerate(smoothed)]
+
+
+def _suggest_first_stable_time(curve, duration_sec):
+    if not curve:
+        return max(0.0, min(float(duration_sec or 0), 16.0)), 0.35, "BPM fallback intro position"
+    vals = [v for _t, v in curve]
+    floor = _suggest_percentile(vals[: max(8, len(vals) // 12)], 0.35, 0.04)
+    body = _suggest_percentile(vals, 0.68, 0.25)
+    threshold = max(0.10, floor + 0.08, body * 0.48)
+    need = max(3, len(vals) // 80)
+    run = 0
+    first = None
+    for t, v in curve:
+        if t < 2.0:
+            continue
+        if v >= threshold:
+            run += 1
+            if run >= need:
+                first = t
+                break
+        else:
+            run = 0
+    if first is None:
+        first = float(duration_sec or 0) * 0.08
+        return first, 0.42, "fallback early phrase from track duration"
+    confidence = 0.55 + min(0.28, max(0.0, body - floor) * 0.6)
+    return first, confidence, "first stable energy section after intro"
+
+
+def _suggest_last_energy_time(curve, duration_sec):
+    duration = float(duration_sec or 0.0)
+    if not curve:
+        return max(0.0, duration * 0.82), 0.36, "BPM fallback outro region"
+    vals = [v for _t, v in curve]
+    threshold = max(0.09, _suggest_percentile(vals, 0.45, 0.18) * 0.55)
+    last = None
+    for t, v in reversed(curve):
+        if t > duration - 2.0:
+            continue
+        if v >= threshold:
+            last = t
+            break
+    if last is None:
+        return max(0.0, duration * 0.82), 0.34, "fallback late phrase from track duration"
+    return last, 0.58, "last usable energy before fade/end"
+
+
+def _suggest_break_time(curve, duration_sec, mix_in_sec, mix_out_sec):
+    if not curve:
+        return None
+    start = max(float(mix_in_sec or 0) + 16.0, float(duration_sec or 0) * 0.28)
+    end = min(float(mix_out_sec or duration_sec), float(duration_sec or 0) * 0.78)
+    candidates = [(t, v) for t, v in curve if start <= t <= end]
+    if len(candidates) < 8:
+        return None
+    low = _suggest_percentile([v for _t, v in candidates], 0.24, 0.12)
+    valleys = [(t, v) for t, v in candidates if v <= low]
+    if not valleys:
+        return None
+    t, v = min(valleys, key=lambda item: item[1])
+    return t, max(0.35, min(0.62, 0.62 - v * 0.35)), "low-energy break candidate in middle section"
+
+
+def suggest_track_marks(data):
+    if not isinstance(data, dict):
+        raise ValueError("JSON object expected")
+    track_id = int(data.get("track_id") or 0)
+    if track_id <= 0:
+        raise ValueError("track_id is required")
+    detail = get_track_waveform_detail(track_id)
+    duration = float(detail.get("duration_sec") or 0.0)
+    bpm = detail.get("bpm")
+    beat_grid = detail.get("beat_grid") or []
+    curve = _suggest_energy_curve(detail)
+    warnings = []
+    if duration <= 0:
+        return {"ok": True, "track_id": track_id, "suggestions": {"marks": [], "loops": []}, "warnings": ["Track duration is unavailable"]}
+    if not curve:
+        warnings.append("Waveform energy curve unavailable; using BPM/duration fallback")
+    if not beat_grid:
+        warnings.append("Beat-grid unavailable; using BPM fallback")
+
+    beat_sec = _suggest_beat_seconds(bpm, beat_grid)
+    phrase16 = beat_sec * 16.0
+    phrase32 = beat_sec * 32.0
+    marks = []
+
+    raw_mix_in, mix_in_conf, mix_in_reason = _suggest_first_stable_time(curve, duration)
+    mix_in = _suggest_snap_time(raw_mix_in, beat_grid, bpm, duration, 16)
+    marks.append({
+        "type": "MIX_IN",
+        "name": _mark_label("MIX_IN"),
+        "time_sec": mix_in,
+        "raw_time_sec": round(raw_mix_in, 3),
+        "confidence": round(max(0.0, min(1.0, mix_in_conf)), 3),
+        "reason": f"{mix_in_reason}, snapped to 16 beats",
+        "source": "auto",
+    })
+
+    last_energy, last_conf, last_reason = _suggest_last_energy_time(curve, duration)
+    raw_mix_out = min(last_energy, max(mix_in + phrase32, duration - max(phrase32 * 2.0, 24.0)))
+    raw_mix_out = max(mix_in + phrase16, raw_mix_out)
+    mix_out = _suggest_snap_time(raw_mix_out, beat_grid, bpm, duration, 32)
+    if mix_out >= duration - beat_sec:
+        mix_out = _suggest_snap_time(max(mix_in + phrase32, duration - phrase32 * 2.0), beat_grid, bpm, duration, 32)
+    marks.append({
+        "type": "MIX_OUT",
+        "name": _mark_label("MIX_OUT"),
+        "time_sec": mix_out,
+        "raw_time_sec": round(raw_mix_out, 3),
+        "confidence": round(max(0.0, min(1.0, last_conf + 0.08)), 3),
+        "reason": f"safe late phrase before outro/end, {last_reason}, snapped to 32 beats",
+        "source": "auto",
+    })
+
+    raw_outro = max(mix_out, min(last_energy, duration - max(phrase16, 8.0)))
+    outro = _suggest_snap_time(raw_outro, beat_grid, bpm, duration, 16)
+    if outro < mix_out:
+        outro = mix_out
+    marks.append({
+        "type": "OUTRO",
+        "name": _mark_label("OUTRO"),
+        "time_sec": outro,
+        "raw_time_sec": round(raw_outro, 3),
+        "confidence": round(max(0.0, min(1.0, last_conf)), 3),
+        "reason": "late outro phrase near final usable energy, snapped to 16 beats",
+        "source": "auto",
+    })
+
+    vocal_raw = mix_in + max(phrase16, 8.0)
+    if vocal_raw < min(duration * 0.45, mix_out - phrase16):
+        vocal = _suggest_snap_time(vocal_raw, beat_grid, bpm, duration, 16)
+        marks.append({
+            "type": "VOCAL_IN",
+            "name": _mark_label("VOCAL_IN"),
+            "time_sec": vocal,
+            "raw_time_sec": round(vocal_raw, 3),
+            "confidence": 0.45 if curve else 0.32,
+            "reason": "optional early phrase after mix-in; verify vocal manually",
+            "source": "auto",
+        })
+
+    break_candidate = _suggest_break_time(curve, duration, mix_in, mix_out)
+    if break_candidate:
+        break_raw, break_conf, break_reason = break_candidate
+        break_time = _suggest_snap_time(break_raw, beat_grid, bpm, duration, 16)
+        marks.append({
+            "type": "BREAK",
+            "name": _mark_label("BREAK"),
+            "time_sec": break_time,
+            "raw_time_sec": round(break_raw, 3),
+            "confidence": round(break_conf, 3),
+            "reason": f"{break_reason}, snapped to 16 beats",
+            "source": "auto",
+        })
+
+    loops = []
+    outro_len = 32 if outro + beat_sec * 32 <= duration else 16
+    outro_start = _suggest_snap_time(outro, beat_grid, bpm, duration, 16)
+    outro_end = min(duration, outro_start + beat_sec * outro_len)
+    if outro_end > outro_start + beat_sec * 4:
+        loops.append({
+            "type": "OUTRO_LOOP",
+            "name": f"Auto Outro Loop {outro_len}",
+            "start_sec": round(outro_start, 3),
+            "end_sec": round(outro_end, 3),
+            "raw_start_sec": round(outro, 3),
+            "length_beats": outro_len,
+            "confidence": 0.62 if curve else 0.42,
+            "reason": f"loop from outro phrase, {outro_len} beats",
+            "source": "auto",
+        })
+
+    emergency_len = 16 if duration - mix_out >= beat_sec * 16 else 8
+    emergency_raw = max(mix_out, min(last_energy - beat_sec * emergency_len, duration - beat_sec * emergency_len - beat_sec * 2))
+    emergency_start = _suggest_snap_time(emergency_raw, beat_grid, bpm, duration, 4)
+    emergency_end = min(duration, emergency_start + beat_sec * emergency_len)
+    if emergency_end > emergency_start + beat_sec * 4:
+        loops.append({
+            "type": "EMERGENCY_LOOP",
+            "name": f"Auto Emergency Loop {emergency_len}",
+            "start_sec": round(emergency_start, 3),
+            "end_sec": round(emergency_end, 3),
+            "raw_start_sec": round(emergency_raw, 3),
+            "length_beats": emergency_len,
+            "confidence": 0.56 if curve else 0.38,
+            "reason": f"late fallback loop before fade/end, {emergency_len} beats",
+            "source": "auto",
+        })
+
+    return {
+        "ok": True,
+        "track_id": track_id,
+        "suggestions": {"marks": marks, "loops": loops},
+        "warnings": warnings,
     }
 
 
@@ -3384,7 +3659,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks", "/api/export_track_marks_to_engine"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks", "/api/export_track_marks_to_engine", "/api/suggest_track_marks"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -3403,6 +3678,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(write_track_marks(data))
             elif parsed_path == "/api/export_track_marks_to_engine":
                 self.send_json(export_track_marks_to_engine(data))
+            elif parsed_path == "/api/suggest_track_marks":
+                self.send_json(suggest_track_marks(data))
             elif parsed_path == "/api/build":
                 self.send_json(build_set(data["track_id"], data.get("role", "start"), data.get("minutes", 90), data.get("max_key_step", 3), data.get("bpm_window", 5), data.get("style_filter", [])))
             elif parsed_path == "/api/engine-playlist":

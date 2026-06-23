@@ -510,6 +510,12 @@
       box-shadow: 0 0 0 1px rgba(255,224,108,.28) inset;
       color: #fff4c2;
     }
+    .prep-item.suggested {
+      border-color: rgba(255,224,108,.62);
+      background: rgba(255,224,108,.075);
+      color: #ffe9a8;
+      border-style: dashed;
+    }
     .prep-delete {
       width: 20px;
       min-width: 20px;
@@ -703,6 +709,10 @@
             <button type="button" data-prep-loop="32">Loop 32</button>
           </div>
           <div class="track-prep-actions">
+            <button type="button" id="trackPrepSuggest">Suggest Marks</button>
+            <button type="button" id="trackPrepAccept">Accept Suggestions</button>
+            <button type="button" id="trackPrepClearSuggest">Clear Suggestions</button>
+            <button type="button" id="trackPrepReplaceSuggest" hidden>Replace existing marks</button>
             <button class="primary" type="button" id="trackPrepSave">Save Marks</button>
             <button type="button" id="trackPrepReset">Reset Marks</button>
             <button type="button" id="trackPrepExport">Export to Engine DJ</button>
@@ -1630,6 +1640,10 @@
     let trackPrepSnap = 'beat';
     let trackPrepDirty = false;
     let selectedPrepMarkType = '';
+    let trackPrepSuggestions = { marks: [], loops: [], warnings: [] };
+    let trackPrepSuggestBusy = false;
+    let trackPrepSuggestConflict = false;
+    let trackPrepSuggestConflictText = '';
     let trackPrepExportStatus = '';
     let trackPrepExportBad = false;
     let trackPrepExportConflict = false;
@@ -1964,10 +1978,46 @@
       return payload;
     }
 
+
+    function clearTrackPrepSuggestionsState() {
+      trackPrepSuggestions = { marks: [], loops: [], warnings: [] };
+      trackPrepSuggestBusy = false;
+      trackPrepSuggestConflict = false;
+      trackPrepSuggestConflictText = '';
+    }
+
+    function normalizeTrackPrepSuggestionMark(mark) {
+      const base = normalizePrepMark({ ...mark, source: 'suggested' });
+      if (!base) return null;
+      return { ...base, source: 'suggested', reason: String(mark?.reason || '') };
+    }
+
+    function normalizeTrackPrepSuggestionLoop(loop) {
+      const base = normalizePrepLoop({ ...loop, source: 'suggested' });
+      if (!base) return null;
+      return { ...base, source: 'suggested', reason: String(loop?.reason || '') };
+    }
+
+    function applyTrackPrepSuggestions(data) {
+      const marks = (data?.suggestions?.marks || data?.marks || []).map(normalizeTrackPrepSuggestionMark).filter(Boolean);
+      const loops = (data?.suggestions?.loops || data?.loops || []).map(normalizeTrackPrepSuggestionLoop).filter(Boolean);
+      trackPrepSuggestions = {
+        marks,
+        loops,
+        warnings: Array.isArray(data?.warnings) ? data.warnings.map(w => String(w)).filter(Boolean) : []
+      };
+      trackPrepSuggestBusy = false;
+      trackPrepSuggestConflict = false;
+      trackPrepSuggestConflictText = '';
+      redrawTrackPrep();
+      syncTrackPrepControls();
+    }
+
     function resetTrackPrepState() {
       trackPrep = { marks: [], loops: [], exists: false, source: 'manual', confidence: 1 };
       trackPrepDirty = false;
       selectedPrepMarkType = '';
+      clearTrackPrepSuggestionsState();
       waveHover = { active: false, time_sec: null, snap_time_sec: null, snap_kind: '', snapped: false };
       clearTrackPrepExportState();
       renderTrackPrepList();
@@ -1990,7 +2040,18 @@
       }
       for (const loop of loops) {
         const role = loopRoleLabel(loop, true);
-        rows.push(`<span class="prep-item loop" title="${esc(loop.length_beats || '')} beats">${esc(role)} ${esc(fmtTime(loop.start_sec))}–${esc(fmtTime(loop.end_sec))}<button class="prep-delete" type="button" data-prep-delete="loop" data-id="${esc(loop.id)}" title="Delete">x</button></span>`);
+        rows.push(`<span class="prep-item loop" title="${esc(loop.length_beats || '')} beats">${esc(role)} ${esc(fmtTime(loop.start_sec))}?${esc(fmtTime(loop.end_sec))}<button class="prep-delete" type="button" data-prep-delete="loop" data-id="${esc(loop.id)}" title="Delete">x</button></span>`);
+      }
+      const suggestedMarks = Array.isArray(trackPrepSuggestions?.marks) ? trackPrepSuggestions.marks : [];
+      const suggestedLoops = Array.isArray(trackPrepSuggestions?.loops) ? trackPrepSuggestions.loops : [];
+      for (const mark of suggestedMarks) {
+        const title = [mark.reason, mark.confidence != null ? `confidence ${Number(mark.confidence).toFixed(2)}` : ''].filter(Boolean).join(' ? ');
+        rows.push(`<span class="prep-item mark suggested" title="${esc(title || 'Suggested mark')}">${esc(prepMarkLabel(mark.type))} ${esc(fmtTime(mark.time_sec))}</span>`);
+      }
+      for (const loop of suggestedLoops) {
+        const role = loopRoleLabel(loop, true);
+        const title = [loop.reason, loop.length_beats ? `${loop.length_beats} beats` : '', loop.confidence != null ? `confidence ${Number(loop.confidence).toFixed(2)}` : ''].filter(Boolean).join(' ? ');
+        rows.push(`<span class="prep-item loop suggested" title="${esc(title || 'Suggested loop')}">${esc(role)} ${esc(fmtTime(loop.start_sec))}?${esc(fmtTime(loop.end_sec))}</span>`);
       }
       box.innerHTML = rows.length ? rows.join('') : '<span>No manual marks</span>';
     }
@@ -1999,13 +2060,26 @@
       const hasTrack = !!selectedTrackId();
       const hasDetail = !!window.__waveDetail;
       const ready = canNavigateWaveform();
+      const hasSuggestions = ((trackPrepSuggestions?.marks || []).length + (trackPrepSuggestions?.loops || []).length) > 0;
       const prep = $('trackPrep');
       if (!prep) return;
       const overwrite = $('trackPrepOverwrite');
+      const suggest = $('trackPrepSuggest');
+      const accept = $('trackPrepAccept');
+      const clearSuggest = $('trackPrepClearSuggest');
+      const replaceSuggest = $('trackPrepReplaceSuggest');
       if (overwrite) overwrite.hidden = !trackPrepExportConflict;
+      if (suggest) suggest.disabled = !ready || trackPrepSuggestBusy;
+      if (accept) accept.disabled = !ready || trackPrepSuggestBusy || !hasSuggestions;
+      if (clearSuggest) clearSuggest.disabled = !ready || trackPrepSuggestBusy || !hasSuggestions;
+      if (replaceSuggest) {
+        replaceSuggest.hidden = !trackPrepSuggestConflict;
+        replaceSuggest.disabled = !ready || trackPrepSuggestBusy || !trackPrepSuggestConflict;
+      }
       prep.querySelectorAll('button, select').forEach(el => {
         const exportButton = el.id === 'trackPrepExport' || el.id === 'trackPrepOverwrite';
-        el.disabled = !ready || (trackPrepExportBusy && exportButton);
+        const suggestButton = el.id === 'trackPrepSuggest' || el.id === 'trackPrepAccept' || el.id === 'trackPrepClearSuggest' || el.id === 'trackPrepReplaceSuggest';
+        el.disabled = !ready || (trackPrepExportBusy && exportButton) || (trackPrepSuggestBusy && suggestButton);
       });
       if (overwrite) overwrite.disabled = !ready || !trackPrepExportConflict || trackPrepExportBusy;
       const snap = $('trackPrepSnap');
@@ -2013,8 +2087,16 @@
       if (!hasTrack) prepStatus('Select an Engine track');
       else if (!hasDetail) prepStatus('Waveform loading...');
       else if (!ready) prepStatus('Loading track...');
+      else if (trackPrepSuggestBusy) prepStatus('Suggesting marks...');
+      else if (trackPrepSuggestConflict) prepStatus(trackPrepSuggestConflictText || 'Suggestion conflict', true);
+      else if (trackPrepDirty && hasSuggestions) prepStatus('Unsaved manual marks; suggestions ready');
       else if (trackPrepDirty) prepStatus('Unsaved manual marks');
       else if (trackPrepExportStatus) prepStatus(trackPrepExportStatus, trackPrepExportBad);
+      else if (hasSuggestions) {
+        const warnings = Array.isArray(trackPrepSuggestions?.warnings) ? trackPrepSuggestions.warnings.filter(Boolean) : [];
+        const text = warnings.length ? `Suggestions ready ? ${warnings.join('; ')}` : 'Suggestions ready';
+        prepStatus(text);
+      }
       else if (trackPrep.exists) prepStatus('AutoSet only');
       else prepStatus('No saved manual marks');
     }
@@ -2062,9 +2144,27 @@
         };
       }).filter(c => Number.isFinite(c.pos_frac));
 
-      window.__waveCues = [...engineCues, ...manualCues].sort((a, b) => Number(a.pos_s) - Number(b.pos_s));
+      const suggestedCues = (trackPrepSuggestions.marks || []).map(mark => {
+        const pos = Number(mark.time_sec);
+        const label = mark.name || prepMarkLabel(mark.type);
+        return {
+          id: `suggested_${mark.type}`,
+          label,
+          name: label,
+          pos_s: pos,
+          time_sec: pos,
+          pos_frac: fracFor(pos),
+          color: PREP_MARK_COLORS[mark.type] || '#ffe08a',
+          source: 'suggested',
+          type: mark.type,
+          reason: mark.reason || '',
+          confidence: Number(mark.confidence ?? 0)
+        };
+      }).filter(c => Number.isFinite(c.pos_frac));
+
+      window.__waveCues = [...engineCues, ...manualCues, ...suggestedCues].sort((a, b) => Number(a.pos_s) - Number(b.pos_s));
       window.__waveMarkers.push(...window.__waveCues.map(c => ({
-        kind: c.source === 'manual' ? 'prep' : 'cue',
+        kind: c.source === 'manual' ? 'prep' : (c.source === 'suggested' ? 'prep' : 'cue'),
         pos_s: Number(c.pos_s),
         pos_frac: Number(c.pos_frac),
         type: c.type,
@@ -2111,7 +2211,30 @@
         };
       }).filter(l => Number.isFinite(l.start_frac) && Number.isFinite(l.end_frac));
 
-      window.__waveLoops = [...engineLoops, ...manualLoops].sort((a, b) => Number(a.start_s) - Number(b.start_s));
+      const suggestedLoops = (trackPrepSuggestions.loops || []).map(loop => {
+        const s = Number(loop.start_sec);
+        const e = Number(loop.end_sec);
+        return {
+          id: `suggested_${loop.type}_${s.toFixed(3)}`,
+          label: loop.name || 'Loop',
+          name: loop.name || 'Loop',
+          start_s: s,
+          end_s: e,
+          start_sec: s,
+          end_sec: e,
+          start_frac: fracFor(s),
+          end_frac: fracFor(e),
+          length_beats: loop.length_beats,
+          from_mark_type: loop.from_mark_type,
+          color: loop.type === 'EMERGENCY_LOOP' ? 'rgba(239,107,115,0.9)' : 'rgba(255,224,108,0.92)',
+          source: 'suggested',
+          type: loop.type,
+          reason: loop.reason || '',
+          confidence: Number(loop.confidence ?? 0)
+        };
+      }).filter(l => Number.isFinite(l.start_frac) && Number.isFinite(l.end_frac));
+
+      window.__waveLoops = [...engineLoops, ...manualLoops, ...suggestedLoops].sort((a, b) => Number(a.start_s) - Number(b.start_s));
     }
 
     function redrawTrackPrep() {
@@ -2122,7 +2245,117 @@
       drawZoomWaveform();
     }
 
+
+    function trackPrepSuggestionConflictMessage(kind, type) {
+      if (kind === 'loop') {
+        return `${String(type || '').toUpperCase() === 'EMERGENCY_LOOP' ? 'EMERGENCY LOOP' : 'OUTRO LOOP'} already exists`;
+      }
+      return `${prepMarkLabel(type)} already exists`;
+    }
+
+    function trackPrepHasSuggestionConflicts(replaceExisting = false) {
+      const markConflicts = [];
+      for (const mark of (trackPrepSuggestions.marks || [])) {
+        if ((trackPrep.marks || []).some(existing => String(existing.type || '').toUpperCase() === String(mark.type || '').toUpperCase())) {
+          markConflicts.push(mark);
+        }
+      }
+      const loopConflicts = [];
+      for (const loop of (trackPrepSuggestions.loops || [])) {
+        if ((trackPrep.loops || []).some(existing => String(existing.type || '').toUpperCase() === String(loop.type || '').toUpperCase())) {
+          loopConflicts.push(loop);
+        }
+      }
+      if (!replaceExisting && (markConflicts.length || loopConflicts.length)) {
+        const first = markConflicts[0] || loopConflicts[0];
+        const kind = markConflicts[0] ? 'cue' : 'loop';
+        trackPrepSuggestConflict = true;
+        trackPrepSuggestConflictText = first ? trackPrepSuggestionConflictMessage(kind, first.type) : 'Suggestion conflict';
+        syncTrackPrepControls();
+        return true;
+      }
+      return false;
+    }
+
+    async function suggestTrackPrepMarks() {
+      if (!selectedTrack?.id || !window.__waveDetail) return;
+      trackPrepSuggestBusy = true;
+      trackPrepSuggestConflict = false;
+      trackPrepSuggestConflictText = '';
+      syncTrackPrepControls();
+      try {
+        const res = await fetch('/api/suggest_track_marks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ track_id: selectedTrack.id })
+        });
+        const data = await res.json();
+        if (!data?.ok) throw new Error(data?.error || data?.reason || 'Suggest failed');
+        applyTrackPrepSuggestions(data);
+      } catch (err) {
+        trackPrepSuggestBusy = false;
+        prepStatus(`Suggest failed: ${err}`, true);
+        syncTrackPrepControls();
+      }
+    }
+
+    function acceptTrackPrepSuggestions(replaceExisting = false) {
+      if (!selectedTrack?.id || !window.__waveDetail) return;
+      const marks = Array.isArray(trackPrepSuggestions?.marks) ? trackPrepSuggestions.marks : [];
+      const loops = Array.isArray(trackPrepSuggestions?.loops) ? trackPrepSuggestions.loops : [];
+      if (!marks.length && !loops.length) return;
+      if (trackPrepHasSuggestionConflicts(replaceExisting)) return;
+
+      if (replaceExisting) {
+        const markTypes = new Set(marks.map(mark => String(mark.type || '').toUpperCase()));
+        const loopTypes = new Set(loops.map(loop => String(loop.type || '').toUpperCase()));
+        trackPrep.marks = (trackPrep.marks || []).filter(mark => !markTypes.has(String(mark.type || '').toUpperCase()));
+        trackPrep.loops = (trackPrep.loops || []).filter(loop => !loopTypes.has(String(loop.type || '').toUpperCase()));
+      }
+
+      for (const mark of marks) {
+        const payload = normalizePrepMark({
+          type: mark.type,
+          name: mark.name || prepMarkLabel(mark.type),
+          time_sec: mark.time_sec,
+          raw_time_sec: mark.raw_time_sec,
+          snap: mark.snap || trackPrepSnap,
+          confidence: Number(mark.confidence ?? 1),
+          source: 'manual'
+        });
+        if (payload) trackPrep.marks.push(payload);
+      }
+      for (const loop of loops) {
+        const payload = normalizePrepLoop({
+          type: loop.type,
+          name: loop.name || (loop.type === 'EMERGENCY_LOOP' ? 'Emergency Loop' : 'Outro Loop'),
+          start_sec: loop.start_sec,
+          end_sec: loop.end_sec,
+          raw_start_sec: loop.raw_start_sec,
+          length_beats: loop.length_beats,
+          from_mark_type: loop.from_mark_type,
+          confidence: Number(loop.confidence ?? 1),
+          source: 'manual'
+        });
+        if (payload) trackPrep.loops.push(payload);
+      }
+
+      clearTrackPrepSuggestionsState();
+      selectedPrepMarkType = (trackPrep.marks[0] && trackPrep.marks[0].type) || selectedPrepMarkType;
+      clearTrackPrepExportState();
+      trackPrepDirty = true;
+      redrawTrackPrep();
+      prepStatus(replaceExisting ? 'Suggestions accepted and replaced existing marks' : 'Suggestions accepted; save marks to keep them');
+    }
+
+    function clearTrackPrepSuggestions() {
+      clearTrackPrepSuggestionsState();
+      redrawTrackPrep();
+      prepStatus('Suggestions cleared');
+    }
+
     async function loadTrackPrepMarks(trackId) {
+
       resetTrackPrepState();
       if (!trackId) return;
       try {
@@ -2373,6 +2606,10 @@
       });
       $('trackPrepSave')?.addEventListener('click', saveTrackPrepMarks);
       $('trackPrepReset')?.addEventListener('click', resetTrackPrepMarks);
+      $('trackPrepSuggest')?.addEventListener('click', suggestTrackPrepMarks);
+      $('trackPrepAccept')?.addEventListener('click', () => acceptTrackPrepSuggestions(false));
+      $('trackPrepClearSuggest')?.addEventListener('click', clearTrackPrepSuggestions);
+      $('trackPrepReplaceSuggest')?.addEventListener('click', () => acceptTrackPrepSuggestions(true));
       $('trackPrepExport')?.addEventListener('click', () => exportTrackPrepToEngine(false));
       $('trackPrepOverwrite')?.addEventListener('click', () => exportTrackPrepToEngine(true));
       $('trackPrepList')?.addEventListener('click', (event) => {
@@ -2474,10 +2711,13 @@
             ctx.lineWidth = 2;
           } else if (kind === 'prep') {
             const selectedMarker = m?.type === selectedPrepMarkType;
-            ctx.strokeStyle = selectedMarker ? 'rgba(255,224,108,0.98)' : 'rgba(55,197,143,0.88)';
+            const suggestedMarker = m?.source === 'suggested';
+            ctx.setLineDash(suggestedMarker ? [6 * dpr, 4 * dpr] : []);
+            ctx.strokeStyle = selectedMarker ? 'rgba(255,224,108,0.98)' : (suggestedMarker ? 'rgba(255,224,108,0.92)' : 'rgba(55,197,143,0.88)');
             ctx.lineWidth = selectedMarker ? 3 : 2;
           } else if (kind === 'loop') {
-            ctx.strokeStyle = 'rgba(236,196,76,0.95)';
+            ctx.setLineDash(m?.source === 'suggested' ? [6 * dpr, 4 * dpr] : []);
+            ctx.strokeStyle = m?.source === 'suggested' ? 'rgba(255,224,108,0.95)' : 'rgba(236,196,76,0.95)';
             ctx.lineWidth = 2;
           } else {
             ctx.strokeStyle = 'rgba(255,255,255,0.22)';
@@ -2489,6 +2729,7 @@
           ctx.moveTo(x, y1);
           ctx.lineTo(x, y2);
           ctx.stroke();
+          ctx.setLineDash([]);
         }
         ctx.lineWidth = 1;
       }
@@ -2519,10 +2760,11 @@
           const x = Math.floor(frac * (w - 1)) + 0.5;
           const slot = Number(cue?.slot) || 0;
           const manualCue = cue?.source === 'manual';
+          const suggestedCue = cue?.source === 'suggested';
           const baseLabel = (cue?.label || '').trim() || (slot ? `Cue ${slot}` : 'Cue');
           const cueTime = Number.isFinite(Number(cue?.pos_s)) ? fmtTime(cue.pos_s) : '';
-          const label = manualCue && cueTime ? `${baseLabel} ${cueTime}` : baseLabel;
-          const time = manualCue ? '' : cueTime;
+          const label = (manualCue || suggestedCue) && cueTime ? `${baseLabel} ${cueTime}` : baseLabel;
+          const time = (manualCue || suggestedCue) ? '' : cueTime;
           const selectedCue = manualCue && cue?.type === selectedPrepMarkType;
 
           const padX = 6 * dpr;
@@ -2562,14 +2804,16 @@
           }
 
           // Draw label pill.
-          const cueColor = cue?.color || (manualCue ? 'rgba(55,197,143,0.9)' : 'rgba(73,160,236,0.95)');
-          ctx.fillStyle = selectedCue ? 'rgba(255,224,108,0.20)' : (manualCue ? 'rgba(55,197,143,0.18)' : 'rgba(73,160,236,0.22)');
+          const cueColor = cue?.color || (suggestedCue ? 'rgba(255,224,108,0.95)' : (manualCue ? 'rgba(55,197,143,0.9)' : 'rgba(73,160,236,0.95)'));
+          ctx.setLineDash(suggestedCue ? [6 * dpr, 4 * dpr] : []);
+          ctx.fillStyle = selectedCue ? 'rgba(255,224,108,0.20)' : (suggestedCue ? 'rgba(255,224,108,0.12)' : (manualCue ? 'rgba(55,197,143,0.18)' : 'rgba(73,160,236,0.22)'));
           ctx.strokeStyle = selectedCue ? 'rgba(255,224,108,0.98)' : cueColor;
           ctx.lineWidth = selectedCue ? 2 : 1;
           ctx.beginPath();
           roundRect(ctx, pillLeft, cueTop, boxW, boxH, 6 * dpr);
           ctx.fill();
           ctx.stroke();
+          ctx.setLineDash([]);
           ctx.fillStyle = 'rgba(231,240,245,0.95)';
           ctx.fillText(label, pillLeft + padX, cueTop + padY);
 
@@ -2597,8 +2841,10 @@
           const yTop = waveBase + 1;
           const yBot = h - 1;
           const manualLoop = loop?.source === 'manual';
-          ctx.fillStyle = manualLoop ? 'rgba(255,138,61,0.24)' : 'rgba(255,138,61,0.18)';
-          ctx.strokeStyle = loop?.color || 'rgba(255,138,61,0.70)';
+          const suggestedLoop = loop?.source === 'suggested';
+          ctx.setLineDash(suggestedLoop ? [6 * dpr, 4 * dpr] : []);
+          ctx.fillStyle = manualLoop ? 'rgba(255,138,61,0.24)' : (suggestedLoop ? 'rgba(255,224,108,0.14)' : 'rgba(255,138,61,0.18)');
+          ctx.strokeStyle = loop?.color || (suggestedLoop ? 'rgba(255,224,108,0.92)' : 'rgba(255,138,61,0.70)');
           ctx.lineWidth = 1;
           ctx.fillRect(x1, yTop, Math.max(1, x2 - x1), yBot - yTop);
           ctx.beginPath();
@@ -2607,10 +2853,11 @@
           ctx.moveTo(x2, yTop);
           ctx.lineTo(x2, yBot);
           ctx.stroke();
+          ctx.setLineDash([]);
           const labelOnly = (loop?.label || '').trim() || (loop?.slot ? `Loop ${loop.slot}` : 'Loop');
           const hasRange = Number.isFinite(Number(loop?.start_s)) && Number.isFinite(Number(loop?.end_s));
-          const label = manualLoop && hasRange
-            ? `${loopRoleLabel(loop, true)} ${fmtTime(loop.start_s)}–${fmtTime(loop.end_s)}`
+          const label = (manualLoop || suggestedLoop) && hasRange
+            ? `${loopRoleLabel(loop, true)} ${fmtTime(loop.start_s)}?${fmtTime(loop.end_s)}`
             : (Number.isFinite(Number(loop?.start_s)) ? `${fmtTime(loop.start_s)} ${labelOnly}` : labelOnly);
           const textW = ctx.measureText(label).width;
           const center = (x1 + x2) / 2;
@@ -3319,17 +3566,20 @@
         if (!Number.isFinite(t) || t < start || t > end) continue;
         const x = Math.floor(timeToX(t)) + 0.5;
         const manualCue = cue.source === 'manual';
+        const suggestedCue = cue.source === 'suggested';
         const selectedCue = manualCue && cue.type === selectedPrepMarkType;
-        ctx.strokeStyle = selectedCue ? 'rgba(255,224,108,0.98)' : (cue.color || (manualCue ? 'rgba(55,197,143,0.95)' : 'rgba(73,160,236,0.95)'));
+        ctx.setLineDash(suggestedCue ? [6 * dpr, 4 * dpr] : []);
+        ctx.strokeStyle = selectedCue ? 'rgba(255,224,108,0.98)' : (cue.color || (suggestedCue ? 'rgba(255,224,108,0.95)' : (manualCue ? 'rgba(55,197,143,0.95)' : 'rgba(73,160,236,0.95)')));
         ctx.lineWidth = selectedCue ? 3 : 2;
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
         ctx.stroke();
+        ctx.setLineDash([]);
         const baseLabel = cue.name || cue.label || 'Cue';
-        const label = manualCue ? `${baseLabel} ${fmtTime(t)}` : baseLabel;
+        const label = (manualCue || suggestedCue) ? `${baseLabel} ${fmtTime(t)}` : baseLabel;
         const labelW = Math.min(150 * dpr, ctx.measureText(label).width + 10 * dpr);
-        ctx.fillStyle = selectedCue ? 'rgba(255,224,108,0.22)' : 'rgba(8,12,16,0.82)';
+        ctx.fillStyle = selectedCue ? 'rgba(255,224,108,0.20)' : (suggestedCue ? 'rgba(255,224,108,0.12)' : 'rgba(8,12,16,0.82)');
         ctx.fillRect(Math.max(0, x + 4), 4 * dpr, labelW, 18 * dpr);
         ctx.fillStyle = selectedCue ? '#fff4c2' : '#e7f0f5';
         ctx.fillText(label, Math.max(2 * dpr, x + 8), 7 * dpr);
@@ -3344,18 +3594,21 @@
         const x1 = Math.max(0, Math.min(w, timeToX(a)));
         const x2 = Math.max(0, Math.min(w, timeToX(b)));
         const manualLoop = loop.source === 'manual';
-        ctx.fillStyle = manualLoop ? 'rgba(255,138,61,0.24)' : 'rgba(255,138,61,0.18)';
-        ctx.strokeStyle = loop.color || 'rgba(255,138,61,0.82)';
+        const suggestedLoop = loop.source === 'suggested';
+        ctx.setLineDash(suggestedLoop ? [6 * dpr, 4 * dpr] : []);
+        ctx.fillStyle = manualLoop ? 'rgba(255,138,61,0.24)' : (suggestedLoop ? 'rgba(255,224,108,0.14)' : 'rgba(255,138,61,0.18)');
+        ctx.strokeStyle = loop.color || (suggestedLoop ? 'rgba(255,224,108,0.92)' : 'rgba(255,138,61,0.82)');
         ctx.fillRect(x1, 0, Math.max(1, x2 - x1), h);
         ctx.strokeRect(x1, 0, Math.max(1, x2 - x1), h);
-        const label = manualLoop
-          ? `${loopRoleLabel(loop, true)} ${fmtTime(a)}–${fmtTime(b)}`
+        ctx.setLineDash([]);
+        const label = (manualLoop || suggestedLoop)
+          ? `${loopRoleLabel(loop, true)} ${fmtTime(a)}?${fmtTime(b)}`
           : ((loop.name || loop.label || '').trim() || 'Loop');
         const textW = ctx.measureText(label).width;
         const tx = Math.max(2 * dpr, Math.min(w - textW - 2 * dpr, (x1 + x2) / 2 - textW / 2));
         ctx.fillStyle = 'rgba(8,12,16,0.78)';
         ctx.fillRect(Math.max(0, tx - 4 * dpr), h - 22 * dpr, Math.min(w, textW + 8 * dpr), 18 * dpr);
-        ctx.fillStyle = '#ffe0aa';
+        ctx.fillStyle = suggestedLoop ? '#fff4c2' : '#ffe0aa';
         ctx.fillText(label, tx, h - 19 * dpr);
       }
 

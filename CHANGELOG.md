@@ -2,6 +2,11 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.17
+
+- Track Prep: added auto-suggest preview for one selected track, with accept/clear controls and preview-only waveform overlays.
+- Track Prep: suggested marks and loops stay outside saved JSON until accepted.
+
 ## 1.5.16
 
 - Track Prep: overview seek now centers the zoom waveform while keeping Follow enabled, and zoom waveform supports tape-style drag navigation before playback.
