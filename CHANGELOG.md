@@ -2,9 +2,9 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
-## 1.5.21
+## 1.5.22
 
-- Refined the lower workspace into explicit library controls, set controls, browser, and style/output panels so the track list and right-side workspace can use the full width without overlap.
+- Restored the lower workspace to the GitHub-style two-column layout with the browser on the left and controls, styles, output, and maintenance tools on the right.
 
 ## 1.5.20
 
