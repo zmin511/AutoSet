@@ -2,6 +2,11 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.19
+
+- Refined the main workspace into a compact 4-block layout with aligned track, overview, zoom, and prep areas.
+- Made the list play button and waveform loop labels clearer to avoid the stray question-mark look.
+
 ## 1.5.18
 
 - Track Prep: added batch suggest preview for selected/visible tracks with accept, replace, open and clear controls.

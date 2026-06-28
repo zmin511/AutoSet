@@ -43,10 +43,13 @@
     .paths a:hover { text-decoration: underline; }
     .now-playing {
       display: grid;
-      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-      grid-template-areas: "selected wave";
+      grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
+      grid-template-areas:
+        "track overview"
+        "zoom zoom"
+        "prep prep";
       gap: 8px;
-      align-items: start;
+      align-items: stretch;
       padding-top: 8px;
       border-top: 1px solid var(--line);
       margin-bottom: 8px;
@@ -245,6 +248,15 @@
       border-radius: 999px;
       text-align: center;
       color: var(--text);
+      font-size: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .play::before {
+      content: '\25B6';
+      font-size: 11px;
+      line-height: 1;
     }
     .play.active { background: var(--accent2); color: #07110d; border-color: var(--accent2); }
     .selected-box, pre {
@@ -254,21 +266,82 @@
       padding: 12px;
     }
     .selected-box {
-      grid-area: selected;
+      grid-area: track;
       min-height: 0;
       color: #c8f6df;
       margin: 0;
       border-color: rgba(55, 197, 143, .45);
       background: rgba(55, 197, 143, .08);
       overflow: hidden;
-      align-self: start;
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
     }
     .selected-box strong { color: #e7fff4; font-size: 14px; }
+    .overview-row {
+      grid-area: overview;
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr) 60px;
+      gap: 8px;
+      min-width: 0;
+      align-self: stretch;
+      align-items: stretch;
+    }
+    .overview-row .waveform {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+    .play-mini-panel,
+    .volume-mini-panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0b0d0f;
+      padding: 8px;
+      min-width: 0;
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+    .play-mini-panel {
+      gap: 6px;
+    }
+    .volume-mini-panel {
+      gap: 4px;
+    }
+    .play-mini-panel .btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      flex: 0 0 auto;
+    }
+    .play-mini-panel .time {
+      font-variant-numeric: tabular-nums;
+      font-size: 10px;
+      color: var(--muted);
+      min-width: 0;
+      text-align: center;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .volume-mini-panel input[type="range"] {
+      width: 18px;
+      height: 118px;
+      min-height: 118px;
+      padding: 0;
+      writing-mode: vertical-lr;
+      direction: rtl;
+      appearance: slider-vertical;
+      flex: 0 0 auto;
+    }
     .track-card {
       display: grid;
-      grid-template-columns: 58px minmax(0, 1fr) 70px;
+      grid-template-columns: 58px minmax(0, 1fr);
       gap: 10px;
-      align-items: start;
+      align-items: stretch;
+      min-height: 0;
+      flex: 1;
     }
     .track-cover {
       width: 58px;
@@ -283,7 +356,13 @@
       font-size: 18px;
       font-weight: 800;
     }
-    .track-info { min-width: 0; }
+    .track-info {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      gap: 5px;
+    }
     .track-title {
       color: #e7fff4;
       font-size: 13px;
@@ -299,7 +378,7 @@
       gap: 6px;
       align-items: center;
       flex-wrap: wrap;
-      margin-top: 5px;
+      margin-top: 0;
       font-size: 12px;
     }
     .genre-select {
@@ -396,11 +475,11 @@
     .maintenance label { font-size: 12px; }
     .maintenance .buttons { margin-bottom: 0; }
     .toolbar.compact select { width: 62px; min-width: 62px; }
-    .waveform { grid-area: wave; border: 1px solid var(--line); border-radius: 8px; background: #0b0d0f; padding: 8px; margin: 0; min-height: 0; }
+    .waveform { border: 1px solid var(--line); border-radius: 8px; background: #0b0d0f; padding: 8px; margin: 0; min-height: 0; display: flex; flex-direction: column; }
     .waveform-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
     .waveform-head .title { font-size: 12px; color: var(--muted); }
     .waveform-head .meta { font-size: 11px; color: var(--muted); }
-    canvas#waveCanvas { width: 100%; height: 96px; display: block; cursor: pointer; }
+    canvas#waveCanvas { width: 100%; height: 86px; display: block; cursor: pointer; }
     .wave-detail-tools {
       display: flex;
       align-items: center;
@@ -432,25 +511,67 @@
       flex: 1;
       padding: 0;
     }
+    #waveZoomPanel {
+      grid-area: zoom;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0b0d0f;
+      padding: 8px;
+      margin: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
     canvas#waveZoomCanvas {
       width: 100%;
-      height: 164px;
+      height: 200px;
       display: block;
       cursor: ew-resize;
       border-top: 1px solid rgba(255,255,255,.08);
     }
+    #trackPrepPanel {
+      grid-area: prep;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0b0d0f;
+      padding: 8px;
+      margin: 0;
+      min-height: 0;
+    }
     .track-prep {
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid rgba(255,255,255,.08);
+      margin-top: 0;
+      padding-top: 0;
+      border-top: 0;
       display: grid;
-      gap: 7px;
+      gap: 5px;
     }
     .track-prep-head, .track-prep-row, .track-prep-actions {
       display: flex;
       align-items: center;
       gap: 4px;
       flex-wrap: wrap;
+    }
+    .track-prep-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding-top: 4px;
+    }
+    .track-prep-group + .track-prep-group { border-top: 1px solid rgba(255,255,255,.06); }
+    .track-prep-group-title {
+      min-width: 72px;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .track-prep-group-buttons {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      align-items: center;
+      min-width: 0;
     }
     .track-prep-title {
       color: #dff8ec;
@@ -601,20 +722,14 @@
       font-size: 11px;
     }
     .playerbar {
-      display: grid;
-      grid-template-columns: 1fr;
-      grid-template-rows: auto auto auto;
-      gap: 4px;
-      justify-items: center;
-      align-self: stretch;
-      justify-self: end;
-      width: 70px;
-      padding: 6px 8px;
-      min-height: 0;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(10, 12, 14, 0.75);
-      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: nowrap;
+      margin-top: auto;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255,255,255,.08);
+      min-width: 0;
     }
     .playerbar .btn {
       width: 42px;
@@ -628,9 +743,19 @@
       align-items: center;
       justify-content: center;
       font-weight: 700;
+      flex: 0 0 auto;
     }
-    .playerbar .time { font-variant-numeric: tabular-nums; font-size: 10px; color: var(--muted); min-width: 0; text-align: center; line-height: 1.1; }
-    .playerbar .spacer { display: none; }
+    .playerbar .time {
+      font-variant-numeric: tabular-nums;
+      font-size: 11px;
+      color: var(--muted);
+      min-width: 0;
+      text-align: left;
+      line-height: 1.1;
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+    .playerbar .spacer { flex: 1 1 auto; }
     .playerbar input[type="range"] {
       width: 18px;
       height: 92px;
@@ -639,6 +764,7 @@
       writing-mode: vertical-lr;
       direction: rtl;
       appearance: slider-vertical;
+      flex: 0 0 auto;
     }
     .playerbar .mini { display: none; }
     pre {
@@ -674,7 +800,8 @@
       .crumb-search { grid-template-columns: 1fr; }
       .top-search { width: 100%; }
       .top-search .toolbar { grid-template-columns: 1fr 72px 104px; }
-      .now-playing > * { margin-bottom: 8px; }
+      .now-playing { grid-template-columns: 1fr; grid-template-areas: "track" "overview" "zoom" "prep"; }
+      .overview-row { grid-template-columns: 82px minmax(0, 1fr) 56px; }
       .browser { max-height: 48vh; margin-bottom: 18px; }
       .style-box { max-height: 22vh; }
       .item { grid-template-columns: 24px 38px minmax(0, 1fr) 18px 72px 54px 56px 56px; }
@@ -697,12 +824,24 @@
     <div class="now-playing">
       <audio id="player" preload="none" hidden></audio>
       <div class="selected-box" id="selected">Выбери трек из папки или поиска.</div>
-      <div class="waveform" id="waveBox" hidden>
-        <div class="waveform-head">
-          <div class="title">Waveform (Engine overview)</div>
-          <div class="meta" id="waveMeta"></div>
+      <div class="overview-row">
+        <div class="play-mini-panel">
+          <button class="btn" id="playPause" type="button" title="Воспроизвести или приостановить выбранный трек" aria-label="Воспроизвести или приостановить выбранный трек">▶</button>
+          <div class="time" id="playerTime">0:00 / 0:00</div>
         </div>
-        <canvas id="waveCanvas" width="1024" height="84"></canvas>
+        <div class="waveform" id="waveBox" hidden>
+          <div class="waveform-head">
+            <div class="title">Waveform (Engine overview)</div>
+            <div class="meta" id="waveMeta"></div>
+          </div>
+          <canvas id="waveCanvas" width="1024" height="84"></canvas>
+        </div>
+        <div class="volume-mini-panel">
+          <div class="mini" title="Громкость прослушивания выбранного трека">Vol</div>
+          <input id="playerVol" type="range" min="0" max="1" step="0.01" value="0.85" aria-label="Volume" title="Громкость прослушивания выбранного трека">
+        </div>
+      </div>
+      <div class="waveform" id="waveZoomPanel" hidden>
         <div class="wave-detail-tools">
           <button id="waveZoomOut" type="button" title="Уменьшить масштаб waveform">-</button>
           <button id="waveZoomIn" type="button" title="Увеличить масштаб waveform">+</button>
@@ -712,6 +851,8 @@
           <input id="waveScroll" type="range" min="0" max="1000" value="0" title="Прокрутка zoom-участка waveform">
         </div>
         <canvas id="waveZoomCanvas" width="1024" height="128"></canvas>
+      </div>
+      <div class="prep-panel" id="trackPrepPanel" hidden>
         <div class="track-prep" id="trackPrep">
           <div class="track-prep-head">
             <div class="track-prep-title" title="Ручная разметка cue и loop для выбранного трека.">Track Prep</div>
@@ -730,168 +871,63 @@
               </select>
             </label>
           </div>
-          <div class="track-prep-row">
-            <button type="button" data-prep-mark="MIX_IN" title="Поставить MIX IN в текущую позицию и сделать её точкой входа в микс.">MIX IN</button>
-            <button type="button" data-prep-mark="VOCAL_IN" title="Поставить VOCAL IN в точку, где начинается вокальная часть трека.">VOCAL</button>
-            <button type="button" data-prep-mark="DROP" title="Поставить DROP в момент основного удара или кульминации.">DROP</button>
-            <button type="button" data-prep-mark="BREAK" title="Поставить BREAK в участок с заметным спадом энергии или паузой.">BREAK</button>
-            <button type="button" data-prep-mark="MIX_OUT" title="Поставить MIX OUT в точку безопасного выхода из трека.">MIX OUT</button>
-            <button type="button" data-prep-mark="OUTRO" title="Поставить OUTRO на финальную часть трека перед уходом в конец.">OUTRO</button>
-          </div>
-          <div class="track-prep-row">
-            <button type="button" data-prep-loop="4" title="Создать loop длиной 4 beats от текущей позиции или от выбранной метки.">Loop 4</button>
-            <button type="button" data-prep-loop="8" title="Создать loop длиной 8 beats от текущей позиции или от выбранной метки.">Loop 8</button>
-            <button type="button" data-prep-loop="16" title="Создать loop длиной 16 beats от текущей позиции или от выбранной метки.">Loop 16</button>
-            <button type="button" data-prep-loop="32" title="Создать loop длиной 32 beats от текущей позиции или от выбранной метки.">Loop 32</button>
-          </div>
-          <div class="track-prep-actions">
-            <button type="button" id="trackPrepSuggest" title="Сгенерировать preview-метки и loops для текущего трека без сохранения в JSON.">Suggest Marks</button>
-            <button type="button" id="trackPrepAccept" title="Принять preview-метки и loops и перенести их в обычные Track Prep marks.">Accept Suggestions</button>
-            <button type="button" id="trackPrepClearSuggest" title="Скрыть preview-метки и loops, не меняя сохранённый JSON.">Clear Suggestions</button>
-            <button type="button" id="trackPrepReplaceSuggest" hidden title="Заменить уже сохранённые track prep метки на текущие suggestions.">Replace existing marks</button>
-            <button class="primary" type="button" id="trackPrepSave" title="Сохранить ручные Track Prep marks и loops во внутренний JSON AutoSet.">Save Marks</button>
-            <button type="button" id="trackPrepReset" title="Удалить все сохранённые ручные Track Prep marks и loops для этого трека.">Reset Marks</button>
-            <button type="button" id="trackPrepExport" title="Экспортировать сохранённые Track Prep marks и loops выбранного трека в Engine DJ.">Export to Engine DJ</button>
-            <button type="button" id="trackPrepOverwrite" hidden title="Перезаписать только целевые cue/loop slots в Engine DJ после конфликта.">Overwrite Engine slots</button>
-            <span class="track-prep-status" id="trackPrepStatus"></span>
-          </div>
-          <div class="track-prep-list" id="trackPrepList"></div>
-          <div class="batch-suggest" id="batchSuggest">
-            <div class="batch-suggest-head">
-              <div class="batch-suggest-title" title="Preview-подсказки для нескольких видимых или выбранных треков. Ничего не сохраняется, пока вы не нажмёте Accept.">Batch Suggest</div>
-              <button type="button" id="batchSuggestRun" title="Сгенерировать preview-подсказки для видимых или выбранных треков.">Batch Suggest</button>
-              <button type="button" id="batchSuggestAccept" title="Сохранить отмеченные batch preview suggestions в Track Prep JSON.">Accept selected</button>
-              <button type="button" id="batchSuggestReplace" title="Перезаписать уже сохранённые Track Prep marks и loops только для выбранных треков.">Replace existing for selected</button>
-              <button type="button" id="batchSuggestOpen" title="Открыть выбранный трек и показать его preview suggestions на waveform.">Open track</button>
-              <button type="button" id="batchSuggestClear" title="Скрыть batch preview, не меняя сохранённые JSON-файлы.">Clear batch preview</button>
-              <span class="batch-suggest-status" id="batchSuggestStatus" title="Показывает состояние batch preview: анализ, конфликты, сохранение и количество выбранных треков."></span>
+          <div class="track-prep-group">
+            <div class="track-prep-group-title">Marks</div>
+            <div class="track-prep-group-buttons">
+              <button type="button" data-prep-mark="MIX_IN" title="Поставить MIX IN в текущую позицию и сделать её точкой входа в микс.">MIX IN</button>
+              <button type="button" data-prep-mark="VOCAL_IN" title="Поставить VOCAL IN в точку, где начинается вокальная часть трека.">VOCAL</button>
+              <button type="button" data-prep-mark="DROP" title="Поставить DROP в момент основного удара или кульминации.">DROP</button>
+              <button type="button" data-prep-mark="BREAK" title="Поставить BREAK в участок с заметным спадом энергии или паузой.">BREAK</button>
+              <button type="button" data-prep-mark="MIX_OUT" title="Поставить MIX OUT в точку безопасного выхода из трека.">MIX OUT</button>
+              <button type="button" data-prep-mark="OUTRO" title="Поставить OUTRO на финальную часть трека перед уходом в конец.">OUTRO</button>
             </div>
-            <div class="batch-suggest-table" id="batchSuggestTable"></div>
+          </div>
+          <div class="track-prep-group">
+            <div class="track-prep-group-title">Loops</div>
+            <div class="track-prep-group-buttons">
+              <button type="button" data-prep-loop="4" title="Создать loop длиной 4 beats от текущей позиции или от выбранной метки.">Loop 4</button>
+              <button type="button" data-prep-loop="8" title="Создать loop длиной 8 beats от текущей позиции или от выбранной метки.">Loop 8</button>
+              <button type="button" data-prep-loop="16" title="Создать loop длиной 16 beats от текущей позиции или от выбранной метки.">Loop 16</button>
+              <button type="button" data-prep-loop="32" title="Создать loop длиной 32 beats от текущей позиции или от выбранной метки.">Loop 32</button>
+            </div>
+          </div>
+          <div class="track-prep-group">
+            <div class="track-prep-group-title">Suggest</div>
+            <div class="track-prep-group-buttons track-prep-actions">
+              <button type="button" id="trackPrepSuggest" title="Сгенерировать preview-метки и loops для текущего трека без сохранения в JSON.">Suggest Marks</button>
+              <button type="button" id="trackPrepAccept" title="Принять preview-метки и loops и перенести их в обычные Track Prep marks.">Accept Suggestions</button>
+              <button type="button" id="trackPrepClearSuggest" title="Скрыть preview-метки и loops, не меняя сохранённый JSON.">Clear Suggestions</button>
+              <button type="button" id="trackPrepReplaceSuggest" hidden title="Заменить уже сохранённые track prep метки на текущие suggestions.">Replace existing marks</button>
+            </div>
+          </div>
+          <div class="track-prep-group">
+            <div class="track-prep-group-title">Save / Engine</div>
+            <div class="track-prep-group-buttons track-prep-actions">
+              <button class="primary" type="button" id="trackPrepSave" title="Сохранить ручные Track Prep marks и loops во внутренний JSON AutoSet.">Save Marks</button>
+              <button type="button" id="trackPrepReset" title="Удалить все сохранённые ручные Track Prep marks и loops для этого трека.">Reset Marks</button>
+              <button type="button" id="trackPrepExport" title="Экспортировать сохранённые Track Prep marks и loops выбранного трека в Engine DJ.">Export to Engine DJ</button>
+              <button type="button" id="trackPrepOverwrite" hidden title="Перезаписать только целевые cue/loop slots в Engine DJ после конфликта.">Overwrite Engine slots</button>
+            </div>
+          </div>
+          <span class="track-prep-status" id="trackPrepStatus"></span>
+          <div class="track-prep-list" id="trackPrepList"></div>
+          <div class="track-prep-group">
+            <div class="track-prep-group-title">Batch</div>
+            <div class="track-prep-group-buttons batch-suggest" id="batchSuggest">
+              <div class="batch-suggest-head">
+                <div class="batch-suggest-title" title="Preview-подсказки для нескольких видимых или выбранных треков. Ничего не сохраняется, пока вы не нажмёте Accept.">Batch Suggest</div>
+                <button type="button" id="batchSuggestRun" title="Сгенерировать preview-подсказки для видимых или выбранных треков.">Batch Suggest</button>
+                <button type="button" id="batchSuggestAccept" title="Сохранить отмеченные batch preview suggestions в Track Prep JSON.">Accept selected</button>
+                <button type="button" id="batchSuggestReplace" title="Перезаписать уже сохранённые Track Prep marks и loops только для выбранных треков.">Replace existing for selected</button>
+                <button type="button" id="batchSuggestOpen" title="Открыть выбранный трек и показать его preview suggestions на waveform.">Open track</button>
+                <button type="button" id="batchSuggestClear" title="Скрыть batch preview, не меняя сохранённые JSON-файлы.">Clear batch preview</button>
+                <span class="batch-suggest-status" id="batchSuggestStatus" title="Показывает состояние batch preview: анализ, конфликты, сохранение и количество выбранных треков."></span>
+              </div>
+              <div class="batch-suggest-table" id="batchSuggestTable"></div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-
-    <div class="grid">
-      <section>
-        <div class="path-config">
-          <div>
-            <label for="musicRoot">Музыкальная библиотека</label>
-            <div class="path-field">
-              <input id="musicRoot" placeholder="Music в корне диска запуска или корень диска">
-              <button id="pickMusic" type="button">Выбрать</button>
-            </div>
-          </div>
-          <div>
-            <label for="dbPath">База Engine DJ или папка Engine Library</label>
-            <div class="path-field">
-              <input id="dbPath" placeholder="Engine Library или Engine в корне диска запуска">
-              <button id="pickDb" type="button">Выбрать</button>
-            </div>
-          </div>
-          <button id="savePaths">Сохранить пути</button>
-        </div>
-        <div class="crumb-search">
-          <div class="crumbs" id="crumbs"></div>
-          <div class="top-search">
-            <div class="toolbar compact">
-              <input id="search" placeholder="Поиск трека">
-              <select id="limit" title="Сколько треков показывать в списке">
-                <option>20</option>
-                <option selected>40</option>
-                <option>60</option>
-                <option>80</option>
-                <option>100</option>
-                <option>120</option>
-                <option>140</option>
-                <option>160</option>
-                <option>180</option>
-                <option>200</option>
-              </select>
-              <button id="clearSearch" title="Сбросить поиск и вернуться к папкам">Папки</button>
-            </div>
-          </div>
-        </div>
-        <div class="browser" id="browser"></div>
-        <div class="maintenance">
-          <label>Обслуживание текущей папки</label>
-          <div class="maintenance-section">
-            <span class="maintenance-title">Жанры текущей папки</span>
-            <div class="tag-tools">
-              <div class="tag-row detail">
-                <button id="previewStyleDetails" title="Найти подстили треков во внешних источниках без записи">Найти стили онлайн</button>
-                <label class="tag-check" title="Искать онлайн-стили в текущей папке и всех подпапках"><input id="styleRecursive" type="checkbox"> С подпапками</label>
-                <button id="applyCheckedStyleDetails" title="Добавить отмеченные галочками подстили в Engine DB и теги файлов">Применить выбранные</button>
-                <button id="applyStyleDetails" title="Добавить все предложенные подстили средней и высокой уверенности в Engine DB и теги файлов">Применить все</button>
-                <span class="tag-note">Ищет artist/title во внешних источниках. Старые теги не удаляются.</span>
-              </div>
-              <div class="tag-row">
-                <input id="tagAdd" list="genreOptionsList" placeholder="Добавить жанр/тег в папку">
-                <button id="addGenreTag" title="Добавить жанр через запятую к каждому треку текущей папки">Добавить тег</button>
-                <label class="tag-check" title="Применять операции с тегами к текущей папке и всем подпапкам"><input id="tagRecursive" type="checkbox"> С подпапками</label>
-              </div>
-              <div class="tag-row replace">
-                <input id="tagFind" list="genreOptionsList" placeholder="Найти тег">
-                <input id="tagReplace" list="genreOptionsList" placeholder="Заменить на">
-                <button id="replaceGenreTag" title="Заменить найденный жанр в текущей папке">Заменить</button>
-                <button id="removeGenreTag" title="Удалить найденный жанр из текущей папки">Удалить</button>
-              </div>
-            </div>
-          </div>
-          <div class="maintenance-section">
-            <span class="maintenance-title">Синхронизация энергии</span>
-            <div class="buttons">
-              <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Записать звезды в папке</button>
-              <button id="writeAllEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для всей медиатеки Music">Записать все звезды</button>
-              <button id="reloadFolder" title="Заново прочитать текущую папку и обновить список файлов после изменений на диске">Обновить список</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div class="controls">
-          <div>
-            <label for="role">Роль трека</label>
-            <select id="role">
-              <option value="start">Начало</option>
-              <option value="peak">Кульминация</option>
-            </select>
-          </div>
-          <div>
-            <label for="minutes">Длительность</label>
-            <input id="minutes" type="number" min="15" max="360" step="5" value="90">
-          </div>
-          <div>
-            <label for="keyStep">Camelot ±</label>
-            <input id="keyStep" type="number" min="0" max="12" step="1" value="3" title="±N показывает только входящие числа Camelot. ±6 и выше включает все 1–12.">
-          </div>
-          <div>
-            <label for="bpmWindow">BPM ±</label>
-            <input id="bpmWindow" type="number" min="0" max="80" step="1" value="5">
-          </div>
-        </div>
-
-        <div class="build-controls">
-          <div>
-            <button class="primary" id="build" disabled title="Создает set с копированием треков в папку Music/Sets на этом SSD.">Создать сет</button>
-          </div>
-          <div>
-            <button class="primary" id="enginePlaylist" disabled title="Создает плейлист в базе данных Engine (ссылками на треки, без копирования файлов).">Создать плейлист</button>
-          </div>
-          <div>
-            <input id="engineFolder" type="text" value="Event" placeholder="Расположение плейлиста" title="Куда будет создан плейлист в базе Engine: папка (например Event или Event/Sub). Название плейлиста формируется автоматически." aria-label="Расположение плейлиста (папка в Engine)">
-          </div>
-        </div>
-
-        <div class="style-box">
-          <label>Стили для подбора</label>
-          <div class="style-grid" id="styleGrid"></div>
-        </div>
-
-        <pre id="output">Готовый сет появится в папке Music/Sets на этом SSD.</pre>
-        <div class="hint">BPM, Camelot, жанр и битрейт берутся из Engine DJ, а если трека нет в базе, приложение пытается показать то, что уже записано в файл.</div>
-      </section>
     </div>
   </main>
 
@@ -1057,12 +1093,6 @@
             <div class="selected-meta"><span>${energyStars(track)}</span></div>
             ${withStatus ? `<div class="selected-meta"><span>${track.id ? 'Можно строить сет' : 'Нет в Engine DB: сначала импортируй/проанализируй трек в Engine'}</span></div>` : ''}
           </div>
-          <div class="playerbar" id="playerbar">
-            <button class="btn" id="playPause" type="button" title="Прослушать трек">▶</button>
-            <div class="time" id="playerTime">0:00 / 0:00</div>
-            <div class="mini">Vol</div>
-            <input id="playerVol" type="range" min="0" max="1" step="0.01" value="0.85" aria-label="Volume">
-          </div>
         </div>
       `;
     }
@@ -1202,7 +1232,7 @@ ${suggestion.reason || ''}`
       ].filter(Boolean).join('');
       btn.innerHTML = `
         <input class="batch-check" type="checkbox" data-batch-select="track" data-id="${esc(track.id)}" ${batchChecked ? 'checked' : ''} title="Отметить трек для batch-подсказок и включить его в Batch Suggest">
-        <button class="play ${playingPath === (track.rel || track.path) ? 'active' : ''}" title="Прослушать трек">▶</button>
+        <button class="play ${playingPath === (track.rel || track.path) ? 'active' : ''}" type="button" title="Воспроизвести этот трек" aria-label="Воспроизвести этот трек"></button>
         <div class="title"><span class="name">${esc(track.label || track.filename)}</span><span class="sub">${esc(track.path || track.rel || '')}</span></div>
         <div class="marks">${marks}</div>
         <div class="cell genre-cell">${esc(track.genre || '')}</div>
@@ -3206,7 +3236,7 @@ ${suggestion.reason || ''}`
           const labelOnly = (loop?.label || '').trim() || (loop?.slot ? `Loop ${loop.slot}` : 'Loop');
           const hasRange = Number.isFinite(Number(loop?.start_s)) && Number.isFinite(Number(loop?.end_s));
           const label = (manualLoop || suggestedLoop) && hasRange
-            ? `${loopRoleLabel(loop, true)} ${fmtTime(loop.start_s)}?${fmtTime(loop.end_s)}`
+            ? `${loopRoleLabel(loop, true)} ${fmtTime(loop.start_s)}–${fmtTime(loop.end_s)}`
             : (Number.isFinite(Number(loop?.start_s)) ? `${fmtTime(loop.start_s)} ${labelOnly}` : labelOnly);
           const textW = ctx.measureText(label).width;
           const center = (x1 + x2) / 2;
@@ -3566,6 +3596,8 @@ ${suggestion.reason || ''}`
       waveOffsetSec = 0;
       followPlayhead = true;
       $('waveBox').hidden = true;
+      $('waveZoomPanel').hidden = true;
+      $('trackPrepPanel').hidden = true;
       $('waveMeta').textContent = '';
       const resLabel = $('waveResolutionLabel');
       if (resLabel) resLabel.textContent = '';
@@ -3592,6 +3624,8 @@ ${suggestion.reason || ''}`
         if (!Array.isArray(peaks) || !peaks.length) return;
         lastWavePeaks = peaks;
         $('waveBox').hidden = false;
+        $('waveZoomPanel').hidden = false;
+        $('trackPrepPanel').hidden = false;
         const energy = (typeof overview?.energy === 'number') ? overview.energy : null;
         const p = data?.source || {};
         const cueCount = Array.isArray(data?.cues) ? data.cues.length : 0;
@@ -3970,7 +4004,7 @@ ${suggestion.reason || ''}`
         ctx.strokeRect(x1, 0, Math.max(1, x2 - x1), h);
         ctx.setLineDash([]);
         const label = (manualLoop || suggestedLoop)
-          ? `${loopRoleLabel(loop, true)} ${fmtTime(a)}?${fmtTime(b)}`
+          ? `${loopRoleLabel(loop, true)} ${fmtTime(a)}–${fmtTime(b)}`
           : ((loop.name || loop.label || '').trim() || 'Loop');
         const textW = ctx.measureText(label).width;
         const tx = Math.max(2 * dpr, Math.min(w - textW - 2 * dpr, (x1 + x2) / 2 - textW / 2));
