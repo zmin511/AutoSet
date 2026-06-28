@@ -44,9 +44,7 @@
     .now-playing {
       display: grid;
       grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-      grid-template-areas:
-        "selected player"
-        "wave wave";
+      grid-template-areas: "selected wave";
       gap: 8px;
       align-items: start;
       padding-top: 8px;
@@ -268,7 +266,7 @@
     .selected-box strong { color: #e7fff4; font-size: 14px; }
     .track-card {
       display: grid;
-      grid-template-columns: 58px minmax(0, 1fr);
+      grid-template-columns: 58px minmax(0, 1fr) 70px;
       gap: 10px;
       align-items: start;
     }
@@ -603,21 +601,22 @@
       font-size: 11px;
     }
     .playerbar {
-      grid-area: player;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 9px 10px;
-      margin: 0;
-      min-height: 68px;
+      display: grid;
+      grid-template-columns: 1fr;
+      grid-template-rows: auto auto auto;
+      gap: 4px;
+      justify-items: center;
+      align-self: stretch;
+      justify-self: end;
+      width: 70px;
+      padding: 6px 8px;
+      min-height: 0;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: rgba(10, 12, 14, 0.75);
       backdrop-filter: blur(8px);
     }
     .playerbar .btn {
-      grid-column: 1;
-      grid-row: 1 / span 2;
       width: 42px;
       height: 42px;
       border-radius: 10px;
@@ -630,22 +629,18 @@
       justify-content: center;
       font-weight: 700;
     }
-    .playerbar .time { grid-column: 2; grid-row: 1; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 0; text-align: left; }
+    .playerbar .time { font-variant-numeric: tabular-nums; font-size: 10px; color: var(--muted); min-width: 0; text-align: center; line-height: 1.1; }
     .playerbar .spacer { display: none; }
     .playerbar input[type="range"] {
-      grid-column: 3;
-      grid-row: 1 / span 2;
       width: 18px;
-      height: 88px;
-      min-height: 88px;
+      height: 92px;
+      min-height: 92px;
       padding: 0;
       writing-mode: vertical-lr;
       direction: rtl;
       appearance: slider-vertical;
     }
-    .playerbar .mini { grid-column: 2; grid-row: 2; font-size: 11px; color: var(--muted); }
-    .player-slot { grid-area: player; display: flex; min-height: 0; align-self: start; }
-    .player-slot .playerbar { flex: 1; height: 100%; }
+    .playerbar .mini { display: none; }
     pre {
       min-height: 150px;
       max-height: 30vh;
@@ -700,17 +695,8 @@
     </header>
 
     <div class="now-playing">
+      <audio id="player" preload="none" hidden></audio>
       <div class="selected-box" id="selected">Выбери трек из папки или поиска.</div>
-      <div class="player-slot">
-        <audio id="player" preload="none"></audio>
-        <div class="playerbar" id="playerbar">
-          <button class="btn" id="playPause" type="button" title="Play/Pause (Space)">▶</button>
-          <div class="time" id="playerTime">0:00 / 0:00</div>
-          <div class="spacer"></div>
-          <div class="mini">Vol</div>
-          <input id="playerVol" type="range" min="0" max="1" step="0.01" value="0.85" aria-label="Volume">
-        </div>
-      </div>
       <div class="waveform" id="waveBox" hidden>
         <div class="waveform-head">
           <div class="title">Waveform (Engine overview)</div>
@@ -1071,6 +1057,12 @@
             <div class="selected-meta"><span>${energyStars(track)}</span></div>
             ${withStatus ? `<div class="selected-meta"><span>${track.id ? 'Можно строить сет' : 'Нет в Engine DB: сначала импортируй/проанализируй трек в Engine'}</span></div>` : ''}
           </div>
+          <div class="playerbar" id="playerbar">
+            <button class="btn" id="playPause" type="button" title="Прослушать трек">▶</button>
+            <div class="time" id="playerTime">0:00 / 0:00</div>
+            <div class="mini">Vol</div>
+            <input id="playerVol" type="range" min="0" max="1" step="0.01" value="0.85" aria-label="Volume">
+          </div>
         </div>
       `;
     }
@@ -1210,7 +1202,7 @@ ${suggestion.reason || ''}`
       ].filter(Boolean).join('');
       btn.innerHTML = `
         <input class="batch-check" type="checkbox" data-batch-select="track" data-id="${esc(track.id)}" ${batchChecked ? 'checked' : ''} title="Отметить трек для batch-подсказок и включить его в Batch Suggest">
-        <button class="play ${playingPath === (track.rel || track.path) ? 'active' : ''}" title="Прослушать трек в плеере">?</button>
+        <button class="play ${playingPath === (track.rel || track.path) ? 'active' : ''}" title="Прослушать трек">▶</button>
         <div class="title"><span class="name">${esc(track.label || track.filename)}</span><span class="sub">${esc(track.path || track.rel || '')}</span></div>
         <div class="marks">${marks}</div>
         <div class="cell genre-cell">${esc(track.genre || '')}</div>
@@ -1675,6 +1667,7 @@ ${suggestion.reason || ''}`
       applyInferredStyles(track);
       $('selected').innerHTML = selectedMarkup(track, false);
       wireGenreSelect();
+      wirePlayerBar();
       $('build').disabled = !track.id;
       $('enginePlaylist').disabled = !track.id;
       lastBuiltSetFolder = '';
@@ -3345,38 +3338,47 @@ ${suggestion.reason || ''}`
 
     function wirePlayerBar() {
       const player = $('player');
-      if (!player || player.__wiredBar) return;
-      player.__wiredBar = true;
+      if (!player) return;
       const btn = $('playPause');
       const vol = $('playerVol');
-      if (vol) player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0.85));
-      if (vol) vol.addEventListener('input', () => { player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0)); });
-      if (btn) btn.addEventListener('click', () => {
-        if (player.paused) {
-          if (selectedTrack) preparePlayerForTrack(selectedTrack);
-          player.play().catch(() => {});
-        } else {
-          player.pause();
-        }
-      });
-      window.addEventListener('keydown', (e) => {
-        if (e.code === 'Space' && e.target === document.body) {
-          e.preventDefault();
+      if (!player.__wiredAudioEvents) {
+        player.__wiredAudioEvents = true;
+        const markSelectedAudioReady = () => markAudioReadyForTrack(audioPreparingTrackId || selectedTrackId(), false);
+        player.addEventListener('timeupdate', updatePlayerBar);
+        player.addEventListener('durationchange', markSelectedAudioReady);
+        player.addEventListener('loadedmetadata', markSelectedAudioReady);
+        player.addEventListener('canplay', markSelectedAudioReady);
+        player.addEventListener('play', updatePlayerBar);
+        player.addEventListener('pause', updatePlayerBar);
+        window.addEventListener('keydown', (e) => {
+          if (e.code === 'Space' && e.target === document.body) {
+            e.preventDefault();
+            if (player.paused) {
+              if (selectedTrack) preparePlayerForTrack(selectedTrack);
+              player.play().catch(() => {});
+            } else {
+              player.pause();
+            }
+          }
+        });
+      }
+      if (btn && !btn.__wiredPlayCtl) {
+        btn.__wiredPlayCtl = true;
+        btn.addEventListener('click', () => {
           if (player.paused) {
             if (selectedTrack) preparePlayerForTrack(selectedTrack);
             player.play().catch(() => {});
           } else {
             player.pause();
           }
-        }
-      });
-      const markSelectedAudioReady = () => markAudioReadyForTrack(audioPreparingTrackId || selectedTrackId(), false);
-      player.addEventListener('timeupdate', updatePlayerBar);
-      player.addEventListener('durationchange', markSelectedAudioReady);
-      player.addEventListener('loadedmetadata', markSelectedAudioReady);
-      player.addEventListener('canplay', markSelectedAudioReady);
-      player.addEventListener('play', updatePlayerBar);
-      player.addEventListener('pause', updatePlayerBar);
+        });
+      }
+      if (vol && !vol.__wiredVolCtl) {
+        vol.__wiredVolCtl = true;
+        if (player.volume == null) player.volume = 0.85;
+        player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0.85));
+        vol.addEventListener('input', () => { player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0)); });
+      }
       updatePlayerBar();
     }
 
