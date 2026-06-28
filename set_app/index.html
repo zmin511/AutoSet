@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
@@ -148,7 +148,7 @@
     .item {
       width: 100%;
       display: grid;
-      grid-template-columns: 42px minmax(220px, 1fr) 20px minmax(88px, .32fr) minmax(170px, .58fr) 76px 62px 62px 58px;
+      grid-template-columns: 24px 42px minmax(220px, 1fr) 20px minmax(88px, .32fr) minmax(170px, .58fr) 76px 62px 62px 58px;
       gap: 8px;
       align-items: center;
       padding: 9px 11px;
@@ -527,6 +527,79 @@
       font-size: 11px;
       min-height: 14px;
     }
+    .batch-suggest {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255,255,255,.08);
+      display: grid;
+      gap: 7px;
+    }
+    .batch-suggest-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+    .batch-suggest-title {
+      color: #dff8ec;
+      font-size: 12px;
+      font-weight: 720;
+      margin-right: auto;
+    }
+    .batch-suggest-status {
+      color: var(--muted);
+      font-size: 11px;
+      min-height: 14px;
+    }
+    .batch-suggest-table {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 7px;
+      overflow: hidden;
+      background: rgba(255,255,255,.02);
+    }
+    .batch-suggest-row {
+      display: grid;
+      grid-template-columns: 30px 2fr 92px 92px 126px 126px 76px 1.35fr 88px 78px;
+      gap: 6px;
+      align-items: center;
+      padding: 6px 8px;
+      border-top: 1px solid rgba(255,255,255,.06);
+      font-size: 11px;
+    }
+    .batch-suggest-row.head {
+      border-top: 0;
+      background: rgba(255,255,255,.05);
+      color: var(--muted);
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .batch-suggest-row[data-status="conflict"] { background: rgba(255,224,108,.06); }
+    .batch-suggest-row[data-status="error"] { background: rgba(239,107,115,.08); }
+    .batch-suggest-row[data-status="saved"] { background: rgba(55,197,143,.07); }
+    .batch-suggest-cell {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .batch-suggest-cell.wrap {
+      white-space: normal;
+      line-height: 1.2;
+    }
+    .batch-suggest-cell .muted { color: var(--muted); }
+    .batch-suggest-cell input { width: auto; height: auto; min-height: 0; margin: 0; padding: 0; }
+    .batch-suggest-cell button {
+      min-height: 24px;
+      height: 24px;
+      padding: 3px 8px;
+      font-size: 10px;
+    }
+    .batch-suggest-table .empty {
+      padding: 10px 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
     .playerbar {
       grid-area: player;
       display: flex;
@@ -632,8 +705,8 @@
       .now-playing > * { margin-bottom: 8px; }
       .browser { max-height: 48vh; margin-bottom: 18px; }
       .style-box { max-height: 22vh; }
-      .item { grid-template-columns: 38px minmax(0, 1fr) 18px 72px 54px 56px; }
-      .item .cell:nth-child(5), .item .cell:nth-child(7), .item .cell:nth-child(9) { display: none; }
+      .item { grid-template-columns: 24px 38px minmax(0, 1fr) 18px 72px 54px 56px 56px; }
+      .item .cell:nth-child(6), .item .cell:nth-child(8), .item .cell:nth-child(10) { display: none; }
       .title .name { font-size: 14px; }
       .tag-row, .tag-row.detail, .tag-row.replace { grid-template-columns: 1fr; }
     }
@@ -720,6 +793,18 @@
             <span class="track-prep-status" id="trackPrepStatus"></span>
           </div>
           <div class="track-prep-list" id="trackPrepList"></div>
+          <div class="batch-suggest" id="batchSuggest">
+            <div class="batch-suggest-head">
+              <div class="batch-suggest-title">Batch Suggest</div>
+              <button type="button" id="batchSuggestRun">Batch Suggest</button>
+              <button type="button" id="batchSuggestAccept">Accept selected</button>
+              <button type="button" id="batchSuggestReplace">Replace existing for selected</button>
+              <button type="button" id="batchSuggestOpen">Open track</button>
+              <button type="button" id="batchSuggestClear">Clear batch preview</button>
+              <span class="batch-suggest-status" id="batchSuggestStatus"></span>
+            </div>
+            <div class="batch-suggest-table" id="batchSuggestTable"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -1132,20 +1217,23 @@
       btn.tabIndex = 0;
       btn.className = `item ${genreClass(track.genre)}` + (selectedTrack?.id && selectedTrack.id === track.id ? ' selected' : '');
       const colorTitle = genreColorLabel(track.genre);
-      if (colorTitle) btn.title = `Цвет строки: ${colorTitle}. Цвет показывает основную группу жанра.`;
+      if (colorTitle) btn.title = `???? ??????: ${colorTitle}. ???? ?????????? ???????? ?????? ?????.`;
       const suggestion = suggestionForTrack(track);
       const suggestionAllowed = selectableSuggestion(suggestion);
       const suggestionFile = suggestion?.file || '';
       const suggestionChecked = suggestionAllowed && selectedStyleFiles.has(suggestionFile);
+      const batchChecked = batchTrackIds.has(Number(track.id));
       const suggestionTitle = suggestion
-        ? `${suggestion.additions.join(', ')} -> ${suggestion.new_genre} (${suggestion.source || 'Online'}; ${suggestion.confidence})\n${suggestion.reason || ''}`
-        : 'Нет предложений по подстилям';
+        ? `${suggestion.additions.join(', ')} -> ${suggestion.new_genre} (${suggestion.source || 'Online'}; ${suggestion.confidence})
+${suggestion.reason || ''}`
+        : '??? ??????????? ?? ?????????';
       const marks = [
-        track.has_cue ? '<span class="dot cue" title="Есть cue"></span>' : '',
-        track.has_loop ? '<span class="dot loop" title="Есть loop"></span>' : '',
+        track.has_cue ? '<span class="dot cue" title="???? cue"></span>' : '',
+        track.has_loop ? '<span class="dot loop" title="???? loop"></span>' : '',
       ].filter(Boolean).join('');
       btn.innerHTML = `
-        <button class="play ${playingPath === (track.rel || track.path) ? 'active' : ''}" title="Прослушать">▶</button>
+        <input class="batch-check" type="checkbox" data-batch-select="track" data-id="${esc(track.id)}" ${batchChecked ? 'checked' : ''} title="???????? ? Batch Suggest">
+        <button class="play ${playingPath === (track.rel || track.path) ? 'active' : ''}" title="??????????">?</button>
         <div class="title"><span class="name">${esc(track.label || track.filename)}</span><span class="sub">${esc(track.path || track.rel || '')}</span></div>
         <div class="marks">${marks}</div>
         <div class="cell genre-cell">${esc(track.genre || '')}</div>
@@ -1162,6 +1250,15 @@
         <div class="cell">${esc(fmtLen(track.length))}</div>
       `;
       btn.onclick = (event) => {
+        const batchBox = event.target.classList.contains('batch-check') ? event.target : event.target.closest('.batch-check');
+        if (batchBox) {
+          event.stopPropagation();
+          const id = Number(batchBox.dataset.id || track.id || 0);
+          if (batchBox.checked) batchTrackIds.add(id);
+          else batchTrackIds.delete(id);
+          syncBatchSuggestControls();
+          return;
+        }
         if (event.target.classList.contains('play')) {
           event.stopPropagation();
           playTrack(track);
@@ -1648,6 +1745,13 @@
     let trackPrepExportBad = false;
     let trackPrepExportConflict = false;
     let trackPrepExportBusy = false;
+    let batchTrackIds = new Set();
+    let batchTrackSuggestions = [];
+    let batchTrackMap = new Map();
+    let batchTrackBusy = false;
+    let batchTrackWarnings = [];
+    let batchPreviewTrackId = 0;
+    let batchPreviewMode = '';
     let waveDragActive = false;
     let waveDragMode = '';
     let waveLastFrac = null;
@@ -2013,6 +2117,252 @@
       syncTrackPrepControls();
     }
 
+
+    function batchTrackResult(trackId) {
+      return batchTrackMap.get(Number(trackId) || 0) || null;
+    }
+
+    function batchScopeTracks() {
+      const visible = Array.isArray(currentRows.tracks) ? currentRows.tracks : [];
+      const selected = visible.filter(track => batchTrackIds.has(Number(track.id)));
+      return selected.length ? selected : visible;
+    }
+
+    function batchSuggestionValue(result, type, field = 'time_sec') {
+      const list = Array.isArray(result?.suggestions?.marks) ? result.suggestions.marks : [];
+      const mark = list.find(item => String(item?.type || '').toUpperCase() === type);
+      if (mark && field === 'time_sec') return Number(mark.time_sec);
+      const loops = Array.isArray(result?.suggestions?.loops) ? result.suggestions.loops : [];
+      const loop = loops.find(item => String(item?.type || '').toUpperCase() === type);
+      if (!loop) return null;
+      if (field === 'range') return Number.isFinite(Number(loop.start_sec)) && Number.isFinite(Number(loop.end_sec))
+        ? `${fmtTime(loop.start_sec)} - ${fmtTime(loop.end_sec)}`
+        : null;
+      if (field === 'start_sec') return Number(loop.start_sec);
+      if (field === 'end_sec') return Number(loop.end_sec);
+      return null;
+    }
+
+    function batchResultStatusText(result) {
+      if (!result) return 'Empty';
+      if (result.batch_status === 'saved') return 'Saved';
+      if (result.batch_status === 'conflict') return result.batch_message || 'Conflict';
+      if (result.batch_status === 'error') return result.batch_message || 'Error';
+      if (!result.ok) return 'Error';
+      return 'Preview';
+    }
+
+    function renderBatchSuggestPanel() {
+      const box = $('batchSuggestTable');
+      if (!box) return;
+      const rows = [];
+      rows.push(`
+        <div class="batch-suggest-row head">
+          <div class="batch-suggest-cell"></div>
+          <div class="batch-suggest-cell">Track</div>
+          <div class="batch-suggest-cell">MIX_IN</div>
+          <div class="batch-suggest-cell">MIX_OUT</div>
+          <div class="batch-suggest-cell">OUTRO_LOOP</div>
+          <div class="batch-suggest-cell">EMERGENCY_LOOP</div>
+          <div class="batch-suggest-cell">Confidence</div>
+          <div class="batch-suggest-cell">Warnings</div>
+          <div class="batch-suggest-cell">Status</div>
+          <div class="batch-suggest-cell"></div>
+        </div>
+      `);
+      if (!batchTrackSuggestions.length) {
+        rows.push('<div class="empty">No batch preview loaded.</div>');
+        box.innerHTML = rows.join('');
+        return;
+      }
+      for (const result of batchTrackSuggestions) {
+        const mixIn = batchSuggestionValue(result, 'MIX_IN');
+        const mixOut = batchSuggestionValue(result, 'MIX_OUT');
+        const outroLoop = batchSuggestionValue(result, 'OUTRO_LOOP', 'range');
+        const emergencyLoop = batchSuggestionValue(result, 'EMERGENCY_LOOP', 'range');
+        const warnings = Array.isArray(result.warnings) && result.warnings.length ? result.warnings.join('; ') : '';
+        const title = `${result.artist || ''}${result.artist && result.title ? ' - ' : ''}${result.title || result.filename || ''}`.trim() || `Track ${result.track_id}`;
+        const checked = result.selected ? 'checked' : '';
+        const status = batchResultStatusText(result);
+        const statusClass = result.batch_status || (result.ok ? 'preview' : 'error');
+        rows.push(`
+          <div class="batch-suggest-row" data-track-id="${esc(result.track_id)}" data-status="${esc(statusClass)}">
+            <div class="batch-suggest-cell"><input type="checkbox" data-batch-result-select="1" data-track-id="${esc(result.track_id)}" ${checked}></div>
+            <div class="batch-suggest-cell wrap" title="${esc(title)}">${esc(title)}</div>
+            <div class="batch-suggest-cell">${Number.isFinite(Number(mixIn)) ? esc(fmtTime(mixIn)) : '<span class="muted">-</span>'}</div>
+            <div class="batch-suggest-cell">${Number.isFinite(Number(mixOut)) ? esc(fmtTime(mixOut)) : '<span class="muted">-</span>'}</div>
+            <div class="batch-suggest-cell">${outroLoop ? esc(outroLoop) : '<span class="muted">-</span>'}</div>
+            <div class="batch-suggest-cell">${emergencyLoop ? esc(emergencyLoop) : '<span class="muted">-</span>'}</div>
+            <div class="batch-suggest-cell">${result.confidence != null ? esc(Number(result.confidence).toFixed(2)) : '<span class="muted">-</span>'}</div>
+            <div class="batch-suggest-cell wrap" title="${esc(warnings)}">${warnings ? esc(warnings) : '<span class="muted">-</span>'}</div>
+            <div class="batch-suggest-cell">${esc(status)}</div>
+            <div class="batch-suggest-cell"><button type="button" data-batch-open-track="${esc(result.track_id)}">Open</button></div>
+          </div>
+        `);
+      }
+      box.innerHTML = rows.join('');
+    }
+
+    function syncBatchSuggestControls() {
+      const hasResults = batchTrackSuggestions.length > 0;
+      const anySelected = batchTrackSuggestions.some(item => item.selected !== false && item.ok !== false);
+      const hasVisible = (currentRows.tracks || []).length > 0;
+      const runBtn = $('batchSuggestRun');
+      const acceptBtn = $('batchSuggestAccept');
+      const replaceBtn = $('batchSuggestReplace');
+      const openBtn = $('batchSuggestOpen');
+      const clearBtn = $('batchSuggestClear');
+      if (runBtn) runBtn.disabled = batchTrackBusy || !hasVisible;
+      if (acceptBtn) acceptBtn.disabled = batchTrackBusy || !hasResults || !anySelected;
+      if (replaceBtn) replaceBtn.disabled = batchTrackBusy || !hasResults || !anySelected;
+      if (openBtn) openBtn.disabled = batchTrackBusy || !hasResults || !anySelected;
+      if (clearBtn) clearBtn.disabled = batchTrackBusy || !hasResults;
+      const status = $('batchSuggestStatus');
+      if (status) {
+        if (batchTrackBusy) status.textContent = 'Analyzing tracks...';
+        else if (batchTrackWarnings.length) status.textContent = batchTrackWarnings.join('; ');
+        else if (hasResults) status.textContent = `${batchTrackSuggestions.length} tracks in preview`;
+        else status.textContent = 'No batch preview';
+      }
+      renderBatchSuggestPanel();
+    }
+
+    function clearBatchSuggestState(clearPreview = true) {
+      batchTrackBusy = false;
+      batchTrackWarnings = [];
+      batchTrackSuggestions = [];
+      batchTrackMap = new Map();
+      batchPreviewTrackId = 0;
+      batchPreviewMode = '';
+      if (clearPreview && trackPrepSuggestions && (trackPrepSuggestions.marks?.length || trackPrepSuggestions.loops?.length)) {
+        clearTrackPrepSuggestionsState();
+        redrawTrackPrep();
+      }
+      syncBatchSuggestControls();
+    }
+
+    function applyBatchPreviewToCurrentTrack(trackId) {
+      const result = batchTrackResult(trackId);
+      if (!result || !result.ok) return false;
+      batchPreviewMode = 'batch';
+      applyTrackPrepSuggestions(result);
+      return true;
+    }
+
+    function batchTrackMetaPayload(result) {
+      return {
+        track_id: Number(result.track_id) || 0,
+        file_path: result.file_path || result.path || '',
+        duration_sec: Number(result.duration_sec || 0) || 0,
+        bpm: Number.isFinite(Number(result.bpm)) ? Number(result.bpm) : null,
+        marks: (result.suggestions?.marks || []).map(item => ({ ...item, source: 'manual' })),
+        loops: (result.suggestions?.loops || []).map(item => ({ ...item, source: 'manual' })),
+        source: 'manual',
+        confidence: Number(result.confidence ?? 1)
+      };
+    }
+
+    async function openBatchTrack(trackId) {
+      const id = Number(trackId) || 0;
+      const result = batchTrackResult(id);
+      const track = (currentRows.tracks || []).find(item => Number(item.id) === id) || (result ? {
+        id,
+        label: result.title || result.filename || `Track ${id}`,
+        filename: result.filename || result.title || `Track ${id}`,
+        path: result.file_path || result.path || '',
+        rel: result.rel || '',
+        genre: result.genre || '',
+        bpm: result.bpm || '',
+        camelot: result.camelot || '',
+        length: result.length || result.duration_sec || 0,
+      } : null);
+      if (!track) return;
+      batchPreviewTrackId = id;
+      batchPreviewMode = 'batch';
+      selectTrack(track);
+    }
+
+    async function batchSuggestTracks() {
+      const tracks = batchScopeTracks();
+      const ids = tracks.map(track => Number(track.id) || 0).filter(Boolean);
+      if (!ids.length) {
+        prepStatus('No visible tracks to analyze', true);
+        return;
+      }
+      batchTrackBusy = true;
+      batchTrackWarnings = [];
+      syncBatchSuggestControls();
+      try {
+        const res = await fetch('/api/batch_suggest_track_marks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ track_ids: ids })
+        });
+        const data = await res.json();
+        if (!data?.ok) throw new Error(data?.error || data?.reason || 'Batch suggest failed');
+        batchTrackWarnings = Array.isArray(data.warnings) ? data.warnings.map(w => String(w)).filter(Boolean) : [];
+        batchTrackSuggestions = (data.results || []).map(item => ({
+          ...item,
+          selected: item.ok !== false,
+          batch_status: item.ok === false ? 'error' : 'preview',
+          batch_message: item.ok === false ? (item.error || 'Error') : ''
+        }));
+        batchTrackMap = new Map(batchTrackSuggestions.map(item => [Number(item.track_id) || 0, item]));
+        batchPreviewTrackId = 0;
+        batchPreviewMode = '';
+        syncBatchSuggestControls();
+      } catch (err) {
+        batchTrackBusy = false;
+        batchTrackWarnings = [String(err)];
+        syncBatchSuggestControls();
+      } finally {
+        batchTrackBusy = false;
+        syncBatchSuggestControls();
+      }
+    }
+
+    async function acceptBatchSuggestions(replaceExisting = false) {
+      const selected = batchTrackSuggestions.filter(item => item.selected !== false && item.ok !== false);
+      if (!selected.length) return;
+      batchTrackBusy = true;
+      syncBatchSuggestControls();
+      try {
+        for (const item of selected) {
+          const existingRes = await fetch(`/api/track_marks?track_id=${encodeURIComponent(item.track_id)}`);
+          const existing = await existingRes.json();
+          if (!replaceExisting && existing?.exists) {
+            item.batch_status = 'conflict';
+            item.batch_message = 'Existing marks already saved';
+            continue;
+          }
+          const payload = batchTrackMetaPayload(item);
+          const saveRes = await fetch('/api/track_marks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const saveData = await saveRes.json();
+          if (!saveData?.ok) throw new Error(saveData?.error || 'Save failed');
+          item.batch_status = 'saved';
+          item.batch_message = replaceExisting ? 'Replaced and saved' : 'Saved';
+        }
+      } catch (err) {
+        batchTrackWarnings = [String(err)];
+      } finally {
+        batchTrackBusy = false;
+        syncBatchSuggestControls();
+      }
+    }
+
+    function clearBatchPreview() {
+      if (batchPreviewMode === 'batch') {
+        clearTrackPrepSuggestionsState();
+        redrawTrackPrep();
+      }
+      clearBatchSuggestState(false);
+      renderBatchSuggestPanel();
+    }
+
     function resetTrackPrepState() {
       trackPrep = { marks: [], loops: [], exists: false, source: 'manual', confidence: 1 };
       trackPrepDirty = false;
@@ -2040,18 +2390,18 @@
       }
       for (const loop of loops) {
         const role = loopRoleLabel(loop, true);
-        rows.push(`<span class="prep-item loop" title="${esc(loop.length_beats || '')} beats">${esc(role)} ${esc(fmtTime(loop.start_sec))}?${esc(fmtTime(loop.end_sec))}<button class="prep-delete" type="button" data-prep-delete="loop" data-id="${esc(loop.id)}" title="Delete">x</button></span>`);
+        rows.push(`<span class="prep-item loop" title="${esc(loop.length_beats || '')} beats">${esc(role)} ${esc(fmtTime(loop.start_sec))} - ${esc(fmtTime(loop.end_sec))}<button class="prep-delete" type="button" data-prep-delete="loop" data-id="${esc(loop.id)}" title="Delete">x</button></span>`);
       }
       const suggestedMarks = Array.isArray(trackPrepSuggestions?.marks) ? trackPrepSuggestions.marks : [];
       const suggestedLoops = Array.isArray(trackPrepSuggestions?.loops) ? trackPrepSuggestions.loops : [];
       for (const mark of suggestedMarks) {
-        const title = [mark.reason, mark.confidence != null ? `confidence ${Number(mark.confidence).toFixed(2)}` : ''].filter(Boolean).join(' ? ');
+        const title = [mark.reason, mark.confidence != null ? `confidence ${Number(mark.confidence).toFixed(2)}` : ''].filter(Boolean).join(' · ');
         rows.push(`<span class="prep-item mark suggested" title="${esc(title || 'Suggested mark')}">${esc(prepMarkLabel(mark.type))} ${esc(fmtTime(mark.time_sec))}</span>`);
       }
       for (const loop of suggestedLoops) {
         const role = loopRoleLabel(loop, true);
-        const title = [loop.reason, loop.length_beats ? `${loop.length_beats} beats` : '', loop.confidence != null ? `confidence ${Number(loop.confidence).toFixed(2)}` : ''].filter(Boolean).join(' ? ');
-        rows.push(`<span class="prep-item loop suggested" title="${esc(title || 'Suggested loop')}">${esc(role)} ${esc(fmtTime(loop.start_sec))}?${esc(fmtTime(loop.end_sec))}</span>`);
+        const title = [loop.reason, loop.length_beats ? `${loop.length_beats} beats` : '', loop.confidence != null ? `confidence ${Number(loop.confidence).toFixed(2)}` : ''].filter(Boolean).join(' · ');
+        rows.push(`<span class="prep-item loop suggested" title="${esc(title || 'Suggested loop')}">${esc(role)} ${esc(fmtTime(loop.start_sec))} - ${esc(fmtTime(loop.end_sec))}</span>`);
       }
       box.innerHTML = rows.length ? rows.join('') : '<span>No manual marks</span>';
     }
@@ -2279,6 +2629,8 @@
 
     async function suggestTrackPrepMarks() {
       if (!selectedTrack?.id || !window.__waveDetail) return;
+      batchPreviewMode = 'single';
+      batchPreviewTrackId = 0;
       trackPrepSuggestBusy = true;
       trackPrepSuggestConflict = false;
       trackPrepSuggestConflictText = '';
@@ -2350,6 +2702,8 @@
 
     function clearTrackPrepSuggestions() {
       clearTrackPrepSuggestionsState();
+      batchPreviewMode = '';
+      batchPreviewTrackId = 0;
       redrawTrackPrep();
       prepStatus('Suggestions cleared');
     }
@@ -2375,6 +2729,9 @@
         };
         if (!selectedPrepMark()) selectedPrepMarkType = '';
         trackPrepDirty = false;
+        if (batchPreviewMode === 'batch' && batchPreviewTrackId === Number(trackId)) {
+          applyBatchPreviewToCurrentTrack(trackId);
+        }
         syncTrackPrepControls();
       } catch {
         prepStatus('Could not load manual marks', true);
@@ -2611,6 +2968,28 @@
       $('trackPrepClearSuggest')?.addEventListener('click', clearTrackPrepSuggestions);
       $('trackPrepReplaceSuggest')?.addEventListener('click', () => acceptTrackPrepSuggestions(true));
       $('trackPrepExport')?.addEventListener('click', () => exportTrackPrepToEngine(false));
+      $('batchSuggestRun')?.addEventListener('click', batchSuggestTracks);
+      $('batchSuggestAccept')?.addEventListener('click', () => acceptBatchSuggestions(false));
+      $('batchSuggestReplace')?.addEventListener('click', () => acceptBatchSuggestions(true));
+      $('batchSuggestOpen')?.addEventListener('click', () => {
+        const selected = batchTrackSuggestions.find(item => item.selected !== false && item.ok !== false);
+        if (selected) openBatchTrack(selected.track_id);
+      });
+      $('batchSuggestClear')?.addEventListener('click', clearBatchPreview);
+      $('batchSuggestTable')?.addEventListener('click', (event) => {
+        const check = event.target.closest('[data-batch-result-select]');
+        if (check) {
+          const id = Number(check.dataset.trackId || 0);
+          const item = batchTrackResult(id);
+          if (item) item.selected = !!check.checked;
+          syncBatchSuggestControls();
+          return;
+        }
+        const open = event.target.closest('[data-batch-open-track]');
+        if (open) {
+          openBatchTrack(open.dataset.batchOpenTrack || open.dataset.trackId || 0);
+        }
+      });
       $('trackPrepOverwrite')?.addEventListener('click', () => exportTrackPrepToEngine(true));
       $('trackPrepList')?.addEventListener('click', (event) => {
         const btn = event.target.closest('[data-prep-delete]');

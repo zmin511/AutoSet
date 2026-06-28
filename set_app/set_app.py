@@ -79,7 +79,7 @@ AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.17"
+APP_VERSION = "1.5.18"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -1251,12 +1251,9 @@ def _suggest_break_time(curve, duration_sec, mix_in_sec, mix_out_sec):
     return t, max(0.35, min(0.62, 0.62 - v * 0.35)), "low-energy break candidate in middle section"
 
 
-def suggest_track_marks(data):
-    if not isinstance(data, dict):
-        raise ValueError("JSON object expected")
-    track_id = int(data.get("track_id") or 0)
-    if track_id <= 0:
-        raise ValueError("track_id is required")
+def _suggest_track_marks_for_track(track_id):
+    track_id = int(track_id)
+    meta = _track_mark_meta(track_id)
     detail = get_track_waveform_detail(track_id)
     duration = float(detail.get("duration_sec") or 0.0)
     bpm = detail.get("bpm")
@@ -1264,7 +1261,14 @@ def suggest_track_marks(data):
     curve = _suggest_energy_curve(detail)
     warnings = []
     if duration <= 0:
-        return {"ok": True, "track_id": track_id, "suggestions": {"marks": [], "loops": []}, "warnings": ["Track duration is unavailable"]}
+        return {
+            "ok": True,
+            **meta,
+            "track_id": track_id,
+            "suggestions": {"marks": [], "loops": []},
+            "warnings": ["Track duration is unavailable"],
+            "confidence": 0.0,
+        }
     if not curve:
         warnings.append("Waveform energy curve unavailable; using BPM/duration fallback")
     if not beat_grid:
@@ -1378,13 +1382,68 @@ def suggest_track_marks(data):
             "source": "auto",
         })
 
+    confidence_values = [float(item.get("confidence", 0.0) or 0.0) for item in marks + loops]
+    confidence = round(sum(confidence_values) / len(confidence_values), 3) if confidence_values else 0.0
     return {
         "ok": True,
+        **meta,
         "track_id": track_id,
         "suggestions": {"marks": marks, "loops": loops},
         "warnings": warnings,
+        "confidence": confidence,
     }
 
+
+def suggest_track_marks(data):
+    if not isinstance(data, dict):
+        raise ValueError("JSON object expected")
+    track_id = int(data.get("track_id") or 0)
+    if track_id <= 0:
+        raise ValueError("track_id is required")
+    return _suggest_track_marks_for_track(track_id)
+
+
+def batch_suggest_track_marks(data):
+    if not isinstance(data, dict):
+        raise ValueError("JSON object expected")
+    raw_ids = data.get("track_ids") or []
+    if not isinstance(raw_ids, list):
+        raise ValueError("track_ids must be an array")
+    seen = set()
+    track_ids = []
+    warnings = []
+    for value in raw_ids:
+        try:
+            track_id = int(value)
+        except Exception:
+            continue
+        if track_id <= 0 or track_id in seen:
+            continue
+        seen.add(track_id)
+        track_ids.append(track_id)
+    if len(track_ids) > 100:
+        warnings.append("Batch suggest limited to 100 tracks; extra tracks were skipped")
+        track_ids = track_ids[:100]
+
+    results = []
+    for track_id in track_ids:
+        try:
+            results.append(_suggest_track_marks_for_track(track_id))
+        except Exception as exc:
+            try:
+                meta = _track_mark_meta(track_id)
+            except Exception:
+                meta = {"track_id": track_id, "title": "", "artist": "", "filename": "", "file_path": "", "duration_sec": 0, "bpm": None}
+            results.append({
+                "ok": False,
+                **meta,
+                "track_id": track_id,
+                "error": str(exc),
+                "suggestions": {"marks": [], "loops": []},
+                "warnings": [str(exc)],
+                "confidence": 0.0,
+            })
+    return {"ok": True, "results": results, "warnings": warnings}
 
 MANUAL_MARK_ORDER = ["MIX_IN", "VOCAL_IN", "DROP", "BREAK", "MIX_OUT", "OUTRO"]
 MANUAL_MARK_TYPES = set(MANUAL_MARK_ORDER)
@@ -3659,7 +3718,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks", "/api/export_track_marks_to_engine", "/api/suggest_track_marks"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks", "/api/export_track_marks_to_engine", "/api/suggest_track_marks", "/api/batch_suggest_track_marks"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -3680,6 +3739,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(export_track_marks_to_engine(data))
             elif parsed_path == "/api/suggest_track_marks":
                 self.send_json(suggest_track_marks(data))
+            elif parsed_path == "/api/batch_suggest_track_marks":
+                self.send_json(batch_suggest_track_marks(data))
             elif parsed_path == "/api/build":
                 self.send_json(build_set(data["track_id"], data.get("role", "start"), data.get("minutes", 90), data.get("max_key_step", 3), data.get("bpm_window", 5), data.get("style_filter", [])))
             elif parsed_path == "/api/engine-playlist":

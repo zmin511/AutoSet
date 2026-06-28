@@ -2,6 +2,11 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.18
+
+- Track Prep: added batch suggest preview for selected/visible tracks with accept, replace, open and clear controls.
+- Track Prep: batch preview stays read-only until accepted into JSON.
+
 ## 1.5.17
 
 - Track Prep: added auto-suggest preview for one selected track, with accept/clear controls and preview-only waveform overlays.
