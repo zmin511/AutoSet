@@ -2,6 +2,10 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.20
+
+- Fixed a regression in the overview-row refactor so the library, browser, lower panels, Track Prep, and Batch Suggest UI are visible again while keeping the compact top-row player layout.
+
 ## 1.5.19
 
 - Refined the main workspace into a compact 4-block layout with aligned track, overview, zoom, and prep areas.

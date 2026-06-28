@@ -928,6 +928,127 @@
           </div>
         </div>
       </div>
+    <div class="grid">
+      <section>
+        <div class="path-config">
+          <div>
+            <label for="musicRoot">Музыкальная библиотека</label>
+            <div class="path-field">
+              <input id="musicRoot" placeholder="Music в корне диска запуска или корень диска">
+              <button id="pickMusic" type="button">Выбрать</button>
+            </div>
+          </div>
+          <div>
+            <label for="dbPath">База Engine DJ или папка Engine Library</label>
+            <div class="path-field">
+              <input id="dbPath" placeholder="Engine Library или Engine в корне диска запуска">
+              <button id="pickDb" type="button">Выбрать</button>
+            </div>
+          </div>
+          <button id="savePaths">Сохранить пути</button>
+        </div>
+        <div class="crumb-search">
+          <div class="crumbs" id="crumbs"></div>
+          <div class="top-search">
+            <div class="toolbar compact">
+              <input id="search" placeholder="Поиск трека">
+              <select id="limit" title="Сколько треков показывать в списке">
+                <option>20</option>
+                <option selected>40</option>
+                <option>60</option>
+                <option>80</option>
+                <option>100</option>
+                <option>120</option>
+                <option>140</option>
+                <option>160</option>
+                <option>180</option>
+                <option>200</option>
+              </select>
+              <button id="clearSearch" title="Сбросить поиск и вернуться к папкам">Папки</button>
+            </div>
+          </div>
+        </div>
+        <div class="browser" id="browser"></div>
+        <div class="maintenance">
+          <label>Обслуживание текущей папки</label>
+          <div class="maintenance-section">
+            <span class="maintenance-title">Жанры текущей папки</span>
+            <div class="tag-tools">
+              <div class="tag-row detail">
+                <button id="previewStyleDetails" title="Найти подстили треков во внешних источниках без записи">Найти стили онлайн</button>
+                <label class="tag-check" title="Искать онлайн-стили в текущей папке и всех подпапках"><input id="styleRecursive" type="checkbox"> С подпапками</label>
+                <button id="applyCheckedStyleDetails" title="Добавить отмеченные галочками подстили в Engine DB и теги файлов">Применить выбранные</button>
+                <button id="applyStyleDetails" title="Добавить все предложенные подстили средней и высокой уверенности в Engine DB и теги файлов">Применить все</button>
+                <span class="tag-note">Ищет artist/title во внешних источниках. Старые теги не удаляются.</span>
+              </div>
+              <div class="tag-row">
+                <input id="tagAdd" list="genreOptionsList" placeholder="Добавить жанр/тег в папку">
+                <button id="addGenreTag" title="Добавить жанр через запятую к каждому треку текущей папки">Добавить тег</button>
+                <label class="tag-check" title="Применять операции с тегами к текущей папке и всем подпапкам"><input id="tagRecursive" type="checkbox"> С подпапками</label>
+              </div>
+              <div class="tag-row replace">
+                <input id="tagFind" list="genreOptionsList" placeholder="Найти тег">
+                <input id="tagReplace" list="genreOptionsList" placeholder="Заменить на">
+                <button id="replaceGenreTag" title="Заменить найденный жанр в текущей папке">Заменить</button>
+                <button id="removeGenreTag" title="Удалить найденный жанр из текущей папки">Удалить</button>
+              </div>
+            </div>
+          </div>
+          <div class="maintenance-section">
+            <span class="maintenance-title">Синхронизация энергии</span>
+            <div class="buttons">
+              <button id="writeEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для текущей папки">Записать звезды в папке</button>
+              <button id="writeAllEnergyRatings" title="Записать рассчитанную энергию waveform в Track.rating Engine DJ для всей медиатеки Music">Записать все звезды</button>
+              <button id="reloadFolder" title="Заново прочитать текущую папку и обновить список файлов после изменений на диске">Обновить список</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="controls">
+          <div>
+            <label for="role">Роль трека</label>
+            <select id="role">
+              <option value="start">Начало</option>
+              <option value="peak">Кульминация</option>
+            </select>
+          </div>
+          <div>
+            <label for="minutes">Длительность</label>
+            <input id="minutes" type="number" min="15" max="360" step="5" value="90">
+          </div>
+          <div>
+            <label for="keyStep">Camelot ±</label>
+            <input id="keyStep" type="number" min="0" max="12" step="1" value="3" title="±N показывает только входящие числа Camelot. ±6 и выше включает все 1–12.">
+          </div>
+          <div>
+            <label for="bpmWindow">BPM ±</label>
+            <input id="bpmWindow" type="number" min="0" max="80" step="1" value="5">
+          </div>
+        </div>
+
+        <div class="build-controls">
+          <div>
+            <button class="primary" id="build" disabled title="Создает set с копированием треков в папку Music/Sets на этом SSD.">Создать сет</button>
+          </div>
+          <div>
+            <button class="primary" id="enginePlaylist" disabled title="Создает плейлист в базе данных Engine (ссылками на треки, без копирования файлов).">Создать плейлист</button>
+          </div>
+          <div>
+            <input id="engineFolder" type="text" value="Event" placeholder="Расположение плейлиста" title="Куда будет создан плейлист в базе Engine: папка (например Event или Event/Sub). Название плейлиста формируется автоматически." aria-label="Расположение плейлиста (папка в Engine)">
+          </div>
+        </div>
+
+        <div class="style-box">
+          <label>Стили для подбора</label>
+          <div class="style-grid" id="styleGrid"></div>
+        </div>
+
+        <pre id="output">Готовый сет появится в папке Music/Sets на этом SSD.</pre>
+        <div class="hint">BPM, Camelot, жанр и битрейт берутся из Engine DJ, а если трека нет в базе, приложение пытается показать то, что уже записано в файл.</div>
+      </section>
+    </div>
     </div>
   </main>
 
