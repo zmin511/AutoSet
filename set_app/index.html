@@ -54,8 +54,8 @@
       border-top: 1px solid var(--line);
       margin-bottom: 8px;
     }
-    .grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-    section { border-top: 1px solid var(--line); padding-top: 8px; min-width: 0; }
+    .grid { display: grid; grid-template-columns: minmax(720px, 1.7fr) minmax(460px, .95fr); gap: 8px; align-items: start; }
+    section { border-top: 1px solid var(--line); padding-top: 8px; }
     label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
     input, select, button {
       font: inherit;
@@ -76,7 +76,6 @@
       gap: 8px;
       align-items: end;
       margin-bottom: 8px;
-      min-width: 0;
     }
     .path-config input { font-size: 12px; }
     .path-config > button { white-space: nowrap; }
@@ -136,7 +135,6 @@
       gap: 8px;
       align-items: start;
       margin: 0 0 8px;
-      min-width: 0;
     }
     .crumbs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; min-height: 32px; margin: 0; color: var(--muted); font-size: 12px; }
     .crumbs button { min-height: 28px; padding: 4px 8px; font-size: 12px; }
@@ -431,7 +429,6 @@
     .tag-check { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
     .tag-check input { width: auto; min-height: 0; }
     .style-box {
-      min-width: 0;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel);
@@ -463,9 +460,9 @@
     }
     .style-chip input { width: auto; height: auto; min-height: 0; padding: 0; margin: 0; }
     audio { width: 100%; margin: 0 0 13px; }
-    .controls { display: grid; grid-template-columns: 1.15fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; min-width: 0; }
+    .controls { display: grid; grid-template-columns: 1.15fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; }
     .buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-    .build-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-bottom: 8px; align-items: stretch; min-width: 0; }
+    .build-controls { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; align-items: stretch; }
     .build-controls button { width: 100%; white-space: nowrap; padding-left: 12px; padding-right: 12px; }
     .build-controls input { width: 100%; min-width: 0; box-sizing: border-box; }
     .build-controls button, .build-controls input { height: 38px; min-height: 38px; }
@@ -474,7 +471,7 @@
       .build-controls > div, .build-controls > div:last-child { flex: 1 1 auto; min-width: 0; }
       .build-controls button { width: 100%; }
     }
-    .maintenance { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); min-width: 0; }
+    .maintenance { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
     .maintenance label { font-size: 12px; }
     .maintenance .buttons { margin-bottom: 0; }
     .toolbar.compact select { width: 62px; min-width: 62px; }
@@ -1051,7 +1048,6 @@
         <pre id="output">Готовый сет появится в папке Music/Sets на этом SSD.</pre>
         <div class="hint">BPM, Camelot, жанр и битрейт берутся из Engine DJ, а если трека нет в базе, приложение пытается показать то, что уже записано в файл.</div>
       </section>
-    </div>
     </div>
   </main>
 
