@@ -54,22 +54,24 @@
       border-top: 1px solid var(--line);
       margin-bottom: 8px;
     }
-    .lower-layout {
+    .lower-workspace {
       display: grid;
       grid-template-columns: minmax(720px, 1.7fr) minmax(460px, .95fr);
       gap: 8px;
       align-items: start;
     }
-    .library-controls-panel, .set-controls-panel, .track-browser-panel, .style-and-output-panel {
+    .library-frame, .set-frame {
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel);
       padding: 10px;
       margin: 0;
       min-width: 0;
-      border-top: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
-    .library-controls-panel, .set-controls-panel { display: flex; flex-direction: column; gap: 8px; }
     .library-workspace-panel {
       display: grid;
       grid-template-columns: minmax(520px, 1fr) minmax(360px, 0.7fr);
@@ -78,12 +80,6 @@
       min-width: 0;
     }
     .track-browser-panel, .style-and-output-panel { display: flex; flex-direction: column; gap: 8px; }
-    .lower-column {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      min-width: 0;
-    }
     section { border-top: 1px solid var(--line); padding-top: 8px; }
     label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
     input, select, button {
@@ -97,7 +93,7 @@
     button { min-height: 38px; padding: 8px 12px; cursor: pointer; }
     button.primary { background: var(--accent); color: #07110d; border-color: var(--accent); font-weight: 700; }
     button:disabled { opacity: .45; cursor: default; }
-    .toolbar { display: grid; grid-template-columns: 1fr 92px 120px; gap: 8px; margin-bottom: 8px; }
+    .toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 72px 104px; gap: 8px; margin-bottom: 8px; min-width: 0; }
     .toolbar.compact { margin: 0; }
     .path-config {
       display: flex;
@@ -162,10 +158,11 @@
     .picker-row span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .crumb-search {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(360px, 48%);
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
       gap: 8px;
       align-items: start;
       margin: 0;
+      min-width: 0;
     }
     .crumbs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; min-height: 32px; margin: 0; color: var(--muted); font-size: 12px; }
     .crumbs button { min-height: 28px; padding: 4px 8px; font-size: 12px; }
@@ -823,13 +820,13 @@
     @media (max-width: 1100px) {
       main { width: min(100vw - 20px, 1280px); padding-top: 16px; }
       header, .now-playing { display: block; }
-      .lower-layout { grid-template-columns: 1fr; }
+      .lower-workspace { grid-template-columns: 1fr; }
       .paths { text-align: left; margin-top: 10px; grid-template-columns: auto 1fr; }
       .toolbar { grid-template-columns: 1fr; }
       .path-config, .controls, .build-controls { flex-direction: column; }
       .crumb-search { grid-template-columns: 1fr; }
-      .top-search { width: 100%; }
-      .top-search .toolbar { grid-template-columns: 1fr 72px 104px; }
+      .top-search { width: 100%; min-width: 0; }
+      .top-search .toolbar { grid-template-columns: minmax(0, 1fr) 72px 104px; }
       .now-playing { grid-template-columns: 1fr; grid-template-areas: "track" "overview" "zoom" "prep"; }
       .overview-row { grid-template-columns: 82px minmax(0, 1fr) 56px; }
       .browser { max-height: 48vh; margin-bottom: 18px; }
@@ -958,8 +955,8 @@
           </div>
         </div>
       </div>
-    <div class="lower-layout">
-      <div class="lower-column">
+    <div class="lower-workspace">
+      <section class="library-frame">
         <div class="path-config">
           <div>
             <label for="musicRoot">Музыкальная библиотека</label>
@@ -1036,9 +1033,9 @@
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div class="lower-column">
+      <aside class="set-frame">
         <div class="controls">
           <div>
             <label for="role">Роль трека</label>
@@ -1079,8 +1076,7 @@
         </div>
         <pre id="output">Готовый сет появится в папке Music/Sets на этом SSD.</pre>
         <div class="hint">BPM, Camelot, жанр и битрейт берутся из Engine DJ, а если трека нет в базе, приложение пытается показать то, что уже записано в файл.</div>
-      </div>
-    </div>
+      </aside>
     </div>
   </main>
 

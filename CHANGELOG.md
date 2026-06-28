@@ -2,6 +2,10 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.23
+
+- Split the lower workspace into two independent frames so the library/file browser stays isolated on the left and the set/style panel stays isolated on the right.
+
 ## 1.5.22
 
 - Restored the lower workspace to the GitHub-style two-column layout with the browser on the left and controls, styles, output, and maintenance tools on the right.
