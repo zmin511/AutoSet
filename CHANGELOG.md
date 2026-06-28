@@ -2,6 +2,10 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.21
+
+- Refined the lower workspace into explicit library controls, set controls, browser, and style/output panels so the track list and right-side workspace can use the full width without overlap.
+
 ## 1.5.20
 
 - Fixed a regression in the overview-row refactor so the library, browser, lower panels, Track Prep, and Batch Suggest UI are visible again while keeping the compact top-row player layout.
