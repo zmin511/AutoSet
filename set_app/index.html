@@ -43,10 +43,10 @@
     .paths a:hover { text-decoration: underline; }
     .now-playing {
       display: grid;
-      grid-template-columns: minmax(280px, 320px) minmax(520px, 1fr);
+      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
       grid-template-areas:
-        "selected wave"
-        "player wave";
+        "selected player"
+        "wave wave";
       gap: 8px;
       align-items: start;
       padding-top: 8px;
@@ -263,6 +263,7 @@
       border-color: rgba(55, 197, 143, .45);
       background: rgba(55, 197, 143, .08);
       overflow: hidden;
+      align-self: start;
     }
     .selected-box strong { color: #e7fff4; font-size: 14px; }
     .track-card {
@@ -398,23 +399,24 @@
     .maintenance .buttons { margin-bottom: 0; }
     .toolbar.compact select { width: 62px; min-width: 62px; }
     .waveform { grid-area: wave; border: 1px solid var(--line); border-radius: 8px; background: #0b0d0f; padding: 8px; margin: 0; min-height: 0; }
-    .waveform-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+    .waveform-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
     .waveform-head .title { font-size: 12px; color: var(--muted); }
     .waveform-head .meta { font-size: 11px; color: var(--muted); }
-    canvas#waveCanvas { width: 100%; height: 68px; display: block; cursor: pointer; }
+    canvas#waveCanvas { width: 100%; height: 96px; display: block; cursor: pointer; }
     .wave-detail-tools {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin: 4px 0;
+      gap: 6px;
+      margin: 3px 0;
       color: var(--muted);
       font-size: 11px;
+      flex-wrap: wrap;
     }
     .wave-detail-tools button {
-      min-height: 28px;
-      height: 28px;
-      padding: 3px 9px;
-      font-size: 12px;
+      min-height: 26px;
+      height: 26px;
+      padding: 3px 8px;
+      font-size: 11px;
     }
     .wave-detail-tools button.active {
       border-color: rgba(73,160,236,0.8);
@@ -427,14 +429,14 @@
       opacity: .9;
     }
     .wave-detail-tools input[type="range"] {
-      height: 24px;
-      min-height: 24px;
+      height: 22px;
+      min-height: 22px;
       flex: 1;
       padding: 0;
     }
     canvas#waveZoomCanvas {
       width: 100%;
-      height: 128px;
+      height: 164px;
       display: block;
       cursor: ew-resize;
       border-top: 1px solid rgba(255,255,255,.08);
@@ -614,8 +616,10 @@
       backdrop-filter: blur(8px);
     }
     .playerbar .btn {
-      width: 40px;
-      height: 34px;
+      grid-column: 1;
+      grid-row: 1 / span 2;
+      width: 42px;
+      height: 42px;
       border-radius: 10px;
       border: 1px solid var(--line);
       background: #0d0f11;
@@ -626,49 +630,22 @@
       justify-content: center;
       font-weight: 700;
     }
-    .playerbar .time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 88px; text-align: left; }
-    .playerbar .spacer { flex: 1; }
-    .playerbar input[type="range"] { width: 120px; }
-    .playerbar .mini { font-size: 11px; color: var(--muted); }
-    .now-playing .playerbar {
-      display: grid;
-      grid-template-columns: 42px minmax(0, 1fr);
-      grid-template-rows: auto auto 1fr;
-      gap: 7px 9px;
-      align-content: center;
-      align-items: center;
-    }
-    .player-slot { grid-area: player; display: flex; min-height: 68px; }
-    .player-slot .playerbar { flex: 1; height: 100%; }
-    .now-playing .playerbar .btn {
-      grid-column: 1;
+    .playerbar .time { grid-column: 2; grid-row: 1; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 0; text-align: left; }
+    .playerbar .spacer { display: none; }
+    .playerbar input[type="range"] {
+      grid-column: 3;
       grid-row: 1 / span 2;
-      width: 42px;
-      height: 38px;
-    }
-    .now-playing .playerbar .time {
-      grid-column: 2;
-      grid-row: 1;
-      min-width: 0;
-      align-self: end;
-      color: #c8d3dc;
-    }
-    .now-playing .playerbar .spacer { display: none; }
-    .now-playing .playerbar .mini {
-      grid-column: 2;
-      grid-row: 2;
-      font-size: 10px;
-      align-self: start;
-    }
-    .now-playing .playerbar input[type="range"] {
-      grid-column: 1 / -1;
-      grid-row: 3;
-      width: 100%;
-      min-width: 0;
-      height: 24px;
+      width: 18px;
+      height: 88px;
+      min-height: 88px;
       padding: 0;
-      align-self: end;
+      writing-mode: vertical-lr;
+      direction: rtl;
+      appearance: slider-vertical;
     }
+    .playerbar .mini { grid-column: 2; grid-row: 2; font-size: 11px; color: var(--muted); }
+    .player-slot { grid-area: player; display: flex; min-height: 0; align-self: start; }
+    .player-slot .playerbar { flex: 1; height: 100%; }
     pre {
       min-height: 150px;
       max-height: 30vh;
@@ -3281,6 +3258,16 @@ ${suggestion.reason || ''}`
       const x = event.clientX - rect.left;
       if (!Number.isFinite(x)) return null;
       return Math.max(0, Math.min(1, x / Math.max(1, rect.width)));
+    }
+
+    function _waveOverviewSeekEvent(event) {
+      const canvas = $('waveCanvas');
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect || !Number.isFinite(rect.left) || !Number.isFinite(rect.width)) return null;
+      if (event.clientX < rect.left || event.clientX > rect.right) return null;
+      if (event.clientY < rect.top || event.clientY > rect.bottom) return null;
+      return _waveFracFromEvent(event);
     }
 
     function _waveZoomTimeFromEvent(event) {
