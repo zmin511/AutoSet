@@ -76,10 +76,11 @@ ENGINE_CUE_SLOT_COLORS = {
 }
 ENGINE_LOOP_SLOT_COLORS = {1: 0xFFF4D338, 2: 0xFFEF8130}
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".wav", ".aiff", ".aif"}
+AUDIO_MIME_TYPES = {".mp3": "audio/mpeg", ".flac": "audio/flac", ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".wav": "audio/wav", ".aiff": "audio/aiff", ".aif": "audio/aiff"}
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.24"
+APP_VERSION = "1.5.25"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -3601,7 +3602,7 @@ class Handler(BaseHTTPRequestHandler):
         if start > end:
             self.send_error(416)
             return
-        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        content_type = AUDIO_MIME_TYPES.get(path.suffix.lower()) or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Accept-Ranges", "bytes")
@@ -3704,6 +3705,19 @@ class Handler(BaseHTTPRequestHandler):
             track_id = qs.get("track_id", [""])[0]
             try:
                 self.send_json(get_track_marks(track_id))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": repr(exc)}, status=400)
+            return
+        if parsed.path == "/api/media-check":
+            qs = parse_qs(parsed.query)
+            try:
+                media_path = safe_media_path(qs.get("path", [""])[0])
+                self.send_json({
+                    "ok": True,
+                    "path": str(media_path),
+                    "size": media_path.stat().st_size,
+                    "mime": AUDIO_MIME_TYPES.get(media_path.suffix.lower()) or mimetypes.guess_type(str(media_path))[0] or "application/octet-stream",
+                })
             except Exception as exc:
                 self.send_json({"ok": False, "error": repr(exc)}, status=400)
             return

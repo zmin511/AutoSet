@@ -892,7 +892,7 @@
     </header>
 
     <div class="now-playing">
-      <audio id="player" preload="none" hidden></audio>
+      <audio id="player" preload="auto" hidden></audio>
       <div class="selected-box" id="selected">Выбери трек из папки или поиска.</div>
       <div class="overview-row">
         <div class="play-mini-panel">
@@ -998,6 +998,8 @@
           </div>
         </div>
       </div>
+    </div>
+
     <div class="lower-workspace">
       <section class="library-frame">
         <div class="path-config">
@@ -1151,6 +1153,20 @@
     let audioLoadingTrackId = 0;
     let audioFallbackTimer = null;
     let audioPendingSeekSec = null;
+    let playbackCursorSec = 0;
+    let playbackCursorPinned = false;
+    let mediaBlobUrl = '';
+    let mediaBlobPath = '';
+    let webAudioCtx = null;
+    let webAudioGain = null;
+    let webAudioSource = null;
+    let webAudioBuffer = null;
+    let webAudioPath = '';
+    let webAudioStartedAt = 0;
+    let webAudioOffsetSec = 0;
+    let webAudioPlaying = false;
+    let webAudioTimer = null;
+    let webAudioSeekTimer = null;
     let lastBuiltSetFolder = '';
     let styleGroups = [];
     let genreOptions = [];
@@ -1752,9 +1768,10 @@ ${suggestion.reason || ''}`
     function playbackDuration() {
       const player = $('player');
       const candidates = [
-        player ? Number(player.duration) : 0,
         Number(window.__waveDetail?.duration_sec || 0),
-        Number(selectedTrack?.length || 0)
+        Number(selectedTrack?.length || 0),
+        Number(webAudioBuffer?.duration || 0),
+        player ? Number(player.duration) : 0
       ];
       for (const value of candidates) {
         if (Number.isFinite(value) && value > 0) return value;
@@ -1762,12 +1779,66 @@ ${suggestion.reason || ''}`
       return 0;
     }
 
+    function durationForSeek() {
+      const candidates = [
+        Number(window.__waveDetail?.duration_sec || 0),
+        Number(selectedTrack?.length || 0),
+        Number(webAudioBuffer?.duration || 0),
+        Number($('player')?.duration || 0)
+      ];
+      for (const value of candidates) {
+        if (Number.isFinite(value) && value > 0) return value;
+      }
+      return 0;
+    }
+
+    function pinPlaybackCursor(timeSec, options = {}) {
+      const duration = durationForSeek() || playbackDuration();
+      const raw = Number(timeSec);
+      const t = Math.max(0, Math.min(duration || Math.max(0, raw || 0), Number.isFinite(raw) ? raw : 0));
+      playbackCursorSec = t;
+      playbackCursorPinned = true;
+      audioPendingSeekSec = t;
+      webAudioOffsetSec = t;
+      waveLastFrac = duration > 0 ? t / duration : 0;
+      if (options.centerZoom) centerZoomOnTime(t);
+      else if (followPlayhead) updateFollowWaveWindow();
+      syncWaveScrollControl();
+      updatePlayerBar();
+      if (lastWavePeaks) drawWaveform(lastWavePeaks);
+      drawZoomWaveform();
+      return t;
+    }
+
     function currentPlaybackTime() {
-      const pending = Number(audioPendingSeekSec);
-      if (Number.isFinite(pending) && pending >= 0) return Math.min(playbackDuration() || pending, pending);
       const player = $('player');
+      const dur = playbackDuration();
+      if (webAudioPlaying) {
+        const webCur = currentWebAudioTime();
+        if (Number.isFinite(webCur) && webCur >= 0) {
+          playbackCursorSec = webCur;
+          playbackCursorPinned = true;
+          return dur > 0 ? Math.min(dur, webCur) : webCur;
+        }
+      }
       const cur = Number(player?.currentTime);
-      return Number.isFinite(cur) && cur >= 0 ? cur : 0;
+      const cursor = Number(playbackCursorSec);
+      const hasPinned = playbackCursorPinned && Number.isFinite(cursor) && cursor >= 0;
+      // If browser fired play but the audio is still stalled at 0, keep the user-selected red cursor.
+      // Otherwise the playhead jumps back to the start and looks like the chosen position was lost.
+      if (player && !player.paused && Number.isFinite(cur) && cur >= 0) {
+        const audioReallyMoved = cur > 0.05 || !hasPinned || Math.abs(cur - cursor) > 0.05;
+        if (audioReallyMoved) {
+          playbackCursorSec = cur;
+          playbackCursorPinned = true;
+          return cur;
+        }
+      }
+      const pending = Number(audioPendingSeekSec);
+      if (Number.isFinite(pending) && pending >= 0) return Math.min(dur || pending, pending);
+      if (hasPinned) return Math.min(dur || cursor, cursor);
+      if (Number.isFinite(cur) && cur > 0) return cur;
+      return 0;
     }
 
     function clearAudioFallbackTimer() {
@@ -1784,7 +1855,9 @@ ${suggestion.reason || ''}`
     }
 
     function canNavigateWaveform() {
-      return !!selectedTrackId() && !!window.__waveDetail && audioNavigationReady();
+      // Navigation must work as soon as a track and duration are known, even before
+      // HTML audio/WebAudio has started. Do not require audio readiness here.
+      return !!selectedTrackId() && durationForSeek() > 0;
     }
 
     function applyPendingSeekIfReady() {
@@ -1795,6 +1868,8 @@ ${suggestion.reason || ''}`
       const target = Math.max(0, Math.min(duration || pending, pending));
       try {
         player.currentTime = target;
+        playbackCursorSec = target;
+        playbackCursorPinned = true;
         audioPendingSeekSec = null;
       } catch {}
     }
@@ -1836,9 +1911,16 @@ ${suggestion.reason || ''}`
       audioPreparingTrackId = trackId;
       audioLoadingTrackId = trackId;
       if (!alreadyPreparing) {
+        stopWebAudioPlayback(false);
+        if (webAudioPath && webAudioPath !== mediaPathForTrack(track)) {
+          webAudioBuffer = null;
+          webAudioPath = '';
+        }
         audioReadyTrackId = 0;
         audioFallbackTrackId = 0;
         audioPendingSeekSec = null;
+        playbackCursorSec = 0;
+        playbackCursorPinned = false;
         clearAudioFallbackTimer();
       }
       updatePlayerBar();
@@ -1873,14 +1955,25 @@ ${suggestion.reason || ''}`
     }
 
     function setPlayerSource(track) {
-      const mediaPath = track.rel || track.path;
+      const mediaPath = mediaPathForTrack(track);
       if (!mediaPath) return false;
       playingPath = mediaPath;
       const player = $('player');
-      const src = `/media?path=${encodeURIComponent(mediaPath)}`;
-      if (player.getAttribute('src') !== src) {
-        player.setAttribute('src', src);
+      if (!player) return false;
+      if (mediaBlobUrl && mediaBlobPath && mediaBlobPath !== mediaPath) {
+        try { URL.revokeObjectURL(mediaBlobUrl); } catch {}
+        mediaBlobUrl = '';
+        mediaBlobPath = '';
       }
+      if (mediaBlobUrl && mediaBlobPath === mediaPath) {
+        if (player.src !== mediaBlobUrl) player.src = mediaBlobUrl;
+      } else {
+        const src = `/media?path=${encodeURIComponent(mediaPath)}`;
+        const absoluteSrc = new URL(src, window.location.href).href;
+        if (player.src !== absoluteSrc) player.src = absoluteSrc;
+      }
+      player.preload = 'auto';
+      player.muted = false;
       return true;
     }
 
@@ -1895,9 +1988,7 @@ ${suggestion.reason || ''}`
       lastBuiltSetFolder = '';
       updateKeyStepHint();
       if (!preparePlayerForTrack(track)) return;
-      const player = $('player');
-      player.play().catch(() => {});
-      updatePlayerBar();
+      startSelectedPlayback();
       loadWaveform(track.id);
       if ($('search').value.trim()) search(); else browse(currentPath);
     }
@@ -1949,12 +2040,244 @@ ${suggestion.reason || ''}`
     let waveLastFrac = null;
     let waveZoomDrag = null;
     let waveHover = { active: false, time_sec: null, snap_time_sec: null, snap_kind: '', snapped: false };
+    let overviewHover = { active: false, time_sec: null, label: '' };
     const WAVE_SNAP_PREVIEW_PX = 10;
     const DEFAULT_WAVE_ZOOM = 4.0;
     const MAX_WAVE_ZOOM = 12;
     let waveZoom = DEFAULT_WAVE_ZOOM;
     let waveOffsetSec = 0;
     let followPlayhead = true;
+
+
+    function mediaPathForTrack(track) {
+      return String(track?.rel || track?.path || '').trim();
+    }
+
+    function audioErrorMessage(player) {
+      const code = Number(player?.error?.code || 0);
+      const names = {
+        1: 'MEDIA_ERR_ABORTED',
+        2: 'MEDIA_ERR_NETWORK',
+        3: 'MEDIA_ERR_DECODE',
+        4: 'MEDIA_ERR_SRC_NOT_SUPPORTED'
+      };
+      return names[code] || (code ? `MEDIA_ERR_${code}` : 'unknown audio error');
+    }
+
+
+    function audioDebugState(prefix = 'audio') {
+      const player = $('player');
+      if (!player) return `${prefix}: audio element missing`;
+      const err = player.error ? audioErrorMessage(player) : 'none';
+      const src = player.currentSrc || player.src || player.getAttribute('src') || '';
+      const shortSrc = src.length > 88 ? `${src.slice(0, 58)}...${src.slice(-24)}` : src;
+      const t = Number(player.currentTime || 0);
+      const d = Number(player.duration || playbackDuration() || 0);
+      return `${prefix}: t=${t.toFixed(2)} / ${(Number.isFinite(d) ? d : 0).toFixed(2)} · paused=${player.paused} · ready=${player.readyState} · net=${player.networkState} · vol=${Number(player.volume || 0).toFixed(2)} · muted=${player.muted} · err=${err} · src=${shortSrc}`;
+    }
+
+    function showAudioDebug(prefix = 'audio') {
+      $('status').className = 'status';
+      $('status').textContent = audioDebugState(prefix);
+    }
+
+    function ensureWebAudioContext() {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) throw new Error('Web Audio API is not supported by this browser');
+      if (!webAudioCtx) webAudioCtx = new AudioCtx();
+      if (!webAudioGain) {
+        webAudioGain = webAudioCtx.createGain();
+        webAudioGain.gain.value = Math.max(0, Math.min(1, Number($('playerVol')?.value) || 0.85));
+        webAudioGain.connect(webAudioCtx.destination);
+      }
+      return webAudioCtx;
+    }
+
+    function currentWebAudioTime() {
+      if (!webAudioPlaying || !webAudioCtx) return Number(webAudioOffsetSec || 0);
+      const elapsed = Math.max(0, webAudioCtx.currentTime - webAudioStartedAt);
+      const duration = playbackDuration() || Number(webAudioBuffer?.duration || 0) || 0;
+      const cur = Number(webAudioOffsetSec || 0) + elapsed;
+      return duration > 0 ? Math.min(duration, cur) : cur;
+    }
+
+    function scheduleWebAudioSeekTo(timeSec) {
+      if (!webAudioPlaying || !webAudioPath) return;
+      const target = Math.max(0, Number(timeSec) || 0);
+      playbackCursorSec = target;
+      playbackCursorPinned = true;
+      audioPendingSeekSec = target;
+      if (webAudioSeekTimer) window.clearTimeout(webAudioSeekTimer);
+      webAudioSeekTimer = window.setTimeout(async () => {
+        webAudioSeekTimer = null;
+        if (!webAudioPath) return;
+        try {
+          await startWebAudioPlayback(webAudioPath, target);
+        } catch (err) {
+          reportPlaybackError(`WebAudio seek failed: ${err?.message || err?.name || err}`);
+        }
+      }, 80);
+    }
+
+    function stopWebAudioPlayback(updateUi = true) {
+      // Capture current WebAudio time before stopping the source. This is the pause position.
+      const pausedAt = webAudioPlaying ? currentWebAudioTime() : Number(webAudioOffsetSec || playbackCursorSec || 0);
+      if (webAudioSeekTimer) {
+        window.clearTimeout(webAudioSeekTimer);
+        webAudioSeekTimer = null;
+      }
+      if (webAudioTimer) {
+        window.clearInterval(webAudioTimer);
+        webAudioTimer = null;
+      }
+      if (webAudioSource) {
+        try { webAudioSource.onended = null; webAudioSource.stop(0); } catch {}
+        try { webAudioSource.disconnect(); } catch {}
+        webAudioSource = null;
+      }
+      if (Number.isFinite(pausedAt) && pausedAt >= 0) {
+        webAudioOffsetSec = pausedAt;
+        playbackCursorSec = pausedAt;
+        playbackCursorPinned = true;
+        audioPendingSeekSec = pausedAt;
+      }
+      webAudioPlaying = false;
+      if (updateUi) {
+        updatePlayerBar();
+        if (lastWavePeaks) drawWaveform(lastWavePeaks);
+        drawZoomWaveform();
+      }
+    }
+
+    function pauseCurrentPlayback() {
+      const player = $('player');
+      const dur = playbackDuration();
+      let pausedAt = currentPlaybackTime();
+      if (!Number.isFinite(pausedAt) || pausedAt < 0) pausedAt = 0;
+      if (dur > 0) pausedAt = Math.max(0, Math.min(dur, pausedAt));
+      if (webAudioPlaying) {
+        stopWebAudioPlayback(false);
+      } else if (player && !player.paused) {
+        try { player.pause(); } catch {}
+        pausedAt = Number(player.currentTime || pausedAt || 0);
+      }
+      if (Number.isFinite(pausedAt) && pausedAt >= 0) {
+        webAudioOffsetSec = pausedAt;
+        playbackCursorSec = pausedAt;
+        playbackCursorPinned = true;
+        audioPendingSeekSec = pausedAt;
+      }
+      $('status').className = 'status';
+      $('status').textContent = `Пауза: ${fmtTimePrecise(pausedAt, true)}`;
+      updatePlayerBar();
+      if (lastWavePeaks) drawWaveform(lastWavePeaks);
+      drawZoomWaveform();
+    }
+
+    async function loadWebAudioBuffer(mediaPath) {
+      const ctx = ensureWebAudioContext();
+      if (webAudioBuffer && webAudioPath === mediaPath) return webAudioBuffer;
+      $('status').className = 'status';
+      $('status').textContent = 'Декодирую аудио через WebAudio...';
+      const res = await fetch(`/media?path=${encodeURIComponent(mediaPath)}&webaudio=1`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`/media ${res.status}`);
+      const arrayBuffer = await res.arrayBuffer();
+      if (!arrayBuffer || arrayBuffer.byteLength < 1024) throw new Error(`empty audio response (${arrayBuffer?.byteLength || 0} bytes)`);
+      const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+      webAudioBuffer = decoded;
+      webAudioPath = mediaPath;
+      return decoded;
+    }
+
+    async function startWebAudioPlayback(mediaPath, targetSec = 0) {
+      const ctx = ensureWebAudioContext();
+      if (ctx.state === 'suspended') await ctx.resume();
+      const buffer = await loadWebAudioBuffer(mediaPath);
+      stopWebAudioPlayback(false);
+      const duration = Number(buffer.duration || playbackDuration() || 0) || 0;
+      const offset = Math.max(0, Math.min(duration ? Math.max(0, duration - 0.05) : 0, Number(targetSec) || 0));
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(webAudioGain || ctx.destination);
+      webAudioSource = source;
+      webAudioOffsetSec = offset;
+      webAudioStartedAt = ctx.currentTime;
+      webAudioPlaying = true;
+      playbackCursorSec = offset;
+      playbackCursorPinned = true;
+      audioPendingSeekSec = offset;
+      try { $('player')?.pause(); } catch {}
+      source.onended = () => {
+        if (!webAudioPlaying) return;
+        stopWebAudioPlayback(true);
+      };
+      source.start(0, offset);
+      $('status').className = 'status ok';
+      $('status').textContent = `WebAudio воспроизведение: ${fmtTimePrecise(offset, true)}`;
+      if (webAudioTimer) window.clearInterval(webAudioTimer);
+      webAudioTimer = window.setInterval(() => {
+        if (!webAudioPlaying) return;
+        const cur = currentWebAudioTime();
+        playbackCursorSec = cur;
+        playbackCursorPinned = true;
+        audioPendingSeekSec = cur;
+        updatePlayerBar();
+        if (lastWavePeaks) drawWaveform(lastWavePeaks);
+        drawZoomWaveform();
+      }, 80);
+      startWaveformPlayheadLoop();
+      updatePlayerBar();
+      return true;
+    }
+
+    function startAudioDebugMonitor(prefix = 'audio', timeoutMs = 9000) {
+      const player = $('player');
+      if (!player) return;
+      const startedAt = performance.now();
+      const startedTime = Number(player.currentTime || 0);
+      if (player.__audioDebugTimer) window.clearInterval(player.__audioDebugTimer);
+      player.__audioDebugTimer = window.setInterval(() => {
+        const cur = Number(player.currentTime || 0);
+        const advanced = Number.isFinite(cur) && Math.abs(cur - startedTime) > 0.12;
+        if (advanced) {
+          $('status').className = 'status ok';
+          $('status').textContent = `Воспроизведение: ${fmtTimePrecise(cur, true)} · ready=${player.readyState}`;
+          window.clearInterval(player.__audioDebugTimer);
+          player.__audioDebugTimer = null;
+          return;
+        }
+        showAudioDebug(prefix);
+        if (performance.now() - startedAt > timeoutMs) {
+          window.clearInterval(player.__audioDebugTimer);
+          player.__audioDebugTimer = null;
+          $('status').className = 'status bad';
+          $('status').textContent = `Аудио не двигается · ${audioDebugState(prefix)}`;
+        }
+      }, 350);
+    }
+
+    function overviewMarkerHintAtTime(timeSec) {
+      const duration = playbackDuration();
+      const threshold = Math.max(0.8, duration ? duration * 0.012 : 1.2);
+      const items = [];
+      const addMark = (label, time, extra = '') => {
+        const t = Number(time);
+        if (!Number.isFinite(t)) return;
+        const dist = Math.abs(t - timeSec);
+        if (dist <= threshold) items.push({ dist, text: `${label} ${fmtTime(t)}${extra}`.trim() });
+      };
+      for (const cue of window.__waveCues || []) addMark(cue.label || cue.name || 'Cue', cue.pos_s);
+      for (const loop of window.__waveLoops || []) {
+        const s = Number(loop.start_s);
+        const e = Number(loop.end_s);
+        if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
+        const dist = Math.min(Math.abs(s - timeSec), Math.abs(e - timeSec), (timeSec >= s && timeSec <= e) ? 0 : Infinity);
+        if (dist <= threshold) items.push({ dist, text: `${loopRoleLabel(loop, true)} ${fmtTime(s)}-${fmtTime(e)}` });
+      }
+      items.sort((a, b) => a.dist - b.dist);
+      const base = `Position ${fmtTimePrecise(timeSec, true)}`;
+      return items.length ? `${base}\n${items.slice(0, 4).map(i => i.text).join('\n')}` : base;
+    }
 
     function setupWaveCanvas(canvas) {
       if (!canvas) return null;
@@ -3305,97 +3628,8 @@ ${suggestion.reason || ''}`
         ctx.lineWidth = 1;
       }
 
-      if (Array.isArray(window.__waveCues) && window.__waveCues.length) {
-        const roundRect = (ctx, x, y, w, h, r) => {
-          if (ctx.roundRect) return ctx.roundRect(x, y, w, h, r);
-          const rr = Math.min(r, w / 2, h / 2);
-          ctx.moveTo(x + rr, y);
-          ctx.arcTo(x + w, y, x + w, y + h, rr);
-          ctx.arcTo(x + w, y + h, x, y + h, rr);
-          ctx.arcTo(x, y + h, x, y, rr);
-          ctx.arcTo(x, y, x + w, y, rr);
-          ctx.closePath();
-        };
-        ctx.font = `${Math.max(10, Math.floor(11 * dpr))}px Segoe UI, Inter, Arial, sans-serif`;
-        ctx.textBaseline = 'top';
-        const cues = [...window.__waveCues].filter(c => Number.isFinite(Number(c?.pos_frac)));
-        cues.sort((a, b) => Number(a.pos_frac) - Number(b.pos_frac));
-        const placed = [];
-        const cueTop = 2 * dpr;
-        const gap = 6 * dpr;
-        const clusterPx = 72 * dpr;
-
-        for (let i = 0; i < cues.length; i++) {
-          const cue = cues[i];
-          const frac = Number(cue.pos_frac);
-          const x = Math.floor(frac * (w - 1)) + 0.5;
-          const slot = Number(cue?.slot) || 0;
-          const manualCue = cue?.source === 'manual';
-          const suggestedCue = cue?.source === 'suggested';
-          const baseLabel = (cue?.label || '').trim() || (slot ? `Cue ${slot}` : 'Cue');
-          const cueTime = Number.isFinite(Number(cue?.pos_s)) ? fmtTime(cue.pos_s) : '';
-          const label = (manualCue || suggestedCue) && cueTime ? `${baseLabel} ${cueTime}` : baseLabel;
-          const time = (manualCue || suggestedCue) ? '' : cueTime;
-          const selectedCue = manualCue && cue?.type === selectedPrepMarkType;
-
-          const padX = 6 * dpr;
-          const padY = 3 * dpr;
-          const labelW = ctx.measureText(label).width;
-          const boxW = labelW + padX * 2;
-          const boxH = (12 * dpr) + padY * 2;
-
-          // Place label pill centered over cue, clamped.
-          const pillLeft = Math.max(2 * dpr, Math.min(w - boxW - 2 * dpr, x - boxW / 2));
-          const pillRight = pillLeft + boxW;
-
-          // Determine clustering with next/prev.
-          const prev = cues[i - 1];
-          const next = cues[i + 1];
-          const hasPrevClose = prev && Math.abs((Number(prev.pos_frac) * (w - 1)) - (frac * (w - 1))) < clusterPx;
-          const hasNextClose = next && Math.abs((Number(next.pos_frac) * (w - 1)) - (frac * (w - 1))) < clusterPx;
-
-          // Time placement rule:
-          // - In a close pair/cluster: first time goes before first pill, last time goes after last pill.
-          // - Otherwise: time goes before pill if it fits, else after.
-          let timeSide = 'before';
-          if (hasPrevClose && !hasNextClose) timeSide = 'after';
-          if (!hasPrevClose && hasNextClose) timeSide = 'before';
-          if (hasPrevClose && hasNextClose) timeSide = 'after';
-
-          const timeW = time ? ctx.measureText(time).width : 0;
-          let timeX = null;
-          if (time) {
-            if (timeSide === 'before') {
-              timeX = pillLeft - gap - timeW;
-              if (timeX < 2 * dpr) timeX = pillRight + gap;
-            } else {
-              timeX = pillRight + gap;
-              if (timeX + timeW > w - 2 * dpr) timeX = Math.max(2 * dpr, pillLeft - gap - timeW);
-            }
-          }
-
-          // Draw label pill.
-          const cueColor = cue?.color || (suggestedCue ? 'rgba(255,224,108,0.95)' : (manualCue ? 'rgba(55,197,143,0.9)' : 'rgba(73,160,236,0.95)'));
-          ctx.setLineDash(suggestedCue ? [6 * dpr, 4 * dpr] : []);
-          ctx.fillStyle = selectedCue ? 'rgba(255,224,108,0.20)' : (suggestedCue ? 'rgba(255,224,108,0.12)' : (manualCue ? 'rgba(55,197,143,0.18)' : 'rgba(73,160,236,0.22)'));
-          ctx.strokeStyle = selectedCue ? 'rgba(255,224,108,0.98)' : cueColor;
-          ctx.lineWidth = selectedCue ? 2 : 1;
-          ctx.beginPath();
-          roundRect(ctx, pillLeft, cueTop, boxW, boxH, 6 * dpr);
-          ctx.fill();
-          ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.fillStyle = 'rgba(231,240,245,0.95)';
-          ctx.fillText(label, pillLeft + padX, cueTop + padY);
-
-          if (time && timeX != null) {
-            ctx.fillStyle = 'rgba(154,167,178,0.92)';
-            ctx.fillText(time, timeX, cueTop + padY);
-          }
-
-          placed.push({ pillLeft, pillRight });
-        }
-      }
+      // Overview is intentionally text-light: detailed cue/loop labels live on the zoom waveform.
+      // The overview keeps marker lines only and uses the native tooltip on hover to avoid label overlap.
 
       if (Array.isArray(window.__waveLoops) && window.__waveLoops.length) {
         const trackLen = playbackDuration() || null;
@@ -3425,16 +3659,7 @@ ${suggestion.reason || ''}`
           ctx.lineTo(x2, yBot);
           ctx.stroke();
           ctx.setLineDash([]);
-          const labelOnly = (loop?.label || '').trim() || (loop?.slot ? `Loop ${loop.slot}` : 'Loop');
-          const hasRange = Number.isFinite(Number(loop?.start_s)) && Number.isFinite(Number(loop?.end_s));
-          const label = (manualLoop || suggestedLoop) && hasRange
-            ? `${loopRoleLabel(loop, true)} ${fmtTime(loop.start_s)}–${fmtTime(loop.end_s)}`
-            : (Number.isFinite(Number(loop?.start_s)) ? `${fmtTime(loop.start_s)} ${labelOnly}` : labelOnly);
-          const textW = ctx.measureText(label).width;
-          const center = (x1 + x2) / 2;
-          const tx = Math.max(2 * dpr, Math.min(w - textW - 2 * dpr, center - textW / 2));
-          ctx.fillStyle = 'rgba(231,240,245,0.92)';
-          ctx.fillText(label, tx, h - (3 * dpr));
+          // No loop text on overview; hover tooltip and zoom waveform carry details.
         }
       }
 
@@ -3457,7 +3682,7 @@ ${suggestion.reason || ''}`
         if (Number.isFinite(dur) && dur > 0 && Number.isFinite(cur) && cur >= 0) {
           const frac = Math.max(0, Math.min(1, cur / dur));
           const x = Math.floor(frac * (w - 1)) + 0.5;
-          ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+          ctx.strokeStyle = 'rgba(255,95,95,0.82)';
           ctx.beginPath();
           ctx.moveTo(x, 0);
           ctx.lineTo(x, h);
@@ -3473,6 +3698,30 @@ ${suggestion.reason || ''}`
       const x = event.clientX - rect.left;
       if (!Number.isFinite(x)) return null;
       return Math.max(0, Math.min(1, x / Math.max(1, rect.width)));
+    }
+
+    function _waveFracFromOverviewAreaEvent(event) {
+      const canvas = $('waveCanvas');
+      const area = $('waveBox') || canvas;
+      if (!canvas || !area) return null;
+      const rect = area.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      if (!Number.isFinite(x)) return null;
+      return Math.max(0, Math.min(1, x / Math.max(1, rect.width)));
+    }
+
+    function _waveZoomTimeFromAreaEvent(event) {
+      const canvas = $('waveZoomCanvas');
+      const panel = $('waveZoomPanel') || canvas;
+      const detail = window.__waveDetail;
+      if (!canvas || !panel || !detail) return null;
+      const rect = panel.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const duration = Number(detail.duration_sec || 0) || playbackDuration();
+      if (!Number.isFinite(x) || duration <= 0) return null;
+      const zoom = Math.max(1, Math.min(maxWaveZoom(), Number(waveZoom) || 1));
+      const windowSec = duration / zoom;
+      return Math.max(0, Math.min(duration, waveOffsetSec + (x / Math.max(1, rect.width)) * windowSec));
     }
 
     function _waveOverviewSeekEvent(event) {
@@ -3499,29 +3748,29 @@ ${suggestion.reason || ''}`
     }
 
     function _seekPlayerToTime(timeSec, options = {}) {
-      if (!canNavigateWaveform()) return;
       const player = $('player');
-      const duration = playbackDuration();
-      if (!Number.isFinite(duration) || duration <= 0) return;
-      const t = Math.max(0, Math.min(duration, Number(timeSec) || 0));
-      audioPendingSeekSec = t;
-      if (player) {
+      const duration = durationForSeek();
+      if (!selectedTrackId() || !Number.isFinite(duration) || duration <= 0) return;
+      const t = pinPlaybackCursor(timeSec, options);
+
+      if (webAudioPlaying) {
+        scheduleWebAudioSeekTo(t);
+      } else if (player) {
         try {
-          player.currentTime = t;
-          audioPendingSeekSec = null;
+          if (player.readyState >= 1) {
+            player.currentTime = t;
+          }
         } catch {}
+        // Keep the pending seek even if HTML audio accepted currentTime; WebAudio fallback uses it later.
+        audioPendingSeekSec = t;
       }
-      waveLastFrac = duration > 0 ? t / duration : 0;
       updatePlayerBar();
-      if (options.centerZoom) centerZoomOnTime(t);
-      else if (followPlayhead) updateFollowWaveWindow();
-      syncWaveScrollControl();
       if (lastWavePeaks) drawWaveform(lastWavePeaks);
       drawZoomWaveform();
     }
 
     function _seekPlayerToFrac(frac, options = {}) {
-      const duration = playbackDuration();
+      const duration = durationForSeek();
       if (!Number.isFinite(duration) || duration <= 0) return;
       _seekPlayerToTime(Math.max(0, Math.min(1, Number(frac) || 0)) * duration, options);
     }
@@ -3540,6 +3789,210 @@ ${suggestion.reason || ''}`
       return fmtTimePrecise(seconds, false);
     }
 
+    function reportPlaybackError(err) {
+      const message = err?.message || err?.name || String(err || 'playback failed');
+      $('status').className = 'status bad';
+      $('status').textContent = `Не удалось запустить трек: ${message}`;
+      updatePlayerBar();
+    }
+
+    function waitForAudioReady(player, timeoutMs = 6000) {
+      if (!player) return Promise.reject(new Error('audio element is missing'));
+      if (player.readyState >= 1) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        let done = false;
+        const cleanup = () => {
+          player.removeEventListener('loadedmetadata', onReady);
+          player.removeEventListener('canplay', onReady);
+          player.removeEventListener('error', onError);
+          window.clearTimeout(timer);
+        };
+        const finish = (fn, value) => {
+          if (done) return;
+          done = true;
+          cleanup();
+          fn(value);
+        };
+        const onReady = () => finish(resolve);
+        const onError = () => finish(reject, new Error(audioErrorMessage(player)));
+        const timer = window.setTimeout(() => finish(reject, new Error('audio metadata timeout')), timeoutMs);
+        player.addEventListener('loadedmetadata', onReady);
+        player.addEventListener('canplay', onReady);
+        player.addEventListener('error', onError);
+      });
+    }
+
+    function withTimeout(promise, timeoutMs, label) {
+      return Promise.race([
+        promise,
+        new Promise((_, reject) => window.setTimeout(() => reject(new Error(label || 'timeout')), timeoutMs))
+      ]);
+    }
+
+    async function checkMediaPath(mediaPath) {
+      const res = await fetch(`/api/media-check?path=${encodeURIComponent(mediaPath)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `media-check ${res.status}`);
+      return data;
+    }
+
+    function waitForPlaybackProgress(player, startTime, timeoutMs = 1800) {
+      if (!player) return Promise.resolve(false);
+      const start = Number.isFinite(Number(startTime)) ? Number(startTime) : Number(player.currentTime || 0);
+      return new Promise((resolve) => {
+        let done = false;
+        const cleanup = () => {
+          player.removeEventListener('timeupdate', check);
+          player.removeEventListener('playing', check);
+          player.removeEventListener('pause', onStop);
+          player.removeEventListener('error', onStop);
+          window.clearTimeout(timer);
+        };
+        const finish = (value) => {
+          if (done) return;
+          done = true;
+          cleanup();
+          resolve(value);
+        };
+        const check = () => {
+          const cur = Number(player.currentTime || 0);
+          if (!player.paused && Number.isFinite(cur) && Math.abs(cur - start) > 0.08) finish(true);
+        };
+        const onStop = () => finish(false);
+        const timer = window.setTimeout(() => finish(false), timeoutMs);
+        player.addEventListener('timeupdate', check);
+        player.addEventListener('playing', check);
+        player.addEventListener('pause', onStop);
+        player.addEventListener('error', onStop);
+        check();
+      });
+    }
+
+    async function useBlobMediaSource(mediaPath) {
+      const player = $('player');
+      if (!player) throw new Error('audio element is missing');
+      if (!mediaBlobUrl || mediaBlobPath !== mediaPath) {
+        $('status').className = 'status';
+        $('status').textContent = 'Загружаю аудио напрямую...';
+        const res = await fetch(`/media?path=${encodeURIComponent(mediaPath)}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`/media ${res.status}`);
+        const blob = await res.blob();
+        if (mediaBlobUrl) {
+          try { URL.revokeObjectURL(mediaBlobUrl); } catch {}
+        }
+        mediaBlobUrl = URL.createObjectURL(blob);
+        mediaBlobPath = mediaPath;
+      }
+      player.pause();
+      player.src = mediaBlobUrl;
+      player.preload = 'auto';
+      player.muted = false;
+      try { player.load(); } catch {}
+      await waitForAudioReady(player, 6000);
+      return true;
+    }
+
+    async function startSelectedPlayback() {
+      const player = $('player');
+      if (!player || !selectedTrack) return;
+      const mediaPath = mediaPathForTrack(selectedTrack);
+      if (!mediaPath) {
+        reportPlaybackError('media path is empty');
+        return;
+      }
+
+      // Capture the intended start position before preparePlayerForTrack(), because prepare may
+      // reload the HTML audio element. The user's red cursor must survive that reload.
+      const durBefore = playbackDuration();
+      const desiredBefore = Number.isFinite(Number(audioPendingSeekSec))
+        ? Number(audioPendingSeekSec)
+        : (playbackCursorPinned ? Number(playbackCursorSec) : Number(player.currentTime || webAudioOffsetSec || 0));
+
+      if (!preparePlayerForTrack(selectedTrack)) {
+        reportPlaybackError('media source is empty');
+        return;
+      }
+      const src = player.currentSrc || player.src || player.getAttribute('src') || '';
+      if (!src) {
+        reportPlaybackError('audio src is empty');
+        return;
+      }
+
+      const dur = durationForSeek() || playbackDuration() || durBefore;
+      const desired = Number.isFinite(Number(desiredBefore)) ? Number(desiredBefore) : 0;
+      const target = (Number.isFinite(desired) && desired >= 0 && dur > 0)
+        ? Math.max(0, Math.min(dur, desired))
+        : 0;
+      playbackCursorSec = target;
+      playbackCursorPinned = true;
+      audioPendingSeekSec = target;
+      webAudioOffsetSec = target;
+
+      const applyTarget = () => {
+        try {
+          if (player.readyState >= 1 && Number.isFinite(target) && target >= 0) {
+            player.currentTime = target;
+            audioPendingSeekSec = null;
+          } else if (Number.isFinite(target) && target >= 0) {
+            audioPendingSeekSec = target;
+          }
+          playbackCursorSec = target;
+          playbackCursorPinned = true;
+        } catch {
+          audioPendingSeekSec = target;
+          playbackCursorSec = target;
+          playbackCursorPinned = true;
+        }
+      };
+
+      $('status').className = 'status';
+      $('status').textContent = 'Запускаю аудио...';
+      player.muted = false;
+      if (!player.volume && $('playerVol')) player.volume = Math.max(0.01, Number($('playerVol').value) || 0.85);
+      showAudioDebug('before play');
+
+      try {
+        // First try normal streaming from /media. If Chrome fires play but currentTime does not move,
+        // fallback to Blob playback. This bypasses Range/MIME quirks in the tiny local HTTP server.
+        applyTarget();
+        let playPromise = player.play();
+        startAudioDebugMonitor('after play', 9000);
+        if (playPromise && typeof playPromise.then === 'function') await withTimeout(playPromise, 3500, 'audio play timeout');
+        let progressed = await waitForPlaybackProgress(player, target, 1600);
+        if (!progressed) {
+          $('status').className = 'status';
+          $('status').textContent = 'Поток не пошёл, пробую fallback...';
+          await checkMediaPath(mediaPath);
+          await useBlobMediaSource(mediaPath);
+          applyTarget();
+          playPromise = player.play();
+          if (playPromise && typeof playPromise.then === 'function') await withTimeout(playPromise, 5000, 'blob audio play timeout');
+          progressed = await waitForPlaybackProgress(player, target, 2200);
+        }
+        if (!progressed) {
+          $('status').className = 'status';
+          $('status').textContent = 'HTML audio не двигается, пробую WebAudio...';
+          await startWebAudioPlayback(mediaPath, target);
+          updatePlayerBar();
+          return;
+        }
+        const cur = Number(player.currentTime);
+        if (Number.isFinite(cur) && cur >= 0) {
+          playbackCursorSec = cur;
+          playbackCursorPinned = true;
+        }
+        $('status').className = 'status ok';
+        $('status').textContent = `Воспроизведение: ${fmtTimePrecise(Number(player.currentTime || 0), true)}`;
+        startWaveformPlayheadLoop();
+      } catch (err) {
+        const details = player.error ? `${audioErrorMessage(player)} · ${mediaPath}` : `${err?.message || err?.name || err}`;
+        reportPlaybackError(details);
+      }
+      updatePlayerBar();
+      if (lastWavePeaks) drawWaveform(lastWavePeaks);
+      drawZoomWaveform();
+    }
+
     function updatePlayerBar() {
       const player = $('player');
       const timeEl = $('playerTime');
@@ -3555,7 +4008,7 @@ ${suggestion.reason || ''}`
         const curText = (Number.isFinite(cur) && cur >= 0) ? fmtTime(cur) : '0:00';
         timeEl.textContent = `${curText} / ${durText}`;
       }
-      btn.textContent = player.paused ? '▶' : '⏸';
+      btn.textContent = (player.paused && !webAudioPlaying) ? '▶' : '⏸';
     }
 
     function wirePlayerBar() {
@@ -3566,20 +4019,34 @@ ${suggestion.reason || ''}`
       if (!player.__wiredAudioEvents) {
         player.__wiredAudioEvents = true;
         const markSelectedAudioReady = () => markAudioReadyForTrack(audioPreparingTrackId || selectedTrackId(), false);
-        player.addEventListener('timeupdate', updatePlayerBar);
+        player.addEventListener('timeupdate', () => {
+          const cur = Number(player.currentTime);
+          if (Number.isFinite(cur) && cur >= 0) { playbackCursorSec = cur; playbackCursorPinned = true; }
+          updatePlayerBar();
+          if (lastWavePeaks) drawWaveform(lastWavePeaks);
+          drawZoomWaveform();
+        });
         player.addEventListener('durationchange', markSelectedAudioReady);
         player.addEventListener('loadedmetadata', markSelectedAudioReady);
         player.addEventListener('canplay', markSelectedAudioReady);
-        player.addEventListener('play', updatePlayerBar);
+        player.addEventListener('play', () => { updatePlayerBar(); startWaveformPlayheadLoop(); });
+        player.addEventListener('playing', () => {
+          showAudioDebug('playing');
+          startAudioDebugMonitor('playing', 9000);
+          updatePlayerBar();
+        });
         player.addEventListener('pause', updatePlayerBar);
+        player.addEventListener('error', () => {
+          const mediaPath = mediaPathForTrack(selectedTrack);
+          reportPlaybackError(`${audioErrorMessage(player)}${mediaPath ? ' · ' + mediaPath : ''}`);
+        });
         window.addEventListener('keydown', (e) => {
           if (e.code === 'Space' && e.target === document.body) {
             e.preventDefault();
-            if (player.paused) {
-              if (selectedTrack) preparePlayerForTrack(selectedTrack);
-              player.play().catch(() => {});
+            if (webAudioPlaying || !player.paused) {
+              pauseCurrentPlayback();
             } else {
-              player.pause();
+              startSelectedPlayback();
             }
           }
         });
@@ -3587,19 +4054,22 @@ ${suggestion.reason || ''}`
       if (btn && !btn.__wiredPlayCtl) {
         btn.__wiredPlayCtl = true;
         btn.addEventListener('click', () => {
-          if (player.paused) {
-            if (selectedTrack) preparePlayerForTrack(selectedTrack);
-            player.play().catch(() => {});
-          } else {
-            player.pause();
+          if (webAudioPlaying || !player.paused) {
+            pauseCurrentPlayback();
+            return;
           }
+          startSelectedPlayback();
         });
       }
       if (vol && !vol.__wiredVolCtl) {
         vol.__wiredVolCtl = true;
         if (player.volume == null) player.volume = 0.85;
         player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0.85));
-        vol.addEventListener('input', () => { player.volume = Math.max(0, Math.min(1, Number(vol.value) || 0)); });
+        vol.addEventListener('input', () => {
+          const value = Math.max(0, Math.min(1, Number(vol.value) || 0));
+          player.volume = value;
+          if (webAudioGain) webAudioGain.gain.value = value;
+        });
       }
       updatePlayerBar();
     }
@@ -3631,6 +4101,22 @@ ${suggestion.reason || ''}`
       if (canvas.__wired) return;
       canvas.__wired = true;
 
+      canvas.addEventListener('mousemove', (e) => {
+        const frac = _waveFracFromEvent(e);
+        const duration = playbackDuration();
+        if (frac == null || !(duration > 0)) {
+          canvas.title = 'Waveform overview';
+          return;
+        }
+        const time = Math.max(0, Math.min(duration, frac * duration));
+        overviewHover = { active: true, time_sec: time, label: overviewMarkerHintAtTime(time) };
+        canvas.title = overviewHover.label;
+      });
+      canvas.addEventListener('mouseleave', () => {
+        overviewHover = { active: false, time_sec: null, label: '' };
+        canvas.title = 'Waveform overview';
+      });
+
       canvas.addEventListener('mousedown', (e) => {
         if (!canNavigateWaveform()) return;
         const mark = manualMarkFromOverviewEvent(e);
@@ -3644,8 +4130,8 @@ ${suggestion.reason || ''}`
       });
       window.addEventListener('mousemove', (e) => {
         if (!waveDragActive) return;
-        if (waveDragMode === 'overview') {
-          const frac = _waveFracFromEvent(e);
+        if (waveDragMode === 'overview' || waveDragMode === 'overview-panel') {
+          const frac = waveDragMode === 'overview-panel' ? _waveFracFromOverviewAreaEvent(e) : _waveFracFromEvent(e);
           if (frac == null) return;
           _seekPlayerToFrac(frac, { centerZoom: true });
           return;
@@ -3670,7 +4156,41 @@ ${suggestion.reason || ''}`
         waveDragActive = false;
         waveDragMode = '';
         waveZoomDrag = null;
+        updatePlayerBar();
+        if (lastWavePeaks) drawWaveform(lastWavePeaks);
+        drawZoomWaveform();
       });
+      const overviewPanel = $('waveBox');
+      if (overviewPanel && !overviewPanel.__wiredPanelSeek) {
+        overviewPanel.__wiredPanelSeek = true;
+        overviewPanel.addEventListener('mousedown', (e) => {
+          if (e.target === canvas) return;
+          if (!canNavigateWaveform()) return;
+          const frac = _waveFracFromOverviewAreaEvent(e);
+          if (frac == null) return;
+          waveDragActive = true;
+          waveDragMode = 'overview-panel';
+          _seekPlayerToFrac(frac, { centerZoom: true });
+          e.preventDefault();
+        });
+      }
+
+      const zoomPanel = $('waveZoomPanel');
+      if (zoomPanel && !zoomPanel.__wiredPanelSeek) {
+        zoomPanel.__wiredPanelSeek = true;
+        zoomPanel.addEventListener('mousedown', (e) => {
+          if (e.target === zoomCanvas) return;
+          if (e.target?.closest?.('button,input,select,label')) return;
+          if (!canNavigateWaveform()) return;
+          const t = _waveZoomTimeFromAreaEvent(e);
+          if (t == null) return;
+          followPlayhead = false;
+          _seekPlayerToTime(t, { centerZoom: true });
+          syncWaveScrollControl();
+          e.preventDefault();
+        });
+      }
+
       const zoomCanvas = $('waveZoomCanvas');
       if (zoomCanvas && !zoomCanvas.__wired) {
         zoomCanvas.__wired = true;
@@ -3705,6 +4225,45 @@ ${suggestion.reason || ''}`
           e.preventDefault();
         });
       }
+    }
+
+    function wireWaveformPreplaySeekFallback() {
+      if (window.__wavePreplaySeekFallbackWired) return;
+      window.__wavePreplaySeekFallbackWired = true;
+      const player = $('player');
+      const handleOverview = (event) => {
+        if (webAudioPlaying || (player && !player.paused)) return;
+        if (!selectedTrackId() || !(durationForSeek() > 0)) return;
+        if (event.target?.closest?.('button,input,select,label')) return;
+        const frac = event.currentTarget?.id === 'waveCanvas'
+          ? _waveFracFromEvent(event)
+          : _waveFracFromOverviewAreaEvent(event);
+        if (frac == null) return;
+        _seekPlayerToFrac(frac, { centerZoom: true });
+        event.preventDefault();
+        event.stopPropagation();
+      };
+      const handleZoom = (event) => {
+        if (webAudioPlaying || (player && !player.paused)) return;
+        if (!selectedTrackId() || !(durationForSeek() > 0)) return;
+        if (event.target?.closest?.('button,input,select,label')) return;
+        const t = event.currentTarget?.id === 'waveZoomCanvas'
+          ? _waveZoomTimeFromEvent(event)
+          : _waveZoomTimeFromAreaEvent(event);
+        if (t == null) return;
+        followPlayhead = false;
+        _seekPlayerToTime(t, { centerZoom: true });
+        event.preventDefault();
+        event.stopPropagation();
+      };
+      ['waveCanvas', 'waveBox'].forEach((id) => {
+        const el = $(id);
+        if (el) el.addEventListener('pointerdown', handleOverview, true);
+      });
+      ['waveZoomCanvas', 'waveZoomPanel'].forEach((id) => {
+        const el = $(id);
+        if (el) el.addEventListener('pointerdown', handleZoom, true);
+      });
     }
 
     function startWaveformPlayheadLoop() {
@@ -3840,6 +4399,7 @@ ${suggestion.reason || ''}`
         syncTrackPrepControls();
         syncWaveScrollControl();
         wireWaveformScrub();
+      wireWaveformPreplaySeekFallback();
         startWaveformPlayheadLoop();
         drawWaveform(peaks);
         drawZoomWaveform();
@@ -4209,7 +4769,7 @@ ${suggestion.reason || ''}`
       const cur = currentPlaybackTime();
       if (Number.isFinite(cur) && cur >= start && cur <= end) {
         const x = Math.floor(timeToX(cur)) + 0.5;
-        ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+        ctx.strokeStyle = 'rgba(255,95,95,0.88)';
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(x, 0);
@@ -4390,6 +4950,8 @@ ${suggestion.reason || ''}`
       drawZoomWaveform();
     });
     $('player').addEventListener('timeupdate', () => {
+      const cur = Number($('player')?.currentTime);
+      if (Number.isFinite(cur) && cur >= 0) { playbackCursorSec = cur; playbackCursorPinned = true; }
       if (lastWavePeaks) drawWaveform(lastWavePeaks);
       drawZoomWaveform();
     });
