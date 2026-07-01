@@ -44,15 +44,26 @@
     .now-playing {
       display: grid;
       grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
-      grid-template-areas:
-        "track overview"
-        "zoom zoom"
-        "prep prep";
+      grid-template-areas: "track overview";
       gap: 8px;
       align-items: stretch;
       padding-top: 8px;
       border-top: 1px solid var(--line);
       margin-bottom: 8px;
+    }
+    .prep-deck {
+      display: grid;
+      grid-template-columns: minmax(420px, 520px) minmax(0, 1fr);
+      gap: 8px;
+      align-items: stretch;
+      width: 100%;
+      min-width: 0;
+      margin-bottom: 8px;
+    }
+    .prep-deck #trackPrepPanel,
+    .prep-deck #waveZoomPanel {
+      grid-area: auto;
+      align-self: stretch;
     }
     .lower-workspace {
       display: grid;
@@ -345,7 +356,7 @@
     .overview-row {
       grid-area: overview;
       display: grid;
-      grid-template-columns: 92px minmax(0, 1fr) 60px;
+      grid-template-columns: 116px minmax(0, 1fr) 60px;
       gap: 8px;
       min-width: 0;
       align-self: stretch;
@@ -371,14 +382,34 @@
     .play-mini-panel {
       gap: 6px;
     }
+    .transport-buttons {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+    }
     .volume-mini-panel {
       gap: 4px;
     }
     .play-mini-panel .btn {
-      width: 42px;
-      height: 42px;
+      width: 40px;
+      height: 40px;
       border-radius: 10px;
       flex: 0 0 auto;
+    }
+    .play-mini-panel .cue-btn {
+      width: 46px;
+      padding: 0 6px;
+      border-color: rgba(255, 224, 108, .58);
+      color: #fff0a8;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .play-mini-panel .cue-btn:active {
+      background: rgba(255, 224, 108, .18);
     }
     .play-mini-panel .time {
       font-variant-numeric: tabular-nums;
@@ -585,7 +616,7 @@
     }
     canvas#waveZoomCanvas {
       width: 100%;
-      height: 200px;
+      height: 148px;
       display: block;
       cursor: ew-resize;
       border-top: 1px solid rgba(255,255,255,.08);
@@ -857,6 +888,7 @@
       main { width: min(100vw - 20px, 1280px); padding-top: 16px; }
       header, .now-playing { display: block; }
       .lower-workspace { grid-template-columns: 1fr; }
+      .prep-deck { grid-template-columns: 1fr; }
       .library-frame,
       .set-frame {
         width: 100%;
@@ -870,8 +902,8 @@
       .crumb-search { grid-template-columns: 1fr; }
       .top-search { width: 100%; min-width: 0; justify-self: end; }
       .top-search .toolbar.compact { grid-template-columns: minmax(0, 1fr) 72px 92px; }
-      .now-playing { grid-template-columns: 1fr; grid-template-areas: "track" "overview" "zoom" "prep"; }
-      .overview-row { grid-template-columns: 82px minmax(0, 1fr) 56px; }
+      .now-playing { grid-template-columns: 1fr; grid-template-areas: "track" "overview"; }
+      .overview-row { grid-template-columns: 1fr; }
       .browser { max-height: 48vh; margin-bottom: 18px; }
       .style-box { max-height: 22vh; }
       .item { grid-template-columns: 24px 38px minmax(0, 1fr) 18px 72px 54px 56px 56px; }
@@ -896,7 +928,10 @@
       <div class="selected-box" id="selected">Выбери трек из папки или поиска.</div>
       <div class="overview-row">
         <div class="play-mini-panel">
-          <button class="btn" id="playPause" type="button" title="Воспроизвести или приостановить выбранный трек" aria-label="Воспроизвести или приостановить выбранный трек">▶</button>
+          <div class="transport-buttons">
+            <button class="btn" id="playPause" type="button" title="Воспроизвести или приостановить выбранный трек" aria-label="Воспроизвести или приостановить выбранный трек">▶</button>
+            <button class="btn cue-btn" id="cueButton" type="button" title="Cue: запустить трек с MIX IN, первой prep-метки или 0:00" aria-label="Cue: запустить трек с MIX IN, первой prep-метки или начала">CUE</button>
+          </div>
           <div class="time" id="playerTime">0:00 / 0:00</div>
         </div>
         <div class="waveform" id="waveBox" hidden>
@@ -911,17 +946,9 @@
           <input id="playerVol" type="range" min="0" max="1" step="0.01" value="0.85" aria-label="Volume" title="Громкость прослушивания выбранного трека">
         </div>
       </div>
-      <div class="waveform" id="waveZoomPanel" hidden>
-        <div class="wave-detail-tools">
-          <button id="waveZoomOut" type="button" title="Уменьшить масштаб waveform">-</button>
-          <button id="waveZoomIn" type="button" title="Увеличить масштаб waveform">+</button>
-          <span id="waveZoomLabel">4.0x</span>
-          <span class="wave-resolution" id="waveResolutionLabel">Engine overview 1024 pts</span>
-          <button id="waveFollow" type="button" class="active" title="Следовать за playhead как в Engine DJ">Follow</button>
-          <input id="waveScroll" type="range" min="0" max="1000" value="0" title="Прокрутка zoom-участка waveform">
-        </div>
-        <canvas id="waveZoomCanvas" width="1024" height="128"></canvas>
-      </div>
+    </div>
+
+    <div class="prep-deck" id="prepDeck">
       <div class="prep-panel" id="trackPrepPanel" hidden>
         <div class="track-prep" id="trackPrep">
           <div class="track-prep-head">
@@ -997,6 +1024,17 @@
             </div>
           </div>
         </div>
+      </div>
+      <div class="waveform" id="waveZoomPanel" hidden>
+        <div class="wave-detail-tools">
+          <button id="waveZoomOut" type="button" title="Уменьшить масштаб waveform">-</button>
+          <button id="waveZoomIn" type="button" title="Увеличить масштаб waveform">+</button>
+          <span id="waveZoomLabel">4.0x</span>
+          <span class="wave-resolution" id="waveResolutionLabel">Engine overview 1024 pts</span>
+          <button id="waveFollow" type="button" class="active" title="Следовать за playhead как в Engine DJ">Follow</button>
+          <input id="waveScroll" type="range" min="0" max="1000" value="0" title="Прокрутка zoom-участка waveform">
+        </div>
+        <canvas id="waveZoomCanvas" width="1024" height="128"></canvas>
       </div>
     </div>
 
@@ -3892,6 +3930,50 @@ ${suggestion.reason || ''}`
       return true;
     }
 
+
+    function deckCueStartTime() {
+      const markTime = (mark) => {
+        const t = Number(mark?.time_sec ?? mark?.pos_s ?? mark?.start_sec);
+        return Number.isFinite(t) && t >= 0 ? clampTrackTime(t) : null;
+      };
+      const marks = Array.isArray(trackPrep?.marks) ? trackPrep.marks : [];
+      const mixIn = marks.find(mark => String(mark?.type || '').toUpperCase() === 'MIX_IN');
+      const mixInTime = markTime(mixIn);
+      if (mixInTime != null) return mixInTime;
+
+      const firstPrep = marks
+        .map(markTime)
+        .filter(t => t != null)
+        .sort((a, b) => a - b)[0];
+      return firstPrep != null ? firstPrep : 0;
+    }
+
+    async function cueSelectedPlayback() {
+      const player = $('player');
+      if (!player || !selectedTrack) return;
+      const target = deckCueStartTime();
+      if (webAudioPlaying) {
+        stopWebAudioPlayback(false);
+      } else if (!player.paused) {
+        try { player.pause(); } catch {}
+      }
+      playbackCursorSec = target;
+      playbackCursorPinned = true;
+      audioPendingSeekSec = target;
+      webAudioOffsetSec = target;
+      followPlayhead = true;
+      try {
+        if (player.readyState >= 1) player.currentTime = target;
+      } catch {}
+      syncWaveScrollControl();
+      updatePlayerBar();
+      if (lastWavePeaks) drawWaveform(lastWavePeaks);
+      drawZoomWaveform();
+      await startSelectedPlayback();
+      $('status').className = 'status ok';
+      $('status').textContent = `Cue: старт с ${fmtTimePrecise(target, true)}`;
+    }
+
     async function startSelectedPlayback() {
       const player = $('player');
       if (!player || !selectedTrack) return;
@@ -4015,6 +4097,7 @@ ${suggestion.reason || ''}`
       const player = $('player');
       if (!player) return;
       const btn = $('playPause');
+      const cueBtn = $('cueButton');
       const vol = $('playerVol');
       if (!player.__wiredAudioEvents) {
         player.__wiredAudioEvents = true;
@@ -4059,6 +4142,12 @@ ${suggestion.reason || ''}`
             return;
           }
           startSelectedPlayback();
+        });
+      }
+      if (cueBtn && !cueBtn.__wiredCueCtl) {
+        cueBtn.__wiredCueCtl = true;
+        cueBtn.addEventListener('click', () => {
+          cueSelectedPlayback();
         });
       }
       if (vol && !vol.__wiredVolCtl) {
