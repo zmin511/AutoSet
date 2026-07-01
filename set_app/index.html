@@ -3594,7 +3594,7 @@ ${suggestion.reason || ''}`
       const waveBottom = h - loopLabelH - (6 * dpr);
       const waveBase = Math.max(waveTop + 6 * dpr, waveBottom); // baseline (only upper half waveform)
       const maxAmp = Math.max(4 * dpr, (waveBase - waveTop) * 0.96);
-      const bins = Math.min(w, peaks.length);
+      const bins = Math.max(1, Math.floor(w));
       const rgb = window.__waveRGB;
       const hasRgb = rgb && Array.isArray(rgb.r) && Array.isArray(rgb.g) && Array.isArray(rgb.b) && rgb.r.length === peaks.length;
       if (hasRgb) {
@@ -3880,19 +3880,18 @@ ${suggestion.reason || ''}`
       ]);
     }
 
-    async function waitForPlaySignal(playPromise, timeoutMs = 900) {
-      if (!playPromise || typeof playPromise.then !== 'function') return true;
+    async function waitForPlaySignal(playPromise, timeoutMs = 650) {
+      if (!playPromise || typeof playPromise.then !== 'function') return 'started';
       let timeoutId = null;
-      const guarded = playPromise.then(() => true);
+      const guarded = playPromise.then(() => 'started').catch(() => 'failed');
       const timer = new Promise((resolve) => {
-        timeoutId = window.setTimeout(() => resolve(false), timeoutMs);
+        timeoutId = window.setTimeout(() => resolve('timeout'), timeoutMs);
       });
       const result = await Promise.race([guarded, timer]);
       if (timeoutId) window.clearTimeout(timeoutId);
-      if (result === false) guarded.catch(() => {});
-      return result !== false;
+      if (result === 'timeout') guarded.catch(() => {});
+      return result;
     }
-
     async function checkMediaPath(mediaPath) {
       const res = await fetch(`/api/media-check?path=${encodeURIComponent(mediaPath)}`);
       const data = await res.json().catch(() => ({}));
@@ -4065,21 +4064,23 @@ ${suggestion.reason || ''}`
         applyTarget();
         let playPromise = player.play();
         startAudioDebugMonitor('after play', 9000);
-        if (playPromise && typeof playPromise.then === 'function') await waitForPlaySignal(playPromise, 900);
-        let progressed = await waitForPlaybackProgress(player, target, 700);
-        if (!progressed) {
+        let playState = playPromise && typeof playPromise.then === 'function'
+          ? await waitForPlaySignal(playPromise, 650)
+          : 'started';
+        if (playState === 'failed') {
           $('status').className = 'status';
-          $('status').textContent = 'Поток не пошёл, пробую fallback...';
+          $('status').textContent = 'Поток отклонен, пробую fallback...';
           await checkMediaPath(mediaPath);
           await useBlobMediaSource(mediaPath);
           applyTarget();
           playPromise = player.play();
-          if (playPromise && typeof playPromise.then === 'function') await waitForPlaySignal(playPromise, 1200);
-          progressed = await waitForPlaybackProgress(player, target, 900);
+          playState = playPromise && typeof playPromise.then === 'function'
+            ? await waitForPlaySignal(playPromise, 850)
+            : 'started';
         }
-        if (!progressed) {
+        if (playState === 'failed') {
           $('status').className = 'status';
-          $('status').textContent = 'HTML audio не двигается, пробую WebAudio...';
+          $('status').textContent = 'HTML audio не стартовал, пробую WebAudio...';
           await startWebAudioPlayback(mediaPath, target);
           updatePlayerBar();
           return;
