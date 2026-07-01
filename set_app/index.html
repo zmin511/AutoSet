@@ -53,7 +53,7 @@
     }
     .prep-deck {
       display: grid;
-      grid-template-columns: minmax(420px, 520px) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 8px;
       align-items: stretch;
       width: 100%;
@@ -611,12 +611,14 @@
       padding: 8px;
       margin: 0;
       min-height: 0;
+      height: 100%;
       display: flex;
       flex-direction: column;
     }
     canvas#waveZoomCanvas {
       width: 100%;
-      height: 148px;
+      min-height: 172px;
+      flex: 1 1 172px;
       display: block;
       cursor: ew-resize;
       border-top: 1px solid rgba(255,255,255,.08);
@@ -629,13 +631,16 @@
       padding: 8px;
       margin: 0;
       min-height: 0;
+      height: 100%;
     }
     .track-prep {
       margin-top: 0;
       padding-top: 0;
       border-top: 0;
       display: grid;
-      gap: 5px;
+      gap: 6px;
+      height: 100%;
+      align-content: start;
     }
     .track-prep-head, .track-prep-row, .track-prep-actions {
       display: flex;
@@ -644,26 +649,31 @@
       flex-wrap: wrap;
     }
     .track-prep-group {
-      display: flex;
-      align-items: center;
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr);
+      align-items: start;
       gap: 6px;
-      flex-wrap: wrap;
       padding-top: 4px;
     }
     .track-prep-group + .track-prep-group { border-top: 1px solid rgba(255,255,255,.06); }
     .track-prep-group-title {
-      min-width: 72px;
+      min-width: 0;
       color: var(--muted);
       font-size: 10px;
+      line-height: 1.25;
       text-transform: uppercase;
       letter-spacing: 0;
+      padding-top: 5px;
     }
     .track-prep-group-buttons {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
       gap: 4px;
-      flex-wrap: wrap;
-      align-items: center;
+      align-items: stretch;
       min-width: 0;
+    }
+    .track-prep-actions {
+      grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
     }
     .track-prep-title {
       color: #dff8ec;
@@ -691,6 +701,7 @@
       padding: 3px 7px;
       font-size: 10px;
       white-space: nowrap;
+      width: 100%;
     }
     .track-prep button.primary {
       font-weight: 720;
@@ -741,23 +752,25 @@
       min-height: 14px;
     }
     .batch-suggest {
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid rgba(255,255,255,.08);
+      margin-top: 0;
+      padding-top: 0;
+      border-top: 0;
       display: grid;
+      grid-template-columns: minmax(0, 1fr);
       gap: 7px;
     }
     .batch-suggest-head {
-      display: flex;
-      align-items: center;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+      align-items: stretch;
       gap: 4px;
-      flex-wrap: wrap;
     }
     .batch-suggest-title {
       color: #dff8ec;
       font-size: 12px;
       font-weight: 720;
-      margin-right: auto;
+      margin-right: 0;
+      align-self: center;
     }
     .batch-suggest-status {
       color: var(--muted);
@@ -3867,6 +3880,19 @@ ${suggestion.reason || ''}`
       ]);
     }
 
+    async function waitForPlaySignal(playPromise, timeoutMs = 900) {
+      if (!playPromise || typeof playPromise.then !== 'function') return true;
+      let timeoutId = null;
+      const guarded = playPromise.then(() => true);
+      const timer = new Promise((resolve) => {
+        timeoutId = window.setTimeout(() => resolve(false), timeoutMs);
+      });
+      const result = await Promise.race([guarded, timer]);
+      if (timeoutId) window.clearTimeout(timeoutId);
+      if (result === false) guarded.catch(() => {});
+      return result !== false;
+    }
+
     async function checkMediaPath(mediaPath) {
       const res = await fetch(`/api/media-check?path=${encodeURIComponent(mediaPath)}`);
       const data = await res.json().catch(() => ({}));
@@ -4039,8 +4065,8 @@ ${suggestion.reason || ''}`
         applyTarget();
         let playPromise = player.play();
         startAudioDebugMonitor('after play', 9000);
-        if (playPromise && typeof playPromise.then === 'function') await withTimeout(playPromise, 3500, 'audio play timeout');
-        let progressed = await waitForPlaybackProgress(player, target, 1600);
+        if (playPromise && typeof playPromise.then === 'function') await waitForPlaySignal(playPromise, 900);
+        let progressed = await waitForPlaybackProgress(player, target, 700);
         if (!progressed) {
           $('status').className = 'status';
           $('status').textContent = 'Поток не пошёл, пробую fallback...';
@@ -4048,8 +4074,8 @@ ${suggestion.reason || ''}`
           await useBlobMediaSource(mediaPath);
           applyTarget();
           playPromise = player.play();
-          if (playPromise && typeof playPromise.then === 'function') await withTimeout(playPromise, 5000, 'blob audio play timeout');
-          progressed = await waitForPlaybackProgress(player, target, 2200);
+          if (playPromise && typeof playPromise.then === 'function') await waitForPlaySignal(playPromise, 1200);
+          progressed = await waitForPlaybackProgress(player, target, 900);
         }
         if (!progressed) {
           $('status').className = 'status';
