@@ -16,7 +16,7 @@ import zlib
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -44,6 +44,7 @@ MUSIC_ROOT = DEFAULT_MUSIC_ROOT
 SETS_DIR = DEFAULT_SETS_DIR
 DB_PATH = DEFAULT_DB_PATH
 INDEX_HTML = APP_DIR / "index.html"
+STATIC_DIR = APP_DIR / "static"
 TRACK_MARKS_DIR = APP_DIR / "track_marks"
 ENGINE_DB_BACKUP_DIR = APP_DIR / "backups" / "engine_db"
 # Engine cue/loop raw positions are stored as frames at 44100 Hz based on diff diagnostics.
@@ -80,7 +81,7 @@ AUDIO_MIME_TYPES = {".mp3": "audio/mpeg", ".flac": "audio/flac", ".m4a": "audio/
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.29"
+APP_VERSION = "1.5.34"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -3622,6 +3623,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/static/"):
+            rel = unquote(parsed.path[len("/static/"):])
+            try:
+                static_root = STATIC_DIR.resolve()
+                static_path = (STATIC_DIR / rel).resolve()
+                static_path.relative_to(static_root)
+            except Exception:
+                self.send_error(404)
+                return
+            if not static_path.is_file():
+                self.send_error(404)
+                return
+            data = static_path.read_bytes()
+            content_type = mimetypes.guess_type(str(static_path))[0] or "application/octet-stream"
+            if static_path.suffix == ".js":
+                content_type = "application/javascript; charset=utf-8"
+            elif static_path.suffix == ".css":
+                content_type = "text/css; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if parsed.path == "/":
             data = INDEX_HTML.read_bytes()
             self.send_response(200)
