@@ -4065,22 +4065,30 @@ ${suggestion.reason || ''}`
         let playPromise = player.play();
         startAudioDebugMonitor('after play', 9000);
         let playState = playPromise && typeof playPromise.then === 'function'
-          ? await waitForPlaySignal(playPromise, 650)
+          ? await waitForPlaySignal(playPromise, 450)
           : 'started';
-        if (playState === 'failed') {
+        let progressed = playState === 'failed'
+          ? false
+          : await waitForPlaybackProgress(player, target, 550);
+        if (playState === 'failed' || !progressed) {
           $('status').className = 'status';
-          $('status').textContent = 'Поток отклонен, пробую fallback...';
+          $('status').textContent = playState === 'failed'
+            ? 'Поток отклонен, пробую fallback...'
+            : 'Поток не двигается, пробую fallback...';
           await checkMediaPath(mediaPath);
           await useBlobMediaSource(mediaPath);
           applyTarget();
           playPromise = player.play();
           playState = playPromise && typeof playPromise.then === 'function'
-            ? await waitForPlaySignal(playPromise, 850)
+            ? await waitForPlaySignal(playPromise, 650)
             : 'started';
+          progressed = playState === 'failed'
+            ? false
+            : await waitForPlaybackProgress(player, target, 700);
         }
-        if (playState === 'failed') {
+        if (playState === 'failed' || !progressed) {
           $('status').className = 'status';
-          $('status').textContent = 'HTML audio не стартовал, пробую WebAudio...';
+          $('status').textContent = 'HTML audio не двигается, пробую WebAudio...';
           await startWebAudioPlayback(mediaPath, target);
           updatePlayerBar();
           return;
