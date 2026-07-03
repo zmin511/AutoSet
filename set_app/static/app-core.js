@@ -299,7 +299,7 @@ ${suggestion.reason || ''}`
         track.has_loop ? '<span class="dot loop" title="Есть loop"></span>' : '',
       ].filter(Boolean).join('');
       btn.innerHTML = `
-        <input class="batch-check" type="checkbox" data-batch-select="track" data-id="${esc(track.id)}" ${batchChecked ? 'checked' : ''} title="Отметить трек для batch-подсказок и включить его в Batch Suggest">
+        <input class="batch-check" type="checkbox" data-batch-select="track" data-id="${esc(track.id)}" ${batchChecked ? 'checked' : ''} title="Отметить трек для пакетных подсказок">
         <button class="play ${playingPath === (track.rel || track.path) ? 'active' : ''}" type="button" title="Воспроизвести этот трек" aria-label="Воспроизвести этот трек"></button>
         <div class="title"><span class="name">${esc(track.label || track.filename)}</span><span class="sub">${esc(track.path || track.rel || '')}</span></div>
         <div class="marks">${marks}</div>

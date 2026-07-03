@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoSet</title>
-  <link rel="stylesheet" href="/static/app.css?v=1.5.34">
+  <link rel="stylesheet" href="/static/app.css?v=1.5.36">
 
 </head>
 <body>
@@ -37,7 +37,7 @@
         </div>
         <div class="volume-mini-panel">
           <div class="mini" title="Громкость прослушивания выбранного трека">Vol</div>
-          <input id="playerVol" type="range" min="0" max="1" step="0.01" value="0.85" aria-label="Volume" title="Громкость прослушивания выбранного трека">
+          <input id="playerVol" type="range" min="0" max="1" step="0.01" value="0.85" aria-label="Громкость" title="Громкость прослушивания выбранного трека">
         </div>
       </div>
     </div>
@@ -46,73 +46,73 @@
       <div class="prep-panel" id="trackPrepPanel" hidden>
         <div class="track-prep" id="trackPrep">
           <div class="track-prep-head">
-            <div class="track-prep-title" title="Ручная разметка cue и loop для выбранного трека.">Track Prep</div>
-            <label for="trackPrepSnap" title="Как автоматически привязывать новую метку или loop: к ближайшему beat, bar, 16 beats или 32 beats.">Snap
+            <div class="track-prep-title" title="Ручная разметка cue и loop для выбранного трека.">Разметка трека</div>
+            <label for="trackPrepSnap" title="Как автоматически привязывать новую метку или loop: к ближайшему beat, bar, 16 beats или 32 beats.">Привязка
               <select id="trackPrepSnap">
-                <option value="beat">Beat</option>
-                <option value="bar">Bar</option>
-                <option value="phrase16">16 beats</option>
-                <option value="phrase32">32 beats</option>
+                <option value="beat">Бит</option>
+                <option value="bar">Такт</option>
+                <option value="phrase16">16 битов</option>
+                <option value="phrase32">32 бита</option>
               </select>
             </label>
-            <label for="trackPrepLoopType" title="Какой тип loop будет создан кнопками Loop 4/8/16/32.">Loop
+            <label for="trackPrepLoopType" title="Какой тип loop будет создан кнопками Loop 4/8/16/32.">Петля
               <select id="trackPrepLoopType">
-                <option value="OUTRO_LOOP">Outro</option>
-                <option value="EMERGENCY_LOOP">Emergency</option>
+                <option value="OUTRO_LOOP">Аутро</option>
+                <option value="EMERGENCY_LOOP">Аварийная</option>
               </select>
             </label>
           </div>
           <div class="track-prep-group">
-            <div class="track-prep-group-title">Marks</div>
+            <div class="track-prep-group-title">Метки</div>
             <div class="track-prep-group-buttons">
-              <button type="button" data-prep-mark="MIX_IN" title="Поставить MIX IN в текущую позицию и сделать её точкой входа в микс.">MIX IN</button>
-              <button type="button" data-prep-mark="VOCAL_IN" title="Поставить VOCAL IN в точку, где начинается вокальная часть трека.">VOCAL</button>
-              <button type="button" data-prep-mark="DROP" title="Поставить DROP в момент основного удара или кульминации.">DROP</button>
-              <button type="button" data-prep-mark="BREAK" title="Поставить BREAK в участок с заметным спадом энергии или паузой.">BREAK</button>
-              <button type="button" data-prep-mark="MIX_OUT" title="Поставить MIX OUT в точку безопасного выхода из трека.">MIX OUT</button>
-              <button type="button" data-prep-mark="OUTRO" title="Поставить OUTRO на финальную часть трека перед уходом в конец.">OUTRO</button>
+              <button type="button" data-prep-mark="MIX_IN" title="Поставить MIX IN в текущую позицию и сделать её точкой входа в микс.">ВХОД</button>
+              <button type="button" data-prep-mark="VOCAL_IN" title="Поставить VOCAL IN в точку, где начинается вокальная часть трека.">ВОКАЛ</button>
+              <button type="button" data-prep-mark="DROP" title="Поставить DROP в момент основного удара или кульминации.">ДРОП</button>
+              <button type="button" data-prep-mark="BREAK" title="Поставить BREAK в участок с заметным спадом энергии или паузой.">БРЕЙК</button>
+              <button type="button" data-prep-mark="MIX_OUT" title="Поставить MIX OUT в точку безопасного выхода из трека.">ВЫХОД</button>
+              <button type="button" data-prep-mark="OUTRO" title="Поставить OUTRO на финальную часть трека перед уходом в конец.">АУТРО</button>
             </div>
           </div>
           <div class="track-prep-group">
-            <div class="track-prep-group-title">Loops</div>
+            <div class="track-prep-group-title">Петли</div>
             <div class="track-prep-group-buttons">
-              <button type="button" data-prep-loop="4" title="Создать loop длиной 4 beats от текущей позиции или от выбранной метки.">Loop 4</button>
-              <button type="button" data-prep-loop="8" title="Создать loop длиной 8 beats от текущей позиции или от выбранной метки.">Loop 8</button>
-              <button type="button" data-prep-loop="16" title="Создать loop длиной 16 beats от текущей позиции или от выбранной метки.">Loop 16</button>
-              <button type="button" data-prep-loop="32" title="Создать loop длиной 32 beats от текущей позиции или от выбранной метки.">Loop 32</button>
+              <button type="button" data-prep-loop="4" title="Создать loop длиной 4 beats от текущей позиции или от выбранной метки.">Петля 4</button>
+              <button type="button" data-prep-loop="8" title="Создать loop длиной 8 beats от текущей позиции или от выбранной метки.">Петля 8</button>
+              <button type="button" data-prep-loop="16" title="Создать loop длиной 16 beats от текущей позиции или от выбранной метки.">Петля 16</button>
+              <button type="button" data-prep-loop="32" title="Создать loop длиной 32 beats от текущей позиции или от выбранной метки.">Петля 32</button>
             </div>
           </div>
           <div class="track-prep-group">
-            <div class="track-prep-group-title">Suggest</div>
+            <div class="track-prep-group-title">Подсказки</div>
             <div class="track-prep-group-buttons track-prep-actions">
-              <button type="button" id="trackPrepSuggest" title="Сгенерировать preview-метки и loops для текущего трека без сохранения в JSON.">Suggest Marks</button>
-              <button type="button" id="trackPrepAccept" title="Принять preview-метки и loops и перенести их в обычные Track Prep marks.">Accept Suggestions</button>
-              <button type="button" id="trackPrepClearSuggest" title="Скрыть preview-метки и loops, не меняя сохранённый JSON.">Clear Suggestions</button>
-              <button type="button" id="trackPrepReplaceSuggest" hidden title="Заменить уже сохранённые track prep метки на текущие suggestions.">Replace existing marks</button>
+              <button type="button" id="trackPrepSuggest" title="Сгенерировать предпросмотр-метки и loops для текущего трека без сохранения в JSON.">Предложить</button>
+              <button type="button" id="trackPrepAccept" title="Принять предпросмотр-метки и loops и перенести их в обычные метки Track Prep.">Принять</button>
+              <button type="button" id="trackPrepClearSuggest" title="Скрыть предпросмотр-метки и loops, не меняя сохранённый JSON.">Очистить</button>
+              <button type="button" id="trackPrepReplaceSuggest" hidden title="Заменить уже сохранённые метки Track Prep на текущие suggestions.">Заменить метки</button>
             </div>
           </div>
           <div class="track-prep-group">
-            <div class="track-prep-group-title">Save / Engine</div>
+            <div class="track-prep-group-title">Сохранение</div>
             <div class="track-prep-group-buttons track-prep-actions">
-              <button class="primary" type="button" id="trackPrepSave" title="Сохранить ручные Track Prep marks и loops во внутренний JSON AutoSet.">Save Marks</button>
-              <button type="button" id="trackPrepReset" title="Удалить все сохранённые ручные Track Prep marks и loops для этого трека.">Reset Marks</button>
-              <button type="button" id="trackPrepExport" title="Экспортировать сохранённые Track Prep marks и loops выбранного трека в Engine DJ.">Export to Engine DJ</button>
-              <button type="button" id="trackPrepOverwrite" hidden title="Перезаписать только целевые cue/loop slots в Engine DJ после конфликта.">Overwrite Engine slots</button>
+              <button class="primary" type="button" id="trackPrepSave" title="Сохранить ручные метки Track Prep и loops во внутренний JSON AutoSet.">Сохранить</button>
+              <button type="button" id="trackPrepReset" title="Удалить все сохранённые ручные метки Track Prep и loops для этого трека.">Сбросить</button>
+              <button type="button" id="trackPrepExport" title="Экспортировать сохранённые метки Track Prep и loops выбранного трека в Engine DJ.">В Engine DJ</button>
+              <button type="button" id="trackPrepOverwrite" hidden title="Перезаписать только целевые cue/loop slots в Engine DJ после конфликта.">Перезаписать Engine</button>
             </div>
           </div>
           <span class="track-prep-status" id="trackPrepStatus"></span>
           <div class="track-prep-list" id="trackPrepList"></div>
           <div class="track-prep-group">
-            <div class="track-prep-group-title">Batch</div>
+            <div class="track-prep-group-title">Пакет</div>
             <div class="track-prep-group-buttons batch-suggest" id="batchSuggest">
               <div class="batch-suggest-head">
-                <div class="batch-suggest-title" title="Preview-подсказки для нескольких видимых или выбранных треков. Ничего не сохраняется, пока вы не нажмёте Accept.">Batch Suggest</div>
-                <button type="button" id="batchSuggestRun" title="Сгенерировать preview-подсказки для видимых или выбранных треков.">Batch Suggest</button>
-                <button type="button" id="batchSuggestAccept" title="Сохранить отмеченные batch preview suggestions в Track Prep JSON.">Accept selected</button>
-                <button type="button" id="batchSuggestReplace" title="Перезаписать уже сохранённые Track Prep marks и loops только для выбранных треков.">Replace existing for selected</button>
-                <button type="button" id="batchSuggestOpen" title="Открыть выбранный трек и показать его preview suggestions на waveform.">Open track</button>
-                <button type="button" id="batchSuggestClear" title="Скрыть batch preview, не меняя сохранённые JSON-файлы.">Clear batch preview</button>
-                <span class="batch-suggest-status" id="batchSuggestStatus" title="Показывает состояние batch preview: анализ, конфликты, сохранение и количество выбранных треков."></span>
+                <div class="batch-suggest-title" title="Предпросмотр-подсказки для нескольких видимых или выбранных треков. Ничего не сохраняется, пока вы не нажмёте Accept.">Пакетная разметка</div>
+                <button type="button" id="batchSuggestRun" title="Сгенерировать предпросмотр-подсказки для видимых или выбранных треков.">Предложить</button>
+                <button type="button" id="batchSuggestAccept" title="Сохранить отмеченные пакетный предпросмотр suggestions в Track Prep JSON.">Принять выбранные</button>
+                <button type="button" id="batchSuggestReplace" title="Перезаписать уже сохранённые метки Track Prep и loops только для выбранных треков.">Заменить выбранные</button>
+                <button type="button" id="batchSuggestOpen" title="Открыть выбранный трек и показать его предпросмотр подсказок на waveform.">Открыть трек</button>
+                <button type="button" id="batchSuggestClear" title="Скрыть пакетный предпросмотр, не меняя сохранённые JSON-файлы.">Очистить просмотр</button>
+                <span class="batch-suggest-status" id="batchSuggestStatus" title="Показывает состояние пакетный предпросмотр: анализ, конфликты, сохранение и количество выбранных треков."></span>
               </div>
               <div class="batch-suggest-table" id="batchSuggestTable"></div>
             </div>
@@ -125,7 +125,7 @@
           <button id="waveZoomIn" type="button" title="Увеличить масштаб waveform">+</button>
           <span id="waveZoomLabel">4.0x</span>
           <span class="wave-resolution" id="waveResolutionLabel">Engine overview 1024 pts</span>
-          <button id="waveFollow" type="button" class="active" title="Следовать за playhead как в Engine DJ">Follow</button>
+          <button id="waveFollow" type="button" class="active" title="Следовать за playhead как в Engine DJ">Следить</button>
           <input id="waveScroll" type="range" min="0" max="1000" value="0" title="Прокрутка zoom-участка waveform">
         </div>
         <canvas id="waveZoomCanvas" width="1024" height="128"></canvas>
@@ -273,11 +273,12 @@
   </div>
   <datalist id="genreOptionsList"></datalist>
 
-  <script src="/static/app-core.js?v=1.5.34"></script>
-  <script src="/static/app-prep.js?v=1.5.34"></script>
-  <script src="/static/app-waveform.js?v=1.5.34"></script>
-  <script src="/static/app-actions.js?v=1.5.34"></script>
-  <script src="/static/app-boot.js?v=1.5.34"></script>
+  <script src="/static/app-core.js?v=1.5.36"></script>
+  <script src="/static/app-prep-config.js?v=1.5.36"></script>
+  <script src="/static/app-prep.js?v=1.5.36"></script>
+  <script src="/static/app-waveform.js?v=1.5.36"></script>
+  <script src="/static/app-actions.js?v=1.5.36"></script>
+  <script src="/static/app-boot.js?v=1.5.36"></script>
 
 </body>
 </html>

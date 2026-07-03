@@ -5,22 +5,9 @@
     window.__waveLoops = [];
     window.__waveRGB = null;
     window.__waveDetail = null;
-    const PREP_MARKS = [
-      { type: 'MIX_IN', label: 'MIX IN' },
-      { type: 'VOCAL_IN', label: 'VOCAL' },
-      { type: 'DROP', label: 'DROP' },
-      { type: 'BREAK', label: 'BREAK' },
-      { type: 'MIX_OUT', label: 'MIX OUT' },
-      { type: 'OUTRO', label: 'OUTRO' }
-    ];
-    const PREP_MARK_COLORS = {
-      MIX_IN: '#37c58f',
-      VOCAL_IN: '#49a0ec',
-      DROP: '#f5c84b',
-      BREAK: '#bd7deb',
-      MIX_OUT: '#ef6b73',
-      OUTRO: '#ff8a3d'
-    };
+    const prepConfig = window.AutoSetPrepConfig || {};
+    const PREP_MARKS = prepConfig.PREP_MARKS || [];
+    const PREP_MARK_COLORS = prepConfig.PREP_MARK_COLORS || {};
     let trackPrep = { marks: [], loops: [], exists: false, source: 'manual', confidence: 1 };
     let trackPrepSnap = 'beat';
     let trackPrepDirty = false;
@@ -588,7 +575,7 @@
       const payload = {
         id: String(loop?.id || `${type.toLowerCase()}_${Math.round(start * 1000)}_${lengthBeats || 'manual'}`),
         type,
-        name: loop?.name || (type === 'EMERGENCY_LOOP' ? `Emergency Loop ${lengthBeats}` : `Loop ${lengthBeats}`),
+        name: loop?.name || (type === 'EMERGENCY_LOOP' ? `Аварийная петля ${lengthBeats}` : `Loop ${lengthBeats}`),
         start_sec: Number(start.toFixed(3)),
         end_sec: Number(end.toFixed(3)),
         raw_start_sec: Number((loop?.raw_start_sec == null ? start : clampTrackTime(loop.raw_start_sec)).toFixed(3)),
@@ -664,12 +651,12 @@
     }
 
     function batchResultStatusText(result) {
-      if (!result) return 'Empty';
-      if (result.batch_status === 'saved') return 'Saved';
-      if (result.batch_status === 'conflict') return result.batch_message || 'Conflict';
-      if (result.batch_status === 'error') return result.batch_message || 'Error';
-      if (!result.ok) return 'Error';
-      return 'Preview';
+      if (!result) return 'Пусто';
+      if (result.batch_status === 'saved') return 'Сохранено';
+      if (result.batch_status === 'conflict') return result.batch_message || 'Конфликт';
+      if (result.batch_status === 'error') return result.batch_message || 'Ошибка';
+      if (!result.ok) return 'Ошибка';
+      return 'Предпросмотр';
     }
 
     function renderBatchSuggestPanel() {
@@ -679,19 +666,19 @@
       rows.push(`
         <div class="batch-suggest-row head">
           <div class="batch-suggest-cell"></div>
-          <div class="batch-suggest-cell">Track</div>
-          <div class="batch-suggest-cell">MIX_IN</div>
-          <div class="batch-suggest-cell">MIX_OUT</div>
-          <div class="batch-suggest-cell">OUTRO_LOOP</div>
-          <div class="batch-suggest-cell">EMERGENCY_LOOP</div>
-          <div class="batch-suggest-cell">Confidence</div>
-          <div class="batch-suggest-cell">Warnings</div>
-          <div class="batch-suggest-cell">Status</div>
+          <div class="batch-suggest-cell">Трек</div>
+          <div class="batch-suggest-cell">ВХОД</div>
+          <div class="batch-suggest-cell">ВЫХОД</div>
+          <div class="batch-suggest-cell">ПЕТЛЯ АУТРО</div>
+          <div class="batch-suggest-cell">АВАРИЙНАЯ</div>
+          <div class="batch-suggest-cell">Оценка</div>
+          <div class="batch-suggest-cell">Замечания</div>
+          <div class="batch-suggest-cell">Статус</div>
           <div class="batch-suggest-cell"></div>
         </div>
       `);
       if (!batchTrackSuggestions.length) {
-        rows.push('<div class="empty">No batch preview loaded.</div>');
+        rows.push('<div class="empty">Пакетный предпросмотр не загружен.</div>');
         box.innerHTML = rows.join('');
         return;
       }
@@ -716,7 +703,7 @@
             <div class="batch-suggest-cell">${result.confidence != null ? esc(Number(result.confidence).toFixed(2)) : '<span class="muted">-</span>'}</div>
             <div class="batch-suggest-cell wrap" title="${esc(warnings)}">${warnings ? esc(warnings) : '<span class="muted">-</span>'}</div>
             <div class="batch-suggest-cell">${esc(status)}</div>
-            <div class="batch-suggest-cell"><button type="button" data-batch-open-track="${esc(result.track_id)}">Open</button></div>
+            <div class="batch-suggest-cell"><button type="button" data-batch-open-track="${esc(result.track_id)}">Открыть</button></div>
           </div>
         `);
       }
@@ -741,8 +728,8 @@
       if (status) {
         if (batchTrackBusy) status.textContent = 'Analyzing tracks...';
         else if (batchTrackWarnings.length) status.textContent = batchTrackWarnings.join('; ');
-        else if (hasResults) status.textContent = `${batchTrackSuggestions.length} tracks in preview`;
-        else status.textContent = 'No batch preview';
+        else if (hasResults) status.textContent = `${batchTrackSuggestions.length} треков в предпросмотре`;
+        else status.textContent = 'Нет пакетного предпросмотра';
       }
       renderBatchSuggestPanel();
     }
@@ -819,13 +806,13 @@
           body: JSON.stringify({ track_ids: ids })
         });
         const data = await res.json();
-        if (!data?.ok) throw new Error(data?.error || data?.reason || 'Batch suggest failed');
+        if (!data?.ok) throw new Error(data?.error || data?.reason || 'Пакетный подбор не удался');
         batchTrackWarnings = Array.isArray(data.warnings) ? data.warnings.map(w => String(w)).filter(Boolean) : [];
         batchTrackSuggestions = (data.results || []).map(item => ({
           ...item,
           selected: item.ok !== false,
           batch_status: item.ok === false ? 'error' : 'preview',
-          batch_message: item.ok === false ? (item.error || 'Error') : ''
+          batch_message: item.ok === false ? (item.error || 'Ошибка') : ''
         }));
         batchTrackMap = new Map(batchTrackSuggestions.map(item => [Number(item.track_id) || 0, item]));
         batchPreviewTrackId = 0;
@@ -852,7 +839,7 @@
           const existing = await existingRes.json();
           if (!replaceExisting && existing?.exists) {
             item.batch_status = 'conflict';
-            item.batch_message = 'Existing marks already saved';
+            item.batch_message = 'Метки уже сохранены';
             continue;
           }
           const payload = batchTrackMetaPayload(item);
@@ -864,7 +851,7 @@
           const saveData = await saveRes.json();
           if (!saveData?.ok) throw new Error(saveData?.error || 'Save failed');
           item.batch_status = 'saved';
-          item.batch_message = replaceExisting ? 'Replaced and saved' : 'Saved';
+          item.batch_message = replaceExisting ? 'Заменено и сохранено' : 'Сохранено';
         }
       } catch (err) {
         batchTrackWarnings = [String(err)];
@@ -923,7 +910,7 @@
         const title = [loop.reason, loop.length_beats ? `${loop.length_beats} beats` : '', loop.confidence != null ? `confidence ${Number(loop.confidence).toFixed(2)}` : ''].filter(Boolean).join(' · ');
         rows.push(`<span class="prep-item loop suggested" title="${esc(title || 'Suggested loop')}">${esc(role)} ${esc(fmtTime(loop.start_sec))} - ${esc(fmtTime(loop.end_sec))}</span>`);
       }
-      box.innerHTML = rows.length ? rows.join('') : '<span>No manual marks</span>';
+      box.innerHTML = rows.length ? rows.join('') : '<span>Нет ручных меток</span>';
     }
 
     function syncTrackPrepControls() {
@@ -954,21 +941,21 @@
       if (overwrite) overwrite.disabled = !ready || !trackPrepExportConflict || trackPrepExportBusy;
       const snap = $('trackPrepSnap');
       if (snap && snap.value !== trackPrepSnap) snap.value = trackPrepSnap;
-      if (!hasTrack) prepStatus('Select an Engine track');
-      else if (!hasDetail) prepStatus('Waveform loading...');
-      else if (!ready) prepStatus('Loading track...');
-      else if (trackPrepSuggestBusy) prepStatus('Suggesting marks...');
-      else if (trackPrepSuggestConflict) prepStatus(trackPrepSuggestConflictText || 'Suggestion conflict', true);
-      else if (trackPrepDirty && hasSuggestions) prepStatus('Unsaved manual marks; suggestions ready');
-      else if (trackPrepDirty) prepStatus('Unsaved manual marks');
+      if (!hasTrack) prepStatus('Выберите трек Engine');
+      else if (!hasDetail) prepStatus('Waveform загружается...');
+      else if (!ready) prepStatus('Трек загружается...');
+      else if (trackPrepSuggestBusy) prepStatus('Подбираю метки...');
+      else if (trackPrepSuggestConflict) prepStatus(trackPrepSuggestConflictText || 'Конфликт подсказок', true);
+      else if (trackPrepDirty && hasSuggestions) prepStatus('Есть несохранённые метки; подсказки готовы');
+      else if (trackPrepDirty) prepStatus('Есть несохранённые метки');
       else if (trackPrepExportStatus) prepStatus(trackPrepExportStatus, trackPrepExportBad);
       else if (hasSuggestions) {
         const warnings = Array.isArray(trackPrepSuggestions?.warnings) ? trackPrepSuggestions.warnings.filter(Boolean) : [];
-        const text = warnings.length ? `Suggestions ready ? ${warnings.join('; ')}` : 'Suggestions ready';
+        const text = warnings.length ? `Подсказки готовы: ${warnings.join('; ')}` : 'Подсказки готовы';
         prepStatus(text);
       }
-      else if (trackPrep.exists) prepStatus('AutoSet only');
-      else prepStatus('No saved manual marks');
+      else if (trackPrep.exists) prepStatus('Только AutoSet');
+      else prepStatus('Нет сохранённых ручных меток');
     }
 
     function refreshWaveDisplayItems() {
@@ -1118,9 +1105,9 @@
 
     function trackPrepSuggestionConflictMessage(kind, type) {
       if (kind === 'loop') {
-        return `${String(type || '').toUpperCase() === 'EMERGENCY_LOOP' ? 'EMERGENCY LOOP' : 'OUTRO LOOP'} already exists`;
+        return `${String(type || '').toUpperCase() === 'EMERGENCY_LOOP' ? 'Аварийная петля' : 'Петля аутро'} уже есть`;
       }
-      return `${prepMarkLabel(type)} already exists`;
+      return `${prepMarkLabel(type)} уже есть`;
     }
 
     function trackPrepHasSuggestionConflicts(replaceExisting = false) {
@@ -1140,7 +1127,7 @@
         const first = markConflicts[0] || loopConflicts[0];
         const kind = markConflicts[0] ? 'cue' : 'loop';
         trackPrepSuggestConflict = true;
-        trackPrepSuggestConflictText = first ? trackPrepSuggestionConflictMessage(kind, first.type) : 'Suggestion conflict';
+        trackPrepSuggestConflictText = first ? trackPrepSuggestionConflictMessage(kind, first.type) : 'Конфликт подсказок';
         syncTrackPrepControls();
         return true;
       }
@@ -1162,11 +1149,11 @@
           body: JSON.stringify({ track_id: selectedTrack.id })
         });
         const data = await res.json();
-        if (!data?.ok) throw new Error(data?.error || data?.reason || 'Suggest failed');
+        if (!data?.ok) throw new Error(data?.error || data?.reason || 'Не удалось подобрать метки');
         applyTrackPrepSuggestions(data);
       } catch (err) {
         trackPrepSuggestBusy = false;
-        prepStatus(`Suggest failed: ${err}`, true);
+        prepStatus(`Не удалось подобрать метки: ${err}`, true);
         syncTrackPrepControls();
       }
     }
@@ -1200,7 +1187,7 @@
       for (const loop of loops) {
         const payload = normalizePrepLoop({
           type: loop.type,
-          name: loop.name || (loop.type === 'EMERGENCY_LOOP' ? 'Emergency Loop' : 'Outro Loop'),
+          name: loop.name || (loop.type === 'EMERGENCY_LOOP' ? 'Аварийная петля' : 'Петля аутро'),
           start_sec: loop.start_sec,
           end_sec: loop.end_sec,
           raw_start_sec: loop.raw_start_sec,
@@ -1217,7 +1204,7 @@
       clearTrackPrepExportState();
       trackPrepDirty = true;
       redrawTrackPrep();
-      prepStatus(replaceExisting ? 'Suggestions accepted and replaced existing marks' : 'Suggestions accepted; save marks to keep them');
+      prepStatus(replaceExisting ? 'Подсказки приняты и заменили старые метки' : 'Подсказки приняты; сохраните метки');
     }
 
     function clearTrackPrepSuggestions() {
@@ -1225,7 +1212,7 @@
       batchPreviewMode = '';
       batchPreviewTrackId = 0;
       redrawTrackPrep();
-      prepStatus('Suggestions cleared');
+      prepStatus('Подсказки очищены');
     }
 
     async function loadTrackPrepMarks(trackId) {
@@ -1302,7 +1289,7 @@
           body: JSON.stringify(trackPrepPayload())
         });
         const data = await res.json();
-        if (!data?.ok) throw new Error(data?.error || 'Save failed');
+        if (!data?.ok) throw new Error(data?.error || 'Не удалось сохранить');
         trackPrep = {
           marks: (data.marks || []).map(normalizePrepMark).filter(Boolean),
           loops: (data.loops || []).map(normalizePrepLoop).filter(Boolean),
@@ -1311,11 +1298,11 @@
           confidence: Number(data.confidence ?? 1)
         };
         trackPrepDirty = false;
-        trackPrepExportStatus = 'AutoSet only';
+        trackPrepExportStatus = 'Только AutoSet';
         trackPrepExportBad = false;
         trackPrepExportConflict = false;
         redrawTrackPrep();
-        prepStatus('Manual marks saved');
+        prepStatus('Ручные метки сохранены');
       } catch (err) {
         prepStatus(String(err), true);
       } finally {
@@ -1325,34 +1312,34 @@
 
     function trackPrepConflictMessage(conflicts) {
       const first = Array.isArray(conflicts) ? conflicts[0] : null;
-      if (!first) return 'Conflict: cue slot already used';
+      if (!first) return 'Конфликт: слот cue уже занят';
       const kind = first.type === 'loop' ? 'loop' : 'cue';
-      return `Conflict: ${kind} slot already used`;
+      return `Конфликт: слот ${kind} уже занят`;
     }
 
     function trackPrepExportError(data) {
       const reason = data?.reason || data?.error || 'export_failed';
       const labels = {
-        missing_db: 'Engine DB not found',
-        missing_track_marks: 'Save Marks before export',
-        empty_track_marks: 'No Track Prep marks to export',
-        missing_performance_data: 'Engine PerformanceData is missing',
-        db_locked: 'Engine DB is locked',
-        backup_failed: 'Could not create Engine DB backup',
-        codec_error: 'Could not decode Engine cue/loop data',
-        nothing_to_export: 'Nothing to export'
+        missing_db: 'База Engine DB не найдена',
+        missing_track_marks: 'Сначала сохраните метки',
+        empty_track_marks: 'Нет меток для экспорта',
+        missing_performance_data: 'Нет Engine PerformanceData',
+        db_locked: 'Engine DB заблокирована',
+        backup_failed: 'Не удалось создать backup Engine DB',
+        codec_error: 'Не удалось прочитать Engine cue/loop',
+        nothing_to_export: 'Нечего экспортировать'
       };
-      return labels[reason] || String(data?.error || reason || 'Export failed');
+      return labels[reason] || String(data?.error || reason || 'Экспорт не удался');
     }
 
     async function exportTrackPrepToEngine(overwriteExisting = false) {
       if (!selectedTrack?.id) return;
       if (trackPrepDirty || !trackPrep.exists) {
-        setTrackPrepExportStatus('Save Marks before export', true, false);
+        setTrackPrepExportStatus('Сначала сохраните метки', true, false);
         return;
       }
       trackPrepExportBusy = true;
-      setTrackPrepExportStatus(overwriteExisting ? 'Overwriting Engine slots...' : 'Exporting to Engine DJ');
+      setTrackPrepExportStatus(overwriteExisting ? 'Перезаписываю слоты Engine...' : 'Экспорт в Engine DJ...');
       try {
         const res = await fetch('/api/export_track_marks_to_engine', {
           method: 'POST',
@@ -1380,7 +1367,7 @@
 
     async function resetTrackPrepMarks() {
       if (!selectedTrack?.id) return;
-      if (!window.confirm('Reset manual marks and loops for this track?')) return;
+      if (!window.confirm('Сбросить ручные метки и петли для этого трека?')) return;
       const btn = $('trackPrepReset');
       if (btn) btn.disabled = true;
       try {
@@ -1400,7 +1387,7 @@
       const raw = clampTrackTime(currentPlaybackTime());
       const snapped = snapTargetForPlacement(raw);
       const existing = (trackPrep.marks || []).findIndex(mark => mark.type === markType);
-      if (existing >= 0 && !window.confirm(`${prepMarkLabel(markType)} already exists. Replace it?`)) return;
+      if (existing >= 0 && !window.confirm(`${prepMarkLabel(markType)} уже есть. Заменить?`)) return;
       clearTrackPrepExportState();
       const mark = normalizePrepMark({
         type: markType,
@@ -1423,7 +1410,7 @@
       const beats = Math.max(1, Math.min(512, Number(lengthBeats) || 0));
       const beatSec = estimateBeatSeconds();
       if (!(beatSec > 0)) {
-        prepStatus('BPM or beat-grid is required for loops', true);
+        prepStatus('Для петель нужен BPM или beat-grid', true);
         return;
       }
       const anchorMark = selectedPrepMark();
@@ -1431,11 +1418,11 @@
       const start = snapTargetForPlacement(raw);
       const end = clampTrackTime(start + beatSec * beats);
       if (!(end > start)) {
-        prepStatus('Loop end is outside track duration', true);
+        prepStatus('Конец петли выходит за длительность трека', true);
         return;
       }
       const type = $('trackPrepLoopType')?.value === 'EMERGENCY_LOOP' ? 'EMERGENCY_LOOP' : 'OUTRO_LOOP';
-      const role = type === 'EMERGENCY_LOOP' ? 'Emergency Loop' : 'Loop';
+      const role = type === 'EMERGENCY_LOOP' ? 'Аварийная петля' : 'Loop';
       const loop = normalizePrepLoop({
         id: `${type.toLowerCase()}_${beats}_${Math.round(start * 1000)}`,
         type,
