@@ -26,3 +26,5 @@ python-windows/
 # Local Codex workspace artifacts moved out of the music library
 tools/codex_workspace_artifacts/
 install/AutoSet_STABLE_*.zip
+
+backups/
