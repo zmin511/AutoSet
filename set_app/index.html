@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoSet</title>
-  <link rel="stylesheet" href="/static/app.css?v=1.5.37">
+  <link rel="stylesheet" href="/static/app.css?v=1.5.38">
 
 </head>
 <body>
@@ -102,21 +102,7 @@
           </div>
           <span class="track-prep-status" id="trackPrepStatus"></span>
           <div class="track-prep-list" id="trackPrepList"></div>
-          <div class="track-prep-group">
-            <div class="track-prep-group-title">Пакет</div>
-            <div class="track-prep-group-buttons batch-suggest" id="batchSuggest">
-              <div class="batch-suggest-head">
-                <div class="batch-suggest-title" title="Предпросмотр-подсказки для нескольких видимых или выбранных треков. Ничего не сохраняется, пока вы не нажмёте Accept.">Пакетная разметка</div>
-                <button type="button" id="batchSuggestRun" title="Сгенерировать предпросмотр-подсказки для видимых или выбранных треков.">Предложить</button>
-                <button type="button" id="batchSuggestAccept" title="Сохранить отмеченные пакетный предпросмотр suggestions в Track Prep JSON.">Принять выбранные</button>
-                <button type="button" id="batchSuggestReplace" title="Перезаписать уже сохранённые метки Track Prep и loops только для выбранных треков.">Заменить выбранные</button>
-                <button type="button" id="batchSuggestOpen" title="Открыть выбранный трек и показать его предпросмотр подсказок на waveform.">Открыть трек</button>
-                <button type="button" id="batchSuggestClear" title="Скрыть пакетный предпросмотр, не меняя сохранённые JSON-файлы.">Очистить просмотр</button>
-                <span class="batch-suggest-status" id="batchSuggestStatus" title="Показывает состояние пакетный предпросмотр: анализ, конфликты, сохранение и количество выбранных треков."></span>
-              </div>
-              <div class="batch-suggest-table" id="batchSuggestTable"></div>
-            </div>
-          </div>
+
         </div>
       </div>
       <div class="waveform" id="waveZoomPanel" hidden>
@@ -131,6 +117,21 @@
         <canvas id="waveZoomCanvas" width="1024" height="128"></canvas>
       </div>
     </div>
+
+    <section class="batch-suggest-panel" id="batchSuggestPanel">
+      <div class="track-prep-group-buttons batch-suggest" id="batchSuggest">
+        <div class="batch-suggest-head">
+          <div class="batch-suggest-title" title="Предпросмотр-подсказки для нескольких видимых или выбранных треков. Ничего не сохраняется, пока вы не нажмёте Accept.">Пакетная разметка</div>
+          <button type="button" id="batchSuggestRun" title="Сгенерировать предпросмотр-подсказки для видимых или выбранных треков.">Предложить</button>
+          <button type="button" id="batchSuggestAccept" title="Сохранить отмеченные пакетный предпросмотр suggestions в Track Prep JSON.">Принять выбранные</button>
+          <button type="button" id="batchSuggestReplace" title="Перезаписать уже сохранённые метки Track Prep и loops только для выбранных треков.">Заменить выбранные</button>
+          <button type="button" id="batchSuggestOpen" title="Открыть выбранный трек и показать его предпросмотр подсказок на waveform.">Открыть трек</button>
+          <button type="button" id="batchSuggestClear" title="Скрыть пакетный предпросмотр, не меняя сохранённые JSON-файлы.">Очистить просмотр</button>
+          <span class="batch-suggest-status" id="batchSuggestStatus" title="Показывает состояние пакетный предпросмотр: анализ, конфликты, сохранение и количество выбранных треков."></span>
+        </div>
+        <div class="batch-suggest-table" id="batchSuggestTable"></div>
+      </div>
+    </section>
 
     <div class="lower-workspace">
       <section class="library-frame">
@@ -273,14 +274,13 @@
   </div>
   <datalist id="genreOptionsList"></datalist>
 
-  <script src="/static/app-core.js?v=1.5.37"></script>
-  <script src="/static/app-prep-config.js?v=1.5.37"></script>
-  <script src="/static/app-prep.js?v=1.5.37"></script>
-
-  <script src="/static/app-prep-batch.js?v=1.5.37"></script>
-  <script src="/static/app-waveform.js?v=1.5.37"></script>
-  <script src="/static/app-actions.js?v=1.5.37"></script>
-  <script src="/static/app-boot.js?v=1.5.37"></script>
+  <script src="/static/app-core.js?v=1.5.38"></script>
+  <script src="/static/app-prep-config.js?v=1.5.38"></script>
+  <script src="/static/app-prep.js?v=1.5.38"></script>
+  <script src="/static/app-prep-batch.js?v=1.5.38"></script>
+  <script src="/static/app-waveform.js?v=1.5.38"></script>
+  <script src="/static/app-actions.js?v=1.5.38"></script>
+  <script src="/static/app-boot.js?v=1.5.38"></script>
 
 </body>
 </html>

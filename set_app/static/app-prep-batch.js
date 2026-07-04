@@ -101,7 +101,7 @@
       if (clearBtn) clearBtn.disabled = batchTrackBusy || !hasResults;
       const status = $('batchSuggestStatus');
       if (status) {
-        if (batchTrackBusy) status.textContent = 'Analyzing tracks...';
+        if (batchTrackBusy) status.textContent = 'Анализирую треки...';
         else if (batchTrackWarnings.length) status.textContent = batchTrackWarnings.join('; ');
         else if (hasResults) status.textContent = `${batchTrackSuggestions.length} треков в предпросмотре`;
         else status.textContent = 'Нет пакетного предпросмотра';
@@ -168,7 +168,7 @@
       const tracks = batchScopeTracks();
       const ids = tracks.map(track => Number(track.id) || 0).filter(Boolean);
       if (!ids.length) {
-        prepStatus('No visible tracks to analyze', true);
+        prepStatus('Нет видимых треков для анализа', true);
         return;
       }
       batchTrackBusy = true;
@@ -224,7 +224,7 @@
             body: JSON.stringify(payload)
           });
           const saveData = await saveRes.json();
-          if (!saveData?.ok) throw new Error(saveData?.error || 'Save failed');
+          if (!saveData?.ok) throw new Error(saveData?.error || 'Не удалось сохранить');
           item.batch_status = 'saved';
           item.batch_message = replaceExisting ? 'Заменено и сохранено' : 'Сохранено';
         }
