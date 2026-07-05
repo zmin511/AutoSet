@@ -28,3 +28,20 @@ tools/codex_workspace_artifacts/
 install/AutoSet_STABLE_*.zip
 
 backups/
+# Extra local data, media, caches, and generated archives
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.mp3
+*.flac
+*.wav
+*.aiff
+*.aif
+*.m4a
+*.ogg
+.pytest_cache/
+.ruff_cache/
+*_BACKUP_*.zip
+*_AUDIT_*.zip
+*_STABLE_*.zip

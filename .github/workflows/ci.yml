@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Compile Python files
+        run: python -m compileall set_app tools
+
+      - name: Ruff lint (non-blocking while historical warnings are cleaned up)
+        continue-on-error: true
+        run: python -m ruff check set_app tools
+
+      - name: Pytest
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          tests = list(Path('.').glob('test_*.py')) + list(Path('.').glob('*_test.py')) + list(Path('tests').glob('test_*.py')) if Path('tests').exists() else list(Path('.').glob('test_*.py')) + list(Path('.').glob('*_test.py'))
+          if not tests:
+              print('No pytest tests found; skipping pytest run.')
+              raise SystemExit(0)
+          PY
+          python -m pytest
