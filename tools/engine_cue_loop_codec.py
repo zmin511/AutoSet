@@ -545,7 +545,6 @@ def print_quick_cues(cues: QuickCuesBlob | None, duration_sec: float | None) -> 
         if slot.empty:
             print(f"  {slot.slot}: {status} raw={slot.pos_raw} label={slot.label!r} color={slot.color}")
             continue
-        candidates = raw_candidates_for_seconds(0.0)  # placeholder for names/order
         seconds_text = []
         for name, seconds_per_raw, _formula in RAW_SCALE_CANDIDATES:
             seconds = slot.pos_raw * seconds_per_raw

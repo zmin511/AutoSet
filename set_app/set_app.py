@@ -27,8 +27,8 @@ TOOLS_DIR = PROJECT_DIR / "tools"
 BUILDER = TOOLS_DIR / "engine_set_builder.py"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
-from engine_write_tags import write_audio_tags
-from engine_cue_loop_codec import (
+from engine_write_tags import write_audio_tags  # noqa: E402
+from engine_cue_loop_codec import (  # noqa: E402
     build_loops,
     build_quick_cues,
     empty_loops,
@@ -1066,13 +1066,13 @@ def get_track_waveform_detail(track_id):
     } for c in cues_raw]
     loops_raw = _parse_loops(row["loops"], duration_sec)
     loops = [{
-        "start_sec": l["start_s"],
-        "end_sec": l["end_s"],
-        "name": l.get("label") or (f"Loop {l.get('slot')}" if l.get("slot") else "Loop"),
+        "start_sec": loop["start_s"],
+        "end_sec": loop["end_s"],
+        "name": loop.get("label") or (f"Loop {loop.get('slot')}" if loop.get("slot") else "Loop"),
         "type": "loop",
-        "slot": l.get("slot"),
-        "color": _cue_color_hex(l.get("color")),
-    } for l in loops_raw if "start_s" in l and "end_s" in l]
+        "slot": loop.get("slot"),
+        "color": _cue_color_hex(loop.get("color")),
+    } for loop in loops_raw if "start_s" in loop and "end_s" in loop]
 
     source = {
         "waveform": "engine_db" if overview else "not_found",
