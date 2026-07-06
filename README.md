@@ -1,6 +1,6 @@
-# AutoSet
+﻿# AutoSet
 
-Version: `1.5.34` | Changelog: `CHANGELOG.md` | Audit: `2026-06-30`
+Version: `1.5.43` | Changelog: `CHANGELOG.md` | Audit: `2026-06-30`
 
 **AutoSet** is a local portable companion app for **Denon Engine DJ**. It reads the Engine DJ SQLite database, helps build harmonic DJ sets by BPM, Camelot key, style, duration, and energy, visualizes waveform/cue/loop data, creates Engine playlists, and manages DJ genre/tag metadata with optional online style lookup.
 
@@ -12,7 +12,7 @@ Version: `1.5.34` | Changelog: `CHANGELOG.md` | Audit: `2026-06-30`
 
 ### Текущий статус
 
-- Актуальная версия: `1.5.12`.
+- Актуальная версия: `1.5.43`.
 - Основной код: `set_app/` и `tools/`.
 - Основной источник данных: `Engine Library/Database2/m.db`.
 - Последний аудит проекта: `2026-06-17`.
@@ -109,7 +109,7 @@ The core workflow is local. Optional online style lookup can use Discogs, MusicB
 
 ### Current Status
 
-- Current version: `1.5.12`.
+- Current version: `1.5.43`.
 - Main code: `set_app/` and `tools/`.
 - Main data source: `Engine Library/Database2/m.db`.
 - Latest project audit: `2026-06-17`.
@@ -195,3 +195,4 @@ Full English documentation: `README_EN.md`
 - Verify and, if needed, enable backups before bulk tag-write operations.
 - Document backend endpoints.
 - Check Russian README/CHANGELOG encoding when viewed locally in Windows console.
+
