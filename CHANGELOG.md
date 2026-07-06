@@ -5,7 +5,7 @@
 
 ## 1.5.43
 
-- Split player/audio logic into pp-player.js and kept waveform rendering/navigation in pp-waveform.js.
+- Split player/audio logic into app-player.js and kept waveform rendering/navigation in app-waveform.js.
 - Synchronized project version references in documentation.
 - No intended application behavior changes.
 ## 1.5.24
@@ -101,4 +101,5 @@
 - Плеер: скраб по waveform, playhead, компактный UI.
 - Сборка сета: добавлена “энергия” трека из waveform и базовая energy‑кривая при подборе.
 - Camelot: `±N` считается по числам круга в обе стороны; A/B не увеличивает расстояние.
+
 
