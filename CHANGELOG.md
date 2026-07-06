@@ -1,7 +1,13 @@
-# Changelog
+﻿# Changelog
 
 Формат: `MAJOR.MINOR.PATCH`
 
+
+## 1.5.43
+
+- Split player/audio logic into pp-player.js and kept waveform rendering/navigation in pp-waveform.js.
+- Synchronized project version references in documentation.
+- No intended application behavior changes.
 ## 1.5.24
 
 - Fixed the lower workspace frame alignment so the library browser stays visible on the left and the set/style panel stays pinned on the right.
@@ -95,3 +101,4 @@
 - Плеер: скраб по waveform, playhead, компактный UI.
 - Сборка сета: добавлена “энергия” трека из waveform и базовая energy‑кривая при подборе.
 - Camelot: `±N` считается по числам круга в обе стороны; A/B не увеличивает расстояние.
+

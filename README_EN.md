@@ -1,6 +1,6 @@
-# AutoSet
+﻿# AutoSet
 
-Version: `1.5.24`
+Version: `1.5.43`
 
 `AutoSet` is a local portable companion app for **Denon Engine DJ**. It
 helps build a harmonic DJ set from a selected reference track, inspect tracks
@@ -115,3 +115,4 @@ http://127.0.0.1:8765/
 ```
 
 Do not open `set_app/index.html` directly; the local Python server is required.
+
