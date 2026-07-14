@@ -368,7 +368,7 @@
       const payload = {
         id: String(loop?.id || `${type.toLowerCase()}_${Math.round(start * 1000)}_${lengthBeats || 'manual'}`),
         type,
-        name: loop?.name || (type === 'EMERGENCY_LOOP' ? `Аварийная петля ${lengthBeats}` : `Loop ${lengthBeats}`),
+        name: loop?.name || `${type === 'EMERGENCY_LOOP' ? 'EMERGENCY' : 'OUTRO'} LOOP ${lengthBeats}`,
         start_sec: Number(start.toFixed(3)),
         end_sec: Number(end.toFixed(3)),
         raw_start_sec: Number((loop?.raw_start_sec == null ? start : clampTrackTime(loop.raw_start_sec)).toFixed(3)),
@@ -446,8 +446,13 @@
           deleteTrackPrepItem(btn.dataset.prepDelete, btn.dataset.id || '');
           return;
         }
-        const chip = event.target.closest('[data-prep-select="mark"]');
-        if (chip) selectPrepMark(chip.dataset.id || '');
+        const chip = event.target.closest('[data-prep-select]');
+        if (chip?.dataset.prepSelect === 'mark') {
+          selectPrepMark(chip.dataset.id || '');
+          playPrepMark(chip.dataset.id || '');
+        } else if (chip?.dataset.prepSelect === 'loop') {
+          playPrepLoop(chip.dataset.id || '');
+        }
       });
       syncTrackPrepControls();
     }

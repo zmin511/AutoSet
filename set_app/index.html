@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoSet</title>
-  <link rel="stylesheet" href="/static/app.css?v=1.5.43">
+  <link rel="stylesheet" href="/static/app.css?v=1.5.44">
 
 </head>
 <body>
@@ -34,6 +34,7 @@
             <div class="meta" id="waveMeta"></div>
           </div>
           <canvas id="waveCanvas" width="1024" height="84"></canvas>
+          <div class="track-prep-list track-prep-quick-list" id="trackPrepList"></div>
         </div>
         <div class="volume-mini-panel">
           <div class="mini" title="Громкость прослушивания выбранного трека">Vol</div>
@@ -55,31 +56,31 @@
                 <option value="phrase32">32 бита</option>
               </select>
             </label>
-            <label for="trackPrepLoopType" title="Какой тип loop будет создан кнопками Loop 4/8/16/32.">Петля
+            <label for="trackPrepLoopType" title="Какой тип loop будет создан кнопками Loop 4/8/16/32.">Loop
               <select id="trackPrepLoopType">
-                <option value="OUTRO_LOOP">Аутро</option>
-                <option value="EMERGENCY_LOOP">Аварийная</option>
+                <option value="OUTRO_LOOP">OUTRO</option>
+                <option value="EMERGENCY_LOOP">EMERGENCY</option>
               </select>
             </label>
           </div>
           <div class="track-prep-group">
-            <div class="track-prep-group-title">Метки</div>
+            <div class="track-prep-group-title">Marks</div>
             <div class="track-prep-group-buttons">
-              <button type="button" data-prep-mark="MIX_IN" title="Поставить MIX IN в текущую позицию и сделать её точкой входа в микс.">ВХОД</button>
-              <button type="button" data-prep-mark="VOCAL_IN" title="Поставить VOCAL IN в точку, где начинается вокальная часть трека.">ВОКАЛ</button>
-              <button type="button" data-prep-mark="DROP" title="Поставить DROP в момент основного удара или кульминации.">ДРОП</button>
-              <button type="button" data-prep-mark="BREAK" title="Поставить BREAK в участок с заметным спадом энергии или паузой.">БРЕЙК</button>
-              <button type="button" data-prep-mark="MIX_OUT" title="Поставить MIX OUT в точку безопасного выхода из трека.">ВЫХОД</button>
-              <button type="button" data-prep-mark="OUTRO" title="Поставить OUTRO на финальную часть трека перед уходом в конец.">АУТРО</button>
+              <button type="button" data-prep-mark="MIX_IN" title="Поставить MIX IN в текущую позицию и сделать её точкой входа в микс.">IN</button>
+              <button type="button" data-prep-mark="VOCAL_IN" title="Поставить VOCAL IN в точку, где начинается вокальная часть трека.">VOCAL</button>
+              <button type="button" data-prep-mark="DROP" title="Поставить DROP в момент основного удара или кульминации.">DROP</button>
+              <button type="button" data-prep-mark="BREAK" title="Поставить BREAK в участок с заметным спадом энергии или паузой.">BREAK</button>
+              <button type="button" data-prep-mark="MIX_OUT" title="Поставить MIX OUT в точку безопасного выхода из трека.">OUT</button>
+              <button type="button" data-prep-mark="OUTRO" title="Поставить OUTRO на финальную часть трека перед уходом в конец.">OUTRO</button>
             </div>
           </div>
           <div class="track-prep-group">
-            <div class="track-prep-group-title">Петли</div>
+            <div class="track-prep-group-title">Loops</div>
             <div class="track-prep-group-buttons">
-              <button type="button" data-prep-loop="4" title="Создать loop длиной 4 beats от текущей позиции или от выбранной метки.">Петля 4</button>
-              <button type="button" data-prep-loop="8" title="Создать loop длиной 8 beats от текущей позиции или от выбранной метки.">Петля 8</button>
-              <button type="button" data-prep-loop="16" title="Создать loop длиной 16 beats от текущей позиции или от выбранной метки.">Петля 16</button>
-              <button type="button" data-prep-loop="32" title="Создать loop длиной 32 beats от текущей позиции или от выбранной метки.">Петля 32</button>
+              <button type="button" data-prep-loop="4" title="Создать loop длиной 4 beats от текущей позиции или от выбранной метки.">LOOP 4</button>
+              <button type="button" data-prep-loop="8" title="Создать loop длиной 8 beats от текущей позиции или от выбранной метки.">LOOP 8</button>
+              <button type="button" data-prep-loop="16" title="Создать loop длиной 16 beats от текущей позиции или от выбранной метки.">LOOP 16</button>
+              <button type="button" data-prep-loop="32" title="Создать loop длиной 32 beats от текущей позиции или от выбранной метки.">LOOP 32</button>
             </div>
           </div>
           <div class="track-prep-group">
@@ -101,7 +102,6 @@
             </div>
           </div>
           <span class="track-prep-status" id="trackPrepStatus"></span>
-          <div class="track-prep-list" id="trackPrepList"></div>
 
         </div>
       </div>
@@ -237,13 +237,11 @@
         </div>
 
         <div class="build-controls">
-          <div>
-            <button class="primary" id="build" disabled title="Создает set с копированием треков в папку Music/Sets на этом SSD.">Создать сет</button>
+          <div class="build-actions">
+            <button class="primary" id="build" disabled title="Создает плейлист с копированием треков в папку Music/Sets на этом SSD.">Создать плейлист с копированием</button>
+            <button class="primary" id="enginePlaylist" disabled title="Создает плейлист в базе данных Engine ссылками на существующие треки, без копирования файлов.">Создать плейлист в Engine</button>
           </div>
-          <div>
-            <button class="primary" id="enginePlaylist" disabled title="Создает плейлист в базе данных Engine (ссылками на треки, без копирования файлов).">Создать плейлист</button>
-          </div>
-          <div>
+          <div class="build-engine-folder">
             <input id="engineFolder" type="text" value="Event" placeholder="Расположение плейлиста" title="Куда будет создан плейлист в базе Engine: папка (например Event или Event/Sub). Название плейлиста формируется автоматически." aria-label="Расположение плейлиста (папка в Engine)">
           </div>
         </div>
@@ -274,18 +272,18 @@
   </div>
   <datalist id="genreOptionsList"></datalist>
 
-  <script src="/static/app-core.js?v=1.5.43"></script>
-  <script src="/static/app-prep-config.js?v=1.5.43"></script>
-  <script src="/static/app-player.js?v=1.5.43"></script>
-  <script src="/static/app-prep.js?v=1.5.43"></script>
-  <script src="/static/app-prep-suggest.js?v=1.5.43"></script>
-  <script src="/static/app-prep-render.js?v=1.5.43"></script>
-  <script src="/static/app-prep-batch.js?v=1.5.43"></script>
-  <script src="/static/app-prep-manual.js?v=1.5.43"></script>
-  <script src="/static/app-prep-storage.js?v=1.5.43"></script>
-  <script src="/static/app-waveform.js?v=1.5.43"></script>
-  <script src="/static/app-actions.js?v=1.5.43"></script>
-  <script src="/static/app-boot.js?v=1.5.43"></script>
+  <script src="/static/app-core.js?v=1.5.44"></script>
+  <script src="/static/app-prep-config.js?v=1.5.44"></script>
+  <script src="/static/app-player.js?v=1.5.44"></script>
+  <script src="/static/app-prep.js?v=1.5.44"></script>
+  <script src="/static/app-prep-suggest.js?v=1.5.44"></script>
+  <script src="/static/app-prep-render.js?v=1.5.44"></script>
+  <script src="/static/app-prep-batch.js?v=1.5.44"></script>
+  <script src="/static/app-prep-manual.js?v=1.5.44"></script>
+  <script src="/static/app-prep-storage.js?v=1.5.44"></script>
+  <script src="/static/app-waveform.js?v=1.5.44"></script>
+  <script src="/static/app-actions.js?v=1.5.44"></script>
+  <script src="/static/app-boot.js?v=1.5.44"></script>
 
 </body>
 </html>

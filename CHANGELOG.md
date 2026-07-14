@@ -1,7 +1,14 @@
-﻿# Changelog
+# Changelog
 
 Формат: `MAJOR.MINOR.PATCH`
 
+
+## 1.5.44
+
+- Track Prep cards load immediately when a track is opened and are shown in a compact row below the overview waveform.
+- Clicking a cue mark starts playback from that mark; clicking an OUTRO or EMERGENCY loop starts and repeats the loop until Play/CUE exits loop mode.
+- Compact red delete controls and consistent English labels for IN, VOCAL, DROP, BREAK, OUT, OUTRO, and LOOP.
+- Added regression coverage for Engine waveform-energy decoding and set-builder track loading.
 
 ## 1.5.43
 

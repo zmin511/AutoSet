@@ -562,11 +562,12 @@
     .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
     .controls > div { flex: 1 1 180px; min-width: 150px; }
     .buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-    .build-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; align-items: stretch; }
-    .build-controls > div { flex: 1 1 220px; min-width: 200px; }
-    .build-controls button { width: 100%; white-space: nowrap; padding-left: 12px; padding-right: 12px; }
+    .build-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; align-items: stretch; }
+    .build-actions { display: flex; gap: 8px; width: 100%; }
+    .build-actions button { flex: 1 1 0; min-width: 0; height: auto; min-height: 38px; white-space: normal; padding-left: 10px; padding-right: 10px; }
+    .build-engine-folder { width: 100%; }
     .build-controls input { width: 100%; min-width: 0; box-sizing: border-box; }
-    .build-controls button, .build-controls input { height: 38px; min-height: 38px; }
+    .build-controls input { height: 38px; min-height: 38px; }
     .maintenance { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
     .maintenance label { font-size: 12px; }
     .maintenance .buttons { margin-bottom: 0; }
@@ -719,6 +720,23 @@
       color: var(--muted);
       font-size: 11px;
     }
+    .track-prep-quick-list {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      gap: 4px;
+      min-height: 22px;
+      margin-top: 4px;
+      padding-bottom: 2px;
+      scrollbar-width: thin;
+    }
+    .track-prep-quick-list .prep-item {
+      flex: 0 0 auto;
+      min-height: 22px;
+      padding: 2px 4px 2px 6px;
+      gap: 4px;
+      font-size: 10px;
+      white-space: nowrap;
+    }
     .prep-item {
       display: inline-flex;
       align-items: center;
@@ -746,11 +764,19 @@
       border-style: dashed;
     }
     .prep-delete {
-      width: 20px;
-      min-width: 20px;
+      width: 14px;
+      min-width: 14px;
+      height: 14px;
+      min-height: 14px;
+      line-height: 12px;
       padding: 0;
-      color: var(--muted);
+      border: 0;
+      border-radius: 50%;
+      color: #ff8a8a;
+      font-size: 12px;
+      font-weight: 700;
     }
+    .prep-delete:hover { color: #ff8a8a; background: rgba(255,90,90,.16); }
     .track-prep-status {
       color: var(--muted);
       font-size: 11px;
@@ -923,7 +949,7 @@
       }
       .paths { text-align: left; margin-top: 10px; grid-template-columns: auto 1fr; }
       .toolbar { grid-template-columns: 1fr; }
-      .path-config, .controls, .build-controls { flex-direction: column; }
+      .path-config, .controls { flex-direction: column; }
       .crumb-search { grid-template-columns: 1fr; }
       .top-search { width: 100%; min-width: 0; justify-self: end; }
       .top-search .toolbar.compact { grid-template-columns: minmax(0, 1fr) 72px 92px; }

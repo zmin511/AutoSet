@@ -39,7 +39,7 @@
 
     function trackPrepSuggestionConflictMessage(kind, type) {
       if (kind === 'loop') {
-        return `${String(type || '').toUpperCase() === 'EMERGENCY_LOOP' ? 'Аварийная петля' : 'Петля аутро'} уже есть`;
+        return `${String(type || '').toUpperCase() === 'EMERGENCY_LOOP' ? 'EMERGENCY LOOP' : 'OUTRO LOOP'} уже есть`;
       }
       return `${prepMarkLabel(type)} уже есть`;
     }
@@ -121,7 +121,7 @@
       for (const loop of loops) {
         const payload = normalizePrepLoop({
           type: loop.type,
-          name: loop.name || (loop.type === 'EMERGENCY_LOOP' ? 'Аварийная петля' : 'Петля аутро'),
+          name: loop.name || (loop.type === 'EMERGENCY_LOOP' ? 'EMERGENCY LOOP' : 'OUTRO LOOP'),
           start_sec: loop.start_sec,
           end_sec: loop.end_sec,
           raw_start_sec: loop.raw_start_sec,

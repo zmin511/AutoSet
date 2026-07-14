@@ -56,7 +56,7 @@
         return;
       }
       const type = $('trackPrepLoopType')?.value === 'EMERGENCY_LOOP' ? 'EMERGENCY_LOOP' : 'OUTRO_LOOP';
-      const role = type === 'EMERGENCY_LOOP' ? 'Аварийная петля' : 'Loop';
+      const role = type === 'EMERGENCY_LOOP' ? 'EMERGENCY LOOP' : 'OUTRO LOOP';
       const loop = normalizePrepLoop({
         id: `${type.toLowerCase()}_${beats}_${Math.round(start * 1000)}`,
         type,
