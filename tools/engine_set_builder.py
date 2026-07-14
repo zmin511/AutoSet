@@ -5,7 +5,9 @@ import os
 import re
 import shutil
 import sqlite3
+import struct
 import sys
+import zlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
@@ -119,6 +121,28 @@ def open_db(db_path: str) -> sqlite3.Connection:
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     return con
+
+
+def _wave_energy_from_blob(blob) -> Optional[float]:
+    """Return normalized average peak energy from Engine overview waveform data."""
+    if not blob or len(blob) < 22:
+        return None
+    try:
+        raw = zlib.decompress(blob[4:])
+        if len(raw) < 16:
+            return None
+        _header, points, _reserved_a, _reserved_b = struct.unpack(">4I", raw[:16])
+        if not points or points > 8192:
+            return None
+        payload = raw[16:]
+        needed = points * 3
+        if len(payload) < needed:
+            return None
+        peaks = (max(payload[i], payload[i + 1], payload[i + 2]) for i in range(0, needed, 3))
+        average = sum(peaks) / (points * 255.0)
+        return round(max(0.05, min(0.98, average ** 0.85)), 4)
+    except (TypeError, ValueError, IndexError, struct.error, zlib.error):
+        return None
 
 
 def engine_key_to_name(key: Optional[int]) -> str:
@@ -443,7 +467,8 @@ def load_tracks(con: sqlite3.Connection, music_root: Path) -> List[Track]:
         query = """
         SELECT Track.id, Track.filename, Track.length, Track.bitrate,
                Track.bpmAnalyzed, Track.key, Track.genre, Track.artist,
-               Track.title, Track.path
+               Track.title, Track.path,
+               PerformanceData.overviewWaveFormData AS overviewWaveFormData
         FROM Track
         LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
         WHERE isAvailable = 1
@@ -479,6 +504,7 @@ def load_tracks(con: sqlite3.Connection, music_root: Path) -> List[Track]:
             artist=str(r["artist"] or ""),
             title=str(r["title"] or ""),
             path=str(r["path"] or ""),
+            wave_energy=_wave_energy_from_blob(r["overviewWaveFormData"]),
         )
         resolved = resolve_track_path(base, music_root)
         dj_style, dj_family, dj_set_ok = _read_txxx_mp3(resolved)

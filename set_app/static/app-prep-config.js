@@ -1,11 +1,11 @@
 window.AutoSetPrepConfig = {
   PREP_MARKS: [
-      { type: 'MIX_IN', label: 'ВХОД' },
-      { type: 'VOCAL_IN', label: 'ВОКАЛ' },
-      { type: 'DROP', label: 'ДРОП' },
-      { type: 'BREAK', label: 'БРЕЙК' },
-      { type: 'MIX_OUT', label: 'ВЫХОД' },
-      { type: 'OUTRO', label: 'АУТРО' }
+      { type: 'MIX_IN', label: 'IN' },
+      { type: 'VOCAL_IN', label: 'VOCAL' },
+      { type: 'DROP', label: 'DROP' },
+      { type: 'BREAK', label: 'BREAK' },
+      { type: 'MIX_OUT', label: 'OUT' },
+      { type: 'OUTRO', label: 'OUTRO' }
     ],
   PREP_MARK_COLORS: {
       MIX_IN: '#37c58f',

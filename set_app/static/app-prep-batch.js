@@ -42,9 +42,9 @@
         <div class="batch-suggest-row head">
           <div class="batch-suggest-cell"></div>
           <div class="batch-suggest-cell">Трек</div>
-          <div class="batch-suggest-cell">ВХОД</div>
-          <div class="batch-suggest-cell">ВЫХОД</div>
-          <div class="batch-suggest-cell">ПЕТЛЯ АУТРО</div>
+          <div class="batch-suggest-cell">IN</div>
+          <div class="batch-suggest-cell">OUT</div>
+          <div class="batch-suggest-cell">OUTRO LOOP</div>
           <div class="batch-suggest-cell">АВАРИЙНАЯ</div>
           <div class="batch-suggest-cell">Оценка</div>
           <div class="batch-suggest-cell">Замечания</div>
@@ -214,7 +214,7 @@
           const existing = await existingRes.json();
           if (!replaceExisting && existing?.exists) {
             item.batch_status = 'conflict';
-            item.batch_message = 'Метки уже сохранены';
+            item.batch_message = 'Marks already saved';
             continue;
           }
           const payload = batchTrackMetaPayload(item);

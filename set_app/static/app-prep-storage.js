@@ -20,6 +20,7 @@
         };
         if (!selectedPrepMark()) selectedPrepMarkType = '';
         trackPrepDirty = false;
+        renderTrackPrepList();
         if (batchPreviewMode === 'batch' && batchPreviewTrackId === Number(trackId)) {
           applyBatchPreviewToCurrentTrack(trackId);
         }

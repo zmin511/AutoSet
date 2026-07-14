@@ -29,6 +29,8 @@
     let webAudioPlaying = false;
     let webAudioTimer = null;
     let webAudioSeekTimer = null;
+    let activePrepLoop = null;
+    let prepLoopRestarting = false;
 
     function mediaPathForTrack(track) {
       return String(track?.rel || track?.path || '').trim();
@@ -199,6 +201,7 @@
       webAudioTimer = window.setInterval(() => {
         if (!webAudioPlaying) return;
         const cur = currentWebAudioTime();
+        enforcePrepLoop(cur);
         playbackCursorSec = cur;
         playbackCursorPinned = true;
         audioPendingSeekSec = cur;
@@ -711,9 +714,66 @@
       }
     }
 
+    function clearPrepLoop() {
+      activePrepLoop = null;
+      prepLoopRestarting = false;
+    }
+
+    function enforcePrepLoop(timeSec) {
+      const loop = activePrepLoop;
+      const start = Number(loop?.start_sec);
+      const end = Number(loop?.end_sec);
+      if (!loop || !Number.isFinite(start) || !Number.isFinite(end) || !(end > start) || prepLoopRestarting) return;
+      if (Number(timeSec) < end - 0.04) return;
+      prepLoopRestarting = true;
+      const player = $('player');
+      if (webAudioPlaying) {
+        startWebAudioPlayback(mediaPathForTrack(selectedTrack), start)
+          .catch(() => clearPrepLoop())
+          .finally(() => { prepLoopRestarting = false; });
+        return;
+      }
+      try {
+        if (player) player.currentTime = start;
+        audioPendingSeekSec = start;
+        playbackCursorSec = start;
+        playbackCursorPinned = true;
+      } catch {
+        clearPrepLoop();
+      }
+      prepLoopRestarting = false;
+    }
+
+    function playPrepMark(type) {
+      const markType = String(type || '').toUpperCase();
+      const mark = (trackPrep?.marks || []).find(item => String(item?.type || '').toUpperCase() === markType);
+      if (!mark) return false;
+      clearPrepLoop();
+      startSelectedPlayback({ forceTimeSec: Number(mark.time_sec) || 0, cue: true });
+      return true;
+    }
+
+    function playPrepLoop(id) {
+      const loop = (trackPrep?.loops || []).find(item => String(item?.id || '') === String(id || ''));
+      const start = Number(loop?.start_sec);
+      const end = Number(loop?.end_sec);
+      if (!loop || !Number.isFinite(start) || !Number.isFinite(end) || !(end > start)) return false;
+      activePrepLoop = { id: String(loop.id), start_sec: start, end_sec: end };
+      prepLoopRestarting = false;
+      startSelectedPlayback({ forceTimeSec: start, prepLoop: activePrepLoop });
+      return true;
+    }
     async function startSelectedPlayback(options = {}) {
       const player = $('player');
       if (!player || !selectedTrack) return false;
+      if (options.prepLoop) {
+        activePrepLoop = {
+          id: String(options.prepLoop.id || ''),
+          start_sec: Number(options.prepLoop.start_sec),
+          end_sec: Number(options.prepLoop.end_sec)
+        };
+        prepLoopRestarting = false;
+      }
       const mediaPath = mediaPathForTrack(selectedTrack);
       if (!mediaPath) {
         reportPlaybackError('media path is empty');
@@ -856,6 +916,7 @@
         const markSelectedAudioReady = () => markAudioReadyForTrack(audioPreparingTrackId || selectedTrackId(), false);
         player.addEventListener('timeupdate', () => {
           const cur = Number(player.currentTime);
+          enforcePrepLoop(cur);
           const cursor = Number(playbackCursorSec);
           const pending = pendingSeekTime();
           const keepPinned = player.paused && playbackCursorPinned && Number.isFinite(cursor) && Math.abs(cur - cursor) > 0.2 && (pending == null || Math.abs(pending - cursor) < 0.2);
@@ -892,6 +953,7 @@
       if (btn && !btn.__wiredPlayCtl) {
         btn.__wiredPlayCtl = true;
         btn.addEventListener('click', () => {
+          clearPrepLoop();
           if (webAudioPlaying || !player.paused) {
             pauseCurrentPlayback();
             return;
@@ -902,6 +964,7 @@
       if (cueBtn && !cueBtn.__wiredCueCtl) {
         cueBtn.__wiredCueCtl = true;
         cueBtn.addEventListener('click', () => {
+          clearPrepLoop();
           cueSelectedPlayback();
         });
       }
