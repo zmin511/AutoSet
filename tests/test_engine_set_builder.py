@@ -48,3 +48,111 @@ def test_load_tracks_attaches_wave_energy():
     tracks = load_tracks(con, Path("F:/Music"))
     assert len(tracks) == 1
     assert tracks[0].wave_energy is not None
+
+
+def test_transition_adjustment_rewards_safe_transition():
+    from engine_set_builder import (
+        Track,
+        transition_score_adjustment,
+    )
+
+    previous = Track(
+        id=1,
+        filename="a.mp3",
+        length=300,
+        bitrate=320,
+        bpm=128.0,
+        key=0,
+        genre="House",
+        artist="A",
+        title="A",
+        path="a.mp3",
+        wave_energy=0.40,
+    )
+    candidate = Track(
+        id=2,
+        filename="b.mp3",
+        length=300,
+        bitrate=320,
+        bpm=128.2,
+        key=7,
+        genre="House",
+        artist="B",
+        title="B",
+        path="b.mp3",
+        wave_energy=0.42,
+    )
+
+    assert transition_score_adjustment(previous, candidate) == -8.0
+
+
+def test_transition_adjustment_penalizes_genre_conflict():
+    from engine_set_builder import (
+        Track,
+        transition_score_adjustment,
+    )
+
+    previous = Track(
+        id=1,
+        filename="a.mp3",
+        length=300,
+        bitrate=320,
+        bpm=130.0,
+        key=4,
+        genre="RusPop, Rus",
+        artist="A",
+        title="A",
+        path="a.mp3",
+        wave_energy=0.75,
+    )
+    candidate = Track(
+        id=2,
+        filename="b.mp3",
+        length=300,
+        bitrate=320,
+        bpm=130.0,
+        key=9,
+        genre="House",
+        artist="B",
+        title="B",
+        path="b.mp3",
+        wave_energy=0.60,
+    )
+
+    assert transition_score_adjustment(previous, candidate) == 35.0
+
+
+def test_transition_adjustment_rejects_bad_transition():
+    from engine_set_builder import (
+        Track,
+        transition_score_adjustment,
+    )
+
+    previous = Track(
+        id=1,
+        filename="a.mp3",
+        length=300,
+        bitrate=320,
+        bpm=128.0,
+        key=0,
+        genre="House",
+        artist="A",
+        title="A",
+        path="a.mp3",
+        wave_energy=0.40,
+    )
+    candidate = Track(
+        id=2,
+        filename="b.mp3",
+        length=300,
+        bitrate=320,
+        bpm=140.0,
+        key=11,
+        genre="Rock",
+        artist="B",
+        title="B",
+        path="b.mp3",
+        wave_energy=0.90,
+    )
+
+    assert transition_score_adjustment(previous, candidate) is None
