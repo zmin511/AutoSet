@@ -81,7 +81,7 @@ AUDIO_MIME_TYPES = {".mp3": "audio/mpeg", ".flac": "audio/flac", ".m4a": "audio/
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.45"
+APP_VERSION = "1.5.46"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {"startup_refresh": "waiting"}
@@ -3574,6 +3574,108 @@ def startup_refresh_new():
         APP_STATE["startup_refresh"] = f"New auto-refresh error: {exc!r}"
 
 
+
+def get_transition_scores_payload(
+    reference_track_id,
+    candidate_track_ids,
+):
+    tools_dir = Path(__file__).resolve().parents[1] / "tools"
+
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+
+    from analysis_db import (
+        DEFAULT_ANALYSIS_DB_PATH,
+        get_profile_by_track_id,
+        open_analysis_db,
+    )
+    from transition_analysis import transition_score
+
+    reference_id = str(reference_track_id or "").strip()
+    candidate_ids = []
+
+    for value in candidate_track_ids or []:
+        candidate_id = str(value or "").strip()
+
+        if candidate_id and candidate_id not in candidate_ids:
+            candidate_ids.append(candidate_id)
+
+    if not reference_id:
+        return {
+            "ok": False,
+            "error": "reference_track_id is required",
+            "scores": {},
+        }
+
+    db_path = Path(DEFAULT_ANALYSIS_DB_PATH)
+
+    if not db_path.is_file():
+        return {
+            "ok": False,
+            "error": f"analysis.db not found: {db_path}",
+            "scores": {},
+        }
+
+    connection = open_analysis_db(db_path)
+
+    try:
+        reference = get_profile_by_track_id(
+            connection,
+            reference_id,
+        )
+
+        if reference is None:
+            return {
+                "ok": False,
+                "error": f"Reference profile not found: {reference_id}",
+                "scores": {},
+            }
+
+        scores = {}
+
+        for candidate_id in candidate_ids:
+            if candidate_id == reference_id:
+                continue
+
+            candidate = get_profile_by_track_id(
+                connection,
+                candidate_id,
+            )
+
+            if candidate is None:
+                scores[candidate_id] = {
+                    "available": False,
+                    "error": "Profile not found",
+                }
+                continue
+
+            result = transition_score(
+                reference,
+                candidate,
+            )
+
+            scores[candidate_id] = {
+                "available": True,
+                "accepted": bool(result.accepted),
+                "score": float(result.total),
+                "class": str(result.transition_class),
+                "components": {
+                    str(key): float(value)
+                    for key, value in result.components.items()
+                },
+                "reasons": list(result.reasons),
+            }
+
+        return {
+            "ok": True,
+            "reference_track_id": reference_id,
+            "scores": scores,
+        }
+
+    finally:
+        connection.close()
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
@@ -3710,6 +3812,41 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"error": repr(exc)}, status=400)
             return
+        if parsed.path == "/api/transition-scores":
+            qs = parse_qs(parsed.query)
+
+            reference_track_id = qs.get(
+                "reference_track_id",
+                [""],
+            )[0]
+
+            candidate_track_ids = []
+
+            for value in qs.get("candidate_track_ids", []):
+                candidate_track_ids.extend(
+                    part.strip()
+                    for part in str(value).split(",")
+                    if part.strip()
+                )
+
+            try:
+                self.send_json(
+                    get_transition_scores_payload(
+                        reference_track_id,
+                        candidate_track_ids,
+                    )
+                )
+            except Exception as exc:
+                self.send_json(
+                    {
+                        "ok": False,
+                        "error": repr(exc),
+                        "scores": {},
+                    },
+                    status=400,
+                )
+            return
+
         if parsed.path == "/api/performance":
             qs = parse_qs(parsed.query)
             track_id = qs.get("track_id", [""])[0]

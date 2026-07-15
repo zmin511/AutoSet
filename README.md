@@ -1,6 +1,6 @@
 # AutoSet
 
-Version: `1.5.45` | Changelog: `CHANGELOG.md` | Audit: `2026-06-30`
+Version: `1.5.46` | Changelog: `CHANGELOG.md` | Audit: `2026-06-30`
 
 **AutoSet** is a local portable companion app for **Denon Engine DJ**. It reads the Engine DJ SQLite database, helps build harmonic DJ sets by BPM, Camelot key, style, duration, and energy, visualizes waveform/cue/loop data, creates Engine playlists, and manages DJ genre/tag metadata with optional online style lookup.
 
@@ -12,7 +12,7 @@ Version: `1.5.45` | Changelog: `CHANGELOG.md` | Audit: `2026-06-30`
 
 ### Текущий статус
 
-- Актуальная версия: `1.5.45`.
+- Актуальная версия: `1.5.46`.
 - Основной код: `set_app/` и `tools/`.
 - Основной источник данных: `Engine Library/Database2/m.db`.
 - Последний аудит проекта: `2026-06-17`.
@@ -109,7 +109,7 @@ The core workflow is local. Optional online style lookup can use Discogs, MusicB
 
 ### Current Status
 
-- Current version: `1.5.45`.
+- Current version: `1.5.46`.
 - Main code: `set_app/` and `tools/`.
 - Main data source: `Engine Library/Database2/m.db`.
 - Latest project audit: `2026-06-17`.
@@ -210,3 +210,18 @@ AutoSet 1.5.45 добавляет отдельную локальную базу
 - аудита сетов, созданных текущим генератором.
 
 Текущая версия использует BPM, Camelot, waveform energy, жанр и длительность. База Engine DJ и музыкальные файлы не изменяются.
+
+
+## Колонка совместимости переходов
+
+AutoSet 1.5.46 добавляет в каталог колонку `Переход`.
+
+После выбора опорного трека для каждого кандида показываются:
+
+- `SAFE` — безопасный переход;
+- `COMP` — совместимый;
+- `RISK` — экспериментальный;
+- `REJECT` — нежелательный;
+- `ОПОРА` — выбранный исходный трек.
+
+Колонку можно сортировать. При наведении показывается оценка BPM, Camelot, energy и жанра.

@@ -962,3 +962,439 @@
       .title .name { font-size: 14px; }
       .tag-row, .tag-row.detail, .tag-row.replace { grid-template-columns: 1fr; }
     }
+
+/* AutoSet compact wide layout v1.5.45 */
+
+/* ??????????? ???? ?? ????? ???? */
+main {
+  width: calc(100vw - 8px) !important;
+  max-width: none !important;
+  margin: 0 4px !important;
+  padding-top: 6px !important;
+}
+
+/* ??????? ??????????? ?????? ????????? ?????? ????? */
+#trackPrepStatus {
+  display: none !important;
+}
+
+/* ?????????? ???? Track Prep ? ?????? waveform */
+.prep-deck {
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr) !important;
+  gap: 6px !important;
+  margin-bottom: 6px !important;
+}
+
+#trackPrepPanel {
+  padding: 5px !important;
+}
+
+.track-prep {
+  gap: 2px !important;
+}
+
+.track-prep-head {
+  min-height: 24px !important;
+}
+
+.track-prep-group {
+  grid-template-columns: 70px minmax(0, 1fr) !important;
+  gap: 3px !important;
+  padding-top: 2px !important;
+}
+
+.track-prep-group-title {
+  padding-top: 4px !important;
+  font-size: 10px !important;
+}
+
+.track-prep-group-buttons {
+  gap: 3px !important;
+}
+
+.track-prep-actions {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)) !important;
+}
+
+.track-prep button {
+  min-height: 23px !important;
+  padding: 3px 6px !important;
+}
+
+.track-prep select {
+  height: 24px !important;
+  min-height: 24px !important;
+}
+
+#waveZoomPanel {
+  padding: 5px !important;
+}
+
+.wave-detail-tools {
+  margin: 0 0 2px !important;
+}
+
+canvas#waveZoomCanvas {
+  height: 88px !important;
+}
+
+/*
+???????:
+1 checkbox
+2 play
+3 ????????/????
+4 cue/loop
+5 ????
+6 ????????
+7 ???????
+8 key
+9 bpm
+10 ????????????
+*/
+.item {
+  grid-template-columns:
+    24px
+    36px
+    minmax(300px, 1fr)
+    18px
+    112px
+    150px
+    82px
+    58px
+    58px
+    58px !important;
+
+  column-gap: 8px !important;
+  row-gap: 0 !important;
+  padding-left: 9px !important;
+  padding-right: 9px !important;
+}
+
+/* ???????? ? ???? ????? */
+.item > :nth-child(3) {
+  justify-self: stretch !important;
+  text-align: left !important;
+}
+
+/* ??? ?????????????? ??????? ?????? */
+.item > :nth-child(5),
+.item > :nth-child(6),
+.item > :nth-child(7),
+.item > :nth-child(8),
+.item > :nth-child(9),
+.item > :nth-child(10) {
+  justify-self: end !important;
+  text-align: right !important;
+}
+
+/*
+? ????????? ??? ????????? ?????? Play,
+??????? ???????? ??????? ?? ???? ???????:
+1 ?????
+2 ????????
+3 ?????
+4 ????
+5 ????????
+6 ???????
+7 key
+8 bpm
+9 ????????????
+*/
+.item.head > :nth-child(2) {
+  justify-self: stretch !important;
+  text-align: left !important;
+}
+
+.item.head > :nth-child(4),
+.item.head > :nth-child(5),
+.item.head > :nth-child(6),
+.item.head > :nth-child(7),
+.item.head > :nth-child(8),
+.item.head > :nth-child(9) {
+  justify-self: end !important;
+  text-align: right !important;
+}
+
+.item.head .sort-head {
+  width: auto !important;
+  min-width: 0 !important;
+  min-height: 24px !important;
+  padding: 2px 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  white-space: nowrap !important;
+}
+
+.genre-cell {
+  justify-self: end !important;
+  text-align: right !important;
+}
+
+.suggest-cell {
+  justify-self: end !important;
+  justify-content: flex-end !important;
+  text-align: right !important;
+}
+
+.stars {
+  white-space: nowrap !important;
+}
+
+
+/* AutoSet vertical tighten v1.5.46 */
+
+/* ?????????? ?????? ????? ??? ?????? ???????? */
+#trackPrepStatus,
+#trackPrepStatus:empty {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+}
+
+#trackPrepPanel {
+  padding: 4px !important;
+  min-height: 0 !important;
+}
+
+.track-prep {
+  gap: 2px !important;
+  align-content: start !important;
+  min-height: 0 !important;
+}
+
+.track-prep-group {
+  margin-bottom: 0 !important;
+  padding-top: 1px !important;
+}
+
+.track-prep-group-title {
+  padding-top: 2px !important;
+  font-size: 10px !important;
+}
+
+.track-prep-group-buttons {
+  gap: 3px !important;
+}
+
+.track-prep button {
+  min-height: 22px !important;
+  padding: 2px 6px !important;
+}
+
+.track-prep select {
+  min-height: 22px !important;
+  height: 22px !important;
+}
+
+.track-prep > :last-child {
+  margin-bottom: 0 !important;
+}
+
+/* ???? ???????? ?????? ?????? ?????????? ? ???? ????????? */
+#trackPrepMarksList:empty,
+#trackPrepMarks:empty,
+#trackPrepCards:empty,
+#trackPrepExtra:empty {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+}
+
+/* ????????? ?????? ?????? waveform */
+#waveZoomPanel {
+  padding: 4px !important;
+  min-height: 0 !important;
+}
+
+.wave-detail-tools {
+  margin: 0 0 2px !important;
+  min-height: 22px !important;
+}
+
+canvas#waveZoomCanvas {
+  height: 74px !important;
+  min-height: 74px !important;
+  max-height: 74px !important;
+}
+
+/* ??? ?????? ? ??????? prep-????? ? ??????? ????? */
+.prep-deck {
+  align-items: start !important;
+  gap: 6px !important;
+}
+
+.prep-deck > * {
+  align-self: start !important;
+}
+
+
+
+/* AutoSet transition score column v3 */
+
+/*
+1 checkbox
+2 play
+3 title/path
+4 marks
+5 transition
+6 genre
+7 substyles
+8 energy
+9 key
+10 bpm
+11 duration
+*/
+.item {
+  grid-template-columns:
+    24px
+    36px
+    minmax(260px, 1fr)
+    18px
+    92px
+    100px
+    126px
+    78px
+    54px
+    54px
+    54px !important;
+}
+
+.item > *,
+.item.head > * {
+  min-width: 0;
+}
+
+.item > :nth-child(3),
+.item.head > :nth-child(3) {
+  justify-self: stretch !important;
+  text-align: left !important;
+}
+
+.item > :nth-child(n+5),
+.item.head > :nth-child(n+5) {
+  justify-self: end !important;
+  text-align: right !important;
+}
+
+.transition-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.transition-badge,
+.transition-reference {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 76px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid #3d4852;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.transition-label {
+  font-weight: 800;
+}
+
+.transition-score {
+  font-variant-numeric: tabular-nums;
+}
+
+.transition-safe {
+  color: #58e4ae;
+  border-color: #238a68;
+  background: rgba(35, 138, 104, .16);
+}
+
+.transition-compatible {
+  color: #88cafc;
+  border-color: #347dad;
+  background: rgba(52, 125, 173, .16);
+}
+
+.transition-risky {
+  color: #ffc66d;
+  border-color: #b37b26;
+  background: rgba(179, 123, 38, .16);
+}
+
+.transition-rejected {
+  color: #ff8585;
+  border-color: #a83c3c;
+  background: rgba(168, 60, 60, .16);
+}
+
+.transition-reference {
+  min-width: 64px;
+  color: #aab3ba;
+  border-color: #46515a;
+  background: rgba(70, 81, 90, .14);
+}
+
+.transition-empty {
+  color: #65727d;
+}
+
+.transition-head {
+  color: #a9d9ff !important;
+}
+
+.transition-head.active {
+  color: #ffffff !important;
+}
+
+
+
+/* AutoSet centered 95 percent layout */
+html,
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+main {
+  width: 95vw !important;
+  max-width: 95vw !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  box-sizing: border-box !important;
+}
+
+main *,
+main *::before,
+main *::after {
+  box-sizing: border-box;
+}
+
+.prep-deck,
+.library-workspace,
+.library-frame,
+.set-frame {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.item {
+  width: 100%;
+  max-width: 100%;
+}

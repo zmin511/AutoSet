@@ -1,6 +1,6 @@
 # AutoSet
 
-Version: `1.5.45`
+Version: `1.5.46`
 
 `AutoSet` is a local portable companion app for **Denon Engine DJ**. It
 helps build a harmonic DJ set from a selected reference track, inspect tracks
@@ -130,3 +130,20 @@ It stores calculated track profiles and is used for:
 
 The current version uses BPM, Camelot key, waveform energy, genre, and duration.
 The Engine DJ database and audio files remain read-only.
+
+
+## Transition Compatibility Column
+
+AutoSet 1.5.46 adds a `Transition` column to the music library.
+
+After selecting a reference track, every candidate is classified as:
+
+- `SAFE` ? safe transition;
+- `COMP` ? compatible transition;
+- `RISK` ? experimental transition;
+- `REJECT` ? unsuitable transition;
+- `REFERENCE` ? currently selected source track.
+
+The column can be sorted. Hover details show BPM, Camelot, waveform-energy,
+and genre compatibility. Scores are read from the separate local
+`data/analysis.db`; the Engine DJ database and audio files remain unchanged.

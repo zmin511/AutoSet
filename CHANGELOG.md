@@ -2,6 +2,19 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.46
+
+- Added a sortable Transition column to the music-library table.
+- Added SAFE, COMP, RISK, REJECT, and reference-track badges.
+- Added detailed transition tooltips for BPM, Camelot key, waveform energy, and genre compatibility.
+- Added a read-only transition-score HTTP endpoint backed by the local AutoSet analysis database.
+- Centered the application at 95% viewport width with balanced side margins.
+- Compacted Track Prep and the detailed waveform area.
+- Fixed alignment of library headers and row values.
+- Fixed Russian labels introduced by the transition-column interface.
+- Engine DJ database and audio files remain unchanged.
+
+
 ## 1.5.45
 
 - Added local track analysis profiles stored in a separate AutoSet `analysis.db`.

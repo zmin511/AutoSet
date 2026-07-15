@@ -254,6 +254,191 @@
       return `<span class="stars ${stateClass}" title="${esc(title)}">${text}</span>`;
     }
 
+
+    const transitionScores = new Map();
+    let transitionScoresRequestToken = 0;
+
+    function transitionForTrack(track) {
+      if (!track?.id || !selectedTrack?.id) return null;
+
+      if (Number(track.id) === Number(selectedTrack.id)) {
+        return null;
+      }
+
+      return transitionScores.get(String(track.id)) || null;
+    }
+
+    function transitionClassLabel(value) {
+      const key = String(value || '').toLowerCase();
+
+      if (key === 'safe') return 'SAFE';
+      if (key === 'compatible') return 'COMP';
+      if (key === 'risky') return 'RISK';
+      if (key === 'rejected') return 'REJECT';
+
+      return '?';
+    }
+
+    function transitionPercent(value) {
+      const score = Number(value);
+
+      if (!Number.isFinite(score)) return '';
+
+      return `${Math.round(score * 100)}%`;
+    }
+
+    function transitionTooltip(track) {
+      if (!selectedTrack?.id) {
+        return '\u0421\u043d\u0430\u0447\u0430\u043b\u0430 '
+          + '\u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 '
+          + '\u043e\u043f\u043e\u0440\u043d\u044b\u0439 '
+          + '\u0442\u0440\u0435\u043a';
+      }
+
+      if (Number(track?.id) === Number(selectedTrack.id)) {
+        return '\u041e\u043f\u043e\u0440\u043d\u044b\u0439 '
+          + '\u0442\u0440\u0435\u043a';
+      }
+
+      const result = transitionForTrack(track);
+
+      if (!result?.available) {
+        return result?.error
+          || '\u041f\u0440\u043e\u0444\u0438\u043b\u044c '
+          + '\u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 '
+          + '\u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442';
+      }
+
+      const components = result.components || {};
+
+      const lines = [
+        `\u041f\u0435\u0440\u0435\u0445\u043e\u0434 \u043e\u0442: ${selectedTrack.label || selectedTrack.filename || selectedTrack.id}`,
+        `\u041a \u0442\u0440\u0435\u043a\u0443: ${track.label || track.filename || track.id}`,
+        '',
+        `\u041a\u043b\u0430\u0441\u0441: ${transitionClassLabel(result.class)}`,
+        `\u0418\u0442\u043e\u0433: ${transitionPercent(result.score)}`,
+      ];
+
+      const labels = {
+        bpm: 'BPM',
+        camelot: 'Camelot',
+        energy: 'Energy',
+        genre: 'Genre',
+      };
+
+      Object.entries(labels).forEach(([key, label]) => {
+        const value = Number(components[key]);
+
+        if (Number.isFinite(value)) {
+          lines.push(`${label}: ${Math.round(value * 100)}%`);
+        }
+      });
+
+      return lines.join('\n');
+    }
+
+    function transitionCellMarkup(track) {
+      if (!selectedTrack?.id) {
+        return '<span class="transition-empty">\u2014</span>';
+      }
+
+      if (Number(track?.id) === Number(selectedTrack.id)) {
+        return '<span class="transition-reference">'
+          + '\u041e\u041f\u041e\u0420\u0410'
+          + '</span>';
+      }
+
+      const result = transitionForTrack(track);
+
+      if (!result?.available) {
+        return '<span class="transition-empty">\u2014</span>';
+      }
+
+      const className = String(
+        result.class || 'rejected'
+      ).toLowerCase();
+
+      return `
+        <span class="transition-badge transition-${esc(className)}">
+          <span class="transition-label">
+            ${esc(transitionClassLabel(className))}
+          </span>
+          <span class="transition-score">
+            ${esc(transitionPercent(result.score))}
+          </span>
+        </span>
+      `;
+    }
+
+    async function loadTransitionScoresForTracks(tracks) {
+      const referenceId = Number(selectedTrack?.id || 0);
+
+      transitionScores.clear();
+
+      if (!referenceId) {
+        return;
+      }
+
+      const candidateIds = (tracks || [])
+        .map(track => Number(track?.id || 0))
+        .filter(id => id && id !== referenceId);
+
+      if (!candidateIds.length) {
+        return;
+      }
+
+      const token = ++transitionScoresRequestToken;
+      const params = new URLSearchParams();
+
+      params.set(
+        'reference_track_id',
+        String(referenceId)
+      );
+
+      params.set(
+        'candidate_track_ids',
+        candidateIds.join(',')
+      );
+
+      try {
+        const response = await fetch(
+          `/api/transition-scores?${params.toString()}`
+        );
+
+        const data = await response.json();
+
+        if (
+          token !== transitionScoresRequestToken
+          || Number(selectedTrack?.id || 0) !== referenceId
+        ) {
+          return;
+        }
+
+        if (!data.ok) {
+          console.warn(
+            'Transition scores unavailable:',
+            data.error || data
+          );
+          return;
+        }
+
+        Object.entries(data.scores || {}).forEach(
+          ([trackId, result]) => {
+            transitionScores.set(
+              String(trackId),
+              result
+            );
+          }
+        );
+
+      } catch (error) {
+        console.warn(
+          'Transition score request failed:',
+          error
+        );
+      }
+    }
+
     function trackRow(track) {
       const btn = document.createElement('div');
       btn.tabIndex = 0;
@@ -278,6 +463,12 @@ ${suggestion.reason || ''}`
         <button class="play ${playingPath === (track.rel || track.path) ? 'active' : ''}" type="button" title="Воспроизвести этот трек" aria-label="Воспроизвести этот трек"></button>
         <div class="title"><span class="name">${esc(track.label || track.filename)}</span><span class="sub">${esc(track.path || track.rel || '')}</span></div>
         <div class="marks">${marks}</div>
+        <div
+          class="cell transition-cell"
+          title="${esc(transitionTooltip(track))}"
+        >
+          ${transitionCellMarkup(track)}
+        </div>
         <div class="cell genre-cell">${esc(track.genre || '')}</div>
         <div class="cell suggest-cell ${suggestion ? '' : 'empty'}" title="${esc(suggestionTitle)}">
           ${suggestion ? `
@@ -319,53 +510,134 @@ ${suggestion.reason || ''}`
     function renderHeader(box) {
       const head = document.createElement('div');
       head.className = 'item head';
+
       head.innerHTML = `
         <div></div>
-        <div>Название / путь</div>
         <div></div>
-        <button class="sort-head ${sortState.key === 'genre' ? 'active' : ''}" data-sort="genre">Жанр ${sortState.key === 'genre' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
-        <div>Подстили</div>
-        <button class="sort-head ${sortState.key === 'energy' ? 'active' : ''}" data-sort="energy">Энергия ${sortState.key === 'energy' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
-        <button class="sort-head ${sortState.key === 'camelot' ? 'active' : ''}" data-sort="camelot">Key ${sortState.key === 'camelot' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
-        <button class="sort-head ${sortState.key === 'bpm' ? 'active' : ''}" data-sort="bpm">BPM ${sortState.key === 'bpm' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
-        <button class="sort-head ${sortState.key === 'length' ? 'active' : ''}" data-sort="length">Длит. ${sortState.key === 'length' ? (sortState.dir === 'asc' ? '↑' : '↓') : ''}</button>
+        <div>\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 / \u043f\u0443\u0442\u044c</div>
+        <div></div>
+
+        <button
+          class="sort-head transition-head ${sortState.key === 'transition' ? 'active' : ''}"
+          data-sort="transition"
+        >
+          \u041f\u0435\u0440\u0435\u0445\u043e\u0434 ${sortState.key === 'transition' ? (sortState.dir === 'asc' ? '\u2191' : '\u2193') : ''}
+        </button>
+
+        <button
+          class="sort-head ${sortState.key === 'genre' ? 'active' : ''}"
+          data-sort="genre"
+        >
+          \u0416\u0430\u043d\u0440 ${sortState.key === 'genre' ? (sortState.dir === 'asc' ? '\u2191' : '\u2193') : ''}
+        </button>
+
+        <div>\u041f\u043e\u0434\u0441\u0442\u0438\u043b\u0438</div>
+
+        <button
+          class="sort-head ${sortState.key === 'energy' ? 'active' : ''}"
+          data-sort="energy"
+        >
+          \u042d\u043d\u0435\u0440\u0433\u0438\u044f ${sortState.key === 'energy' ? (sortState.dir === 'asc' ? '\u2191' : '\u2193') : ''}
+        </button>
+
+        <button
+          class="sort-head ${sortState.key === 'camelot' ? 'active' : ''}"
+          data-sort="camelot"
+        >
+          Key ${sortState.key === 'camelot' ? (sortState.dir === 'asc' ? '\u2191' : '\u2193') : ''}
+        </button>
+
+        <button
+          class="sort-head ${sortState.key === 'bpm' ? 'active' : ''}"
+          data-sort="bpm"
+        >
+          BPM ${sortState.key === 'bpm' ? (sortState.dir === 'asc' ? '\u2191' : '\u2193') : ''}
+        </button>
+
+        <button
+          class="sort-head ${sortState.key === 'length' ? 'active' : ''}"
+          data-sort="length"
+        >
+          \u0414\u043b\u0438\u0442. ${sortState.key === 'length' ? (sortState.dir === 'asc' ? '\u2191' : '\u2193') : ''}
+        </button>
       `;
-      head.querySelectorAll('[data-sort]').forEach(btn => {
-        btn.onclick = (event) => {
+
+      head.querySelectorAll('[data-sort]').forEach(button => {
+        button.onclick = event => {
           event.stopPropagation();
-          setSort(btn.dataset.sort);
+          setSort(button.dataset.sort);
         };
       });
+
       box.appendChild(head);
     }
 
     function sortedTracks(tracks) {
       const out = [...tracks];
+
       if (!sortState.key) return out;
+
       const dir = sortState.dir === 'asc' ? 1 : -1;
+
       out.sort((a, b) => {
         let av;
         let bv;
+
         if (sortState.key === 'bpm') {
           av = Number(a.bpm || 0);
           bv = Number(b.bpm || 0);
+
         } else if (sortState.key === 'length') {
           av = Number(a.length || 0);
           bv = Number(b.length || 0);
+
         } else if (sortState.key === 'camelot') {
           av = camelotSortValue(a.camelot);
           bv = camelotSortValue(b.camelot);
+
         } else if (sortState.key === 'energy') {
           av = Number(a.energy_rating || a.rating || 0);
           bv = Number(b.energy_rating || b.rating || 0);
+
+        } else if (sortState.key === 'transition') {
+          const aTransition = transitionForTrack(a);
+          const bTransition = transitionForTrack(b);
+
+          const priority = {
+            safe: 4,
+            compatible: 3,
+            risky: 2,
+            rejected: 1,
+          };
+
+          av = aTransition?.available
+            ? (
+                (priority[String(aTransition.class || '')] || 0) * 10
+                + Number(aTransition.score || 0)
+              )
+            : -1;
+
+          bv = bTransition?.available
+            ? (
+                (priority[String(bTransition.class || '')] || 0) * 10
+                + Number(bTransition.score || 0)
+              )
+            : -1;
+
         } else {
           av = String(a.genre || '').toLowerCase();
           bv = String(b.genre || '').toLowerCase();
         }
+
         if (av < bv) return -1 * dir;
         if (av > bv) return 1 * dir;
-        return String(a.label || '').localeCompare(String(b.label || ''), 'ru');
+
+        return String(a.label || '').localeCompare(
+          String(b.label || ''),
+          'ru'
+        );
       });
+
       return out;
     }
 
@@ -560,39 +832,84 @@ ${suggestion.reason || ''}`
     async function browse(rel = currentPath) {
       currentPath = rel || '';
       $('search').value = '';
+
       styleSuggestions.clear();
       selectedStyleFiles.clear();
+
       $('status').className = 'status';
-      $('status').textContent = 'Открываю папку...';
-      const res = await fetch(`/api/browse?path=${encodeURIComponent(currentPath)}`);
-      const data = await res.json();
+      $('status').textContent =
+        '\u041e\u0442\u043a\u0440\u044b\u0432\u0430\u044e '
+        + '\u043f\u0430\u043f\u043a\u0443...';
+
+      const response = await fetch(
+        `/api/browse?path=${encodeURIComponent(currentPath)}`
+      );
+
+      const data = await response.json();
+
       if (data.error) {
         $('status').className = 'status bad';
         $('status').textContent = data.error;
         return;
       }
+
       currentPath = data.rel || '';
       currentRows = data;
+
       renderRows();
-      $('status').textContent = `Папок: ${data.dirs.length}, треков: ${data.tracks.length}`;
+
+      await loadTransitionScoresForTracks(
+        data.tracks || []
+      );
+
+      renderRows();
+
+      $('status').textContent =
+        `\u041f\u0430\u043f\u043e\u043a: ${data.dirs.length}, `
+        + `\u0442\u0440\u0435\u043a\u043e\u0432: ${data.tracks.length}`;
     }
 
     async function search() {
-      const q = $('search').value.trim();
-      if (!q) {
+      const query = $('search').value.trim();
+
+      if (!query) {
         browse(currentPath);
         return;
       }
+
       styleSuggestions.clear();
       selectedStyleFiles.clear();
+
       $('status').className = 'status';
-      $('status').textContent = 'Поиск...';
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=${$('limit').value}`);
-      const data = await res.json();
-      $('crumbs').innerHTML = `<span>Поиск: ${esc(q)}</span>`;
-      currentRows = { rel: '', parent: '', dirs: [], tracks: data.tracks || [] };
+      $('status').textContent =
+        '\u041f\u043e\u0438\u0441\u043a...';
+
+      const response = await fetch(
+        `/api/search?q=${encodeURIComponent(query)}&limit=${$('limit').value}`
+      );
+
+      const data = await response.json();
+
+      $('crumbs').innerHTML =
+        `<span>\u041f\u043e\u0438\u0441\u043a: ${esc(query)}</span>`;
+
+      currentRows = {
+        rel: '',
+        parent: '',
+        dirs: [],
+        tracks: data.tracks || [],
+      };
+
       renderRows();
-      $('status').textContent = `Найдено: ${data.tracks.length}`;
+
+      await loadTransitionScoresForTracks(
+        data.tracks || []
+      );
+
+      renderRows();
+
+      $('status').textContent =
+        `\u041d\u0430\u0439\u0434\u0435\u043d\u043e: ${data.tracks.length}`;
     }
 
     function selectTrack(track) {
@@ -627,4 +944,3 @@ ${suggestion.reason || ''}`
       loadWaveform(track.id);
       if ($('search').value.trim()) search(); else browse(currentPath);
     }
-
