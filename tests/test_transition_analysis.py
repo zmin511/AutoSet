@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from pathlib import Path
 
 
@@ -150,3 +150,77 @@ def test_candidates_respect_min_score_and_limit():
 
     assert len(results) == 3
     assert all(item["total"] >= 0.80 for item in results)
+
+
+def test_genre_conflict_is_classified_as_risky():
+    previous = _profile(
+        "1",
+        path="ruspop.mp3",
+        bpm=130.0,
+        camelot="5B",
+        energy=0.78,
+        genre="RusPop, Rus",
+    )
+    candidate = _profile(
+        "2",
+        path="house.mp3",
+        bpm=130.0,
+        camelot="4A",
+        energy=0.58,
+        genre="House",
+    )
+
+    result = transition_score(previous, candidate)
+
+    assert result.accepted is True
+    assert result.transition_class == "risky"
+
+
+def test_risky_candidates_are_hidden_by_default():
+    previous = _profile(
+        "1",
+        path="ruspop.mp3",
+        bpm=130.0,
+        camelot="5B",
+        energy=0.78,
+        genre="RusPop, Rus",
+    )
+    risky = _profile(
+        "2",
+        path="phonk.mp3",
+        bpm=130.0,
+        camelot="4A",
+        energy=0.52,
+        genre="Phonk",
+    )
+
+    default_results = find_transition_candidates(
+        previous,
+        [risky],
+    )
+    risky_results = find_transition_candidates(
+        previous,
+        [risky],
+        include_risky=True,
+    )
+
+    assert default_results == []
+    assert len(risky_results) == 1
+    assert risky_results[0]["transition_class"] == "risky"
+
+
+def test_strong_transition_is_classified_as_safe():
+    previous = _profile("1", path="a.mp3")
+    candidate = _profile(
+        "2",
+        path="b.mp3",
+        bpm=128.2,
+        camelot="4B",
+        energy=0.36,
+        genre="House",
+    )
+
+    result = transition_score(previous, candidate)
+
+    assert result.accepted is True
+    assert result.transition_class == "safe"

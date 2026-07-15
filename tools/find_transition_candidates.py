@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import sys
@@ -50,6 +50,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Minimum accepted transition score.",
+    )
+    parser.add_argument(
+        "--include-risky",
+        action="store_true",
+        help="Include experimental transitions with genre or feature conflicts.",
     )
 
     return parser.parse_args()
@@ -103,6 +108,7 @@ def main() -> int:
         candidates,
         limit=max(0, args.limit),
         min_score=max(0.0, min(1.0, args.min_score)),
+        include_risky=args.include_risky,
     )
 
     print("AutoSet Transition Candidates")
@@ -131,6 +137,7 @@ def main() -> int:
         print(
             f"{position:02d}. "
             f"{result['total'] * 100:5.1f}% | "
+            f"{result['transition_class'].upper():10s} | "
             f"ID {profile.track_id} | "
             f"{Path(profile.file_path).name}"
         )
