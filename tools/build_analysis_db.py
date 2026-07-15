@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import sqlite3
@@ -14,6 +14,8 @@ if str(TOOLS_DIR) not in sys.path:
 
 from analysis_db import (  # noqa: E402
     DEFAULT_ANALYSIS_DB_PATH,
+    delete_profile_by_path,
+    list_profiles,
     open_analysis_db,
     profile_needs_analysis,
     upsert_profile,
@@ -39,6 +41,7 @@ class BuildStats:
     analyzed: int = 0
     skipped: int = 0
     missing_files: int = 0
+    pruned: int = 0
     errors: int = 0
 
 
@@ -88,6 +91,7 @@ def build_analysis_database(
     limit: Optional[int] = None,
     force: bool = False,
     dry_run: bool = False,
+    prune: bool = False,
 ) -> BuildStats:
     stats = BuildStats()
 
@@ -102,6 +106,19 @@ def build_analysis_database(
             tracks = tracks[:max(0, int(limit))]
 
         stats.total = len(tracks)
+
+        current_file_paths = set()
+
+        for track in tracks:
+            resolved_path = resolve_track_path(
+                track,
+                music_root,
+            )
+
+            if resolved_path is not None:
+                current_file_paths.add(
+                    str(resolved_path)
+                )
 
         if not dry_run:
             analysis_connection = open_analysis_db(analysis_db_path)
@@ -141,6 +158,27 @@ def build_analysis_database(
                     f"ERROR track_id={getattr(track, 'id', '?')}: {exc}",
                     file=sys.stderr,
                 )
+
+        if (
+            prune
+            and not dry_run
+            and analysis_connection is not None
+            and limit is None
+        ):
+            for existing_profile in list_profiles(
+                analysis_connection
+            ):
+                if (
+                    existing_profile.file_path
+                    not in current_file_paths
+                ):
+                    deleted = delete_profile_by_path(
+                        analysis_connection,
+                        existing_profile.file_path,
+                    )
+
+                    if deleted:
+                        stats.pruned += 1
 
     finally:
         if engine_connection is not None:
@@ -189,6 +227,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Read tracks and build profiles without writing analysis.db.",
     )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help=(
+            "Delete profiles for tracks no longer present "
+            "in the Engine DJ library. Ignored with --limit."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -206,6 +252,7 @@ def main() -> int:
     print(f"Analysis DB:     {analysis_db_path}")
     print(f"Dry run:         {args.dry_run}")
     print(f"Force:           {args.force}")
+    print(f"Prune:           {args.prune}")
     print(f"Limit:           {args.limit if args.limit is not None else 'all'}")
 
     if not engine_db_path.is_file():
@@ -228,6 +275,7 @@ def main() -> int:
         limit=args.limit,
         force=args.force,
         dry_run=args.dry_run,
+        prune=args.prune,
     )
 
     print()
@@ -236,6 +284,7 @@ def main() -> int:
     print(f"Analyzed:        {stats.analyzed}")
     print(f"Skipped:         {stats.skipped}")
     print(f"Missing files:   {stats.missing_files}")
+    print(f"Pruned:        {stats.pruned}")
     print(f"Errors:          {stats.errors}")
 
     return 1 if stats.errors else 0
