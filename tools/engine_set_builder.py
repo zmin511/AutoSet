@@ -13,6 +13,14 @@ from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Sequence, Tuple
 
+from track_analysis import TrackProfile
+from transition_analysis import (
+    TRANSITION_REJECTED,
+    TRANSITION_RISKY,
+    TRANSITION_SAFE,
+    transition_score as profile_transition_score,
+)
+
 try:
     from engine_config import PATHS
 except Exception:
@@ -348,6 +356,42 @@ def energy_score(track: Track) -> float:
     return max(0.05, min(0.98, base))
 
 
+def _track_to_transition_profile(track: Track) -> TrackProfile:
+    return TrackProfile(
+        track_id=str(track.id),
+        file_path=str(track.path or track.filename or ""),
+        duration_seconds=float(track.length),
+        bpm=track.bpm,
+        camelot_key=engine_key_to_camelot(track.key),
+        genre=track.genre,
+        energy_mean=energy_score(track),
+    )
+
+
+def transition_score_adjustment(
+    previous: Track,
+    candidate: Track,
+) -> Optional[float]:
+    result = profile_transition_score(
+        _track_to_transition_profile(previous),
+        _track_to_transition_profile(candidate),
+    )
+
+    if (
+        not result.accepted
+        or result.transition_class == TRANSITION_REJECTED
+    ):
+        return None
+
+    if result.transition_class == TRANSITION_SAFE:
+        return -8.0
+
+    if result.transition_class == TRANSITION_RISKY:
+        return 35.0
+
+    return 0.0
+
+
 def transition_score(previous: Optional[Track], candidate: Track) -> Tuple[float, str]:
     if previous is None:
         return 1.0, "opening track"
@@ -583,6 +627,14 @@ def score_candidate(
         if bpm_delta > MAX_ADJACENT_BPM_STEP:
             return 1e9
         score += bpm_delta * 10.0
+
+        transition_adjustment = transition_score_adjustment(
+            previous,
+            candidate,
+        )
+        if transition_adjustment is None:
+            return 1e9
+        score += transition_adjustment
     else:
         score += camelot_score(reference.key, candidate.key, max_key_step) * 10.0
 

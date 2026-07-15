@@ -2,6 +2,17 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.45
+
+- Added local track analysis profiles stored in a separate AutoSet `analysis.db`.
+- Added similarity scoring based on BPM, Camelot key, waveform energy, genre, and duration.
+- Added DJ transition scoring with SAFE, COMPATIBLE, RISKY, and REJECTED classes.
+- Added CLI tools for building the analysis database, finding similar tracks, finding transition candidates, and auditing generated sets.
+- Integrated transition scoring into the existing set builder as a soft ranking adjustment.
+- Added automated tests for profiles, SQLite caching, similarity, transition scoring, importer behavior, and set-builder integration.
+- Engine DJ database and audio files remain read-only.
+
+
 
 ## 1.5.44
 
@@ -108,5 +119,3 @@
 - Плеер: скраб по waveform, playhead, компактный UI.
 - Сборка сета: добавлена “энергия” трека из waveform и базовая energy‑кривая при подборе.
 - Camelot: `±N` считается по числам круга в обе стороны; A/B не увеличивает расстояние.
-
-

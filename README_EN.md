@@ -1,6 +1,6 @@
 # AutoSet
 
-Version: `1.5.44`
+Version: `1.5.45`
 
 `AutoSet` is a local portable companion app for **Denon Engine DJ**. It
 helps build a harmonic DJ set from a selected reference track, inspect tracks
@@ -116,3 +116,17 @@ http://127.0.0.1:8765/
 
 Do not open `set_app/index.html` directly; the local Python server is required.
 
+
+## Track Analysis and Transition Scoring
+
+AutoSet 1.5.45 adds a separate local `data/analysis.db`.
+
+It stores calculated track profiles and is used for:
+
+- similar-track search;
+- next-track DJ transition scoring;
+- SAFE, COMPATIBLE, RISKY, and REJECTED transition classes;
+- auditing sets produced by the existing generator.
+
+The current version uses BPM, Camelot key, waveform energy, genre, and duration.
+The Engine DJ database and audio files remain read-only.
