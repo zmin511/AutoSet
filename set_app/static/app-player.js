@@ -77,12 +77,62 @@
     }
 
     function currentWebAudioTime() {
-      if (!webAudioPlaying || !webAudioCtx) return Number(webAudioOffsetSec || 0);
-      const elapsed = Math.max(0, webAudioCtx.currentTime - webAudioStartedAt);
-      const duration = playbackDuration() || Number(webAudioBuffer?.duration || 0) || 0;
-      const cur = Number(webAudioOffsetSec || 0) + elapsed;
-      return duration > 0 ? Math.min(duration, cur) : cur;
+      if (
+        !webAudioPlaying
+        || !webAudioCtx
+      ) {
+        return Number(
+          webAudioOffsetSec || 0
+        );
+      }
+
+      const elapsed = Math.max(
+        0,
+        webAudioCtx.currentTime
+          - webAudioStartedAt
+      );
+
+      const rawTime =
+        Number(webAudioOffsetSec || 0)
+        + elapsed;
+
+      const loopStart =
+        Number(activePrepLoop?.start_sec);
+
+      const loopEnd =
+        Number(activePrepLoop?.end_sec);
+
+      const loopLength =
+        loopEnd - loopStart;
+
+      if (
+        webAudioSource?.loop
+        && Number.isFinite(loopStart)
+        && Number.isFinite(loopEnd)
+        && loopLength > 0
+        && rawTime >= loopStart
+      ) {
+        return (
+          loopStart
+          + (
+            (rawTime - loopStart)
+            % loopLength
+          )
+        );
+      }
+
+      const duration =
+        playbackDuration()
+        || Number(
+          webAudioBuffer?.duration || 0
+        )
+        || 0;
+
+      return duration > 0
+        ? Math.min(duration, rawTime)
+        : rawTime;
     }
+
 
     function scheduleWebAudioSeekTo(timeSec) {
       if (!webAudioPlaying || !webAudioPath) return;
@@ -172,47 +222,131 @@
       return decoded;
     }
 
-    async function startWebAudioPlayback(mediaPath, targetSec = 0) {
+    async function startWebAudioPlayback(
+      mediaPath,
+      targetSec = 0
+    ) {
       const ctx = ensureWebAudioContext();
-      if (ctx.state === 'suspended') await ctx.resume();
-      const buffer = await loadWebAudioBuffer(mediaPath);
+
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+
+      const buffer =
+        await loadWebAudioBuffer(mediaPath);
+
       stopWebAudioPlayback(false);
-      const duration = Number(buffer.duration || playbackDuration() || 0) || 0;
-      const offset = Math.max(0, Math.min(duration ? Math.max(0, duration - 0.05) : 0, Number(targetSec) || 0));
-      const source = ctx.createBufferSource();
+
+      const duration =
+        Number(
+          buffer.duration
+          || playbackDuration()
+          || 0
+        ) || 0;
+
+      const offset = Math.max(
+        0,
+        Math.min(
+          duration
+            ? Math.max(0, duration - 0.05)
+            : 0,
+          Number(targetSec) || 0
+        )
+      );
+
+      const source =
+        ctx.createBufferSource();
+
       source.buffer = buffer;
-      source.connect(webAudioGain || ctx.destination);
+
+      const loopStart =
+        Number(activePrepLoop?.start_sec);
+
+      const loopEnd =
+        Number(activePrepLoop?.end_sec);
+
+      const hasNativeLoop =
+        Number.isFinite(loopStart)
+        && Number.isFinite(loopEnd)
+        && loopEnd > loopStart
+        && loopStart >= 0
+        && loopEnd <= duration + 0.001;
+
+      if (hasNativeLoop) {
+        source.loop = true;
+        source.loopStart = loopStart;
+        source.loopEnd = loopEnd;
+      }
+
+      source.connect(
+        webAudioGain || ctx.destination
+      );
+
       webAudioSource = source;
       webAudioOffsetSec = offset;
       webAudioStartedAt = ctx.currentTime;
       webAudioPlaying = true;
+
       playbackCursorSec = offset;
       playbackCursorPinned = true;
       audioPendingSeekSec = offset;
-      try { $('player')?.pause(); } catch {}
+
+      try {
+        $('player')?.pause();
+      } catch {}
+
       source.onended = () => {
         if (!webAudioPlaying) return;
         stopWebAudioPlayback(true);
       };
+
       source.start(0, offset);
+
       $('status').className = 'status ok';
-      $('status').textContent = `WebAudio воспроизведение: ${fmtTimePrecise(offset, true)}`;
-      if (webAudioTimer) window.clearInterval(webAudioTimer);
-      webAudioTimer = window.setInterval(() => {
-        if (!webAudioPlaying) return;
-        const cur = currentWebAudioTime();
-        enforcePrepLoop(cur);
-        playbackCursorSec = cur;
-        playbackCursorPinned = true;
-        audioPendingSeekSec = cur;
-        updatePlayerBar();
-        if (lastWavePeaks) drawWaveform(lastWavePeaks);
-        drawZoomWaveform();
-      }, 80);
+
+      $('status').textContent = hasNativeLoop
+        ? (
+            `WebAudio loop: `
+            + `${fmtTimePrecise(loopStart, true)} - `
+            + `${fmtTimePrecise(loopEnd, true)}`
+          )
+        : (
+            `WebAudio playback: `
+            + `${fmtTimePrecise(offset, true)}`
+          );
+
+      if (webAudioTimer) {
+        window.clearInterval(webAudioTimer);
+      }
+
+      webAudioTimer = window.setInterval(
+        () => {
+          if (!webAudioPlaying) return;
+
+          const cur =
+            currentWebAudioTime();
+
+          playbackCursorSec = cur;
+          playbackCursorPinned = true;
+          audioPendingSeekSec = cur;
+
+          updatePlayerBar();
+
+          if (lastWavePeaks) {
+            drawWaveform(lastWavePeaks);
+          }
+
+          drawZoomWaveform();
+        },
+        40
+      );
+
       startWaveformPlayheadLoop();
       updatePlayerBar();
+
       return true;
     }
+
 
     function startAudioDebugMonitor(prefix = 'audio', timeoutMs = 9000) {
       const player = $('player');
@@ -720,6 +854,13 @@
     }
 
     function enforcePrepLoop(timeSec) {
+      if (
+        webAudioPlaying
+        && webAudioSource?.loop
+      ) {
+        return;
+      }
+
       const loop = activePrepLoop;
       const start = Number(loop?.start_sec);
       const end = Number(loop?.end_sec);
@@ -754,15 +895,78 @@
     }
 
     function playPrepLoop(id) {
-      const loop = (trackPrep?.loops || []).find(item => String(item?.id || '') === String(id || ''));
-      const start = Number(loop?.start_sec);
-      const end = Number(loop?.end_sec);
-      if (!loop || !Number.isFinite(start) || !Number.isFinite(end) || !(end > start)) return false;
-      activePrepLoop = { id: String(loop.id), start_sec: start, end_sec: end };
+      const loop = (
+        trackPrep?.loops || []
+      ).find(
+        item =>
+          String(item?.id || '')
+          === String(id || '')
+      );
+
+      const start =
+        Number(loop?.start_sec);
+
+      const end =
+        Number(loop?.end_sec);
+
+      if (
+        !loop
+        || !Number.isFinite(start)
+        || !Number.isFinite(end)
+        || !(end > start)
+      ) {
+        return false;
+      }
+
+      activePrepLoop = {
+        id: String(loop.id),
+        start_sec: start,
+        end_sec: end
+      };
+
       prepLoopRestarting = false;
-      startSelectedPlayback({ forceTimeSec: start, prepLoop: activePrepLoop });
+
+      const mediaPath =
+        mediaPathForTrack(selectedTrack);
+
+      if (!mediaPath) {
+        clearPrepLoop();
+
+        reportPlaybackError(
+          'media path is empty'
+        );
+
+        return false;
+      }
+
+      playbackCursorSec = start;
+      playbackCursorPinned = true;
+      audioPendingSeekSec = start;
+
+      startWebAudioPlayback(
+        mediaPath,
+        start
+      ).catch(
+        error => {
+          console.error(
+            'Native WebAudio loop failed',
+            error
+          );
+
+          clearPrepLoop();
+
+          reportPlaybackError(
+            `WebAudio loop: ${
+              error?.message || error
+            }`
+          );
+        }
+      );
+
       return true;
     }
+
+
     async function startSelectedPlayback(options = {}) {
       const player = $('player');
       if (!player || !selectedTrack) return false;

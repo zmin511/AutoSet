@@ -954,6 +954,141 @@ def _positions_to_markers(positions, *, kind, track_len_s):
     return markers
 
 
+def _engine_beat_grid_from_raw(
+    raw,
+    bpm,
+    duration_sec,
+):
+    """Decode the compact Engine DJ beat-grid descriptor.
+
+    Observed Database2 beatData layout after zlib decoding:
+      0x00: f64be sample rate
+      0x08: f64be audio sample count
+      0x10: u32le version/count
+      0x18: first grid descriptor
+      0x19: f64le grid anchor in audio samples
+      0x39: u32le approximate beat count
+
+    The descriptor appears twice in currently observed Engine DJ data.
+    """
+    if not raw or len(raw) < 61:
+        return []
+
+    try:
+        sample_rate = float(
+            struct.unpack_from(">d", raw, 0)[0]
+        )
+        sample_count = float(
+            struct.unpack_from(">d", raw, 8)[0]
+        )
+        anchor_samples = float(
+            struct.unpack_from("<d", raw, 25)[0]
+        )
+        stored_beat_count = int(
+            struct.unpack_from("<I", raw, 57)[0]
+        )
+        bpm_value = float(bpm or 0)
+        duration = float(duration_sec or 0)
+    except (TypeError, ValueError, struct.error):
+        return []
+
+    if not (
+        _finite_number(sample_rate)
+        and 8000 <= sample_rate <= 384000
+    ):
+        return []
+
+    if not (
+        _finite_number(sample_count)
+        and sample_count > 0
+    ):
+        return []
+
+    if not (
+        _finite_number(anchor_samples)
+        and abs(anchor_samples)
+        <= sample_count * 2
+    ):
+        return []
+
+    if not (
+        _finite_number(bpm_value)
+        and 20 <= bpm_value <= 400
+    ):
+        return []
+
+    if duration <= 0:
+        duration = sample_count / sample_rate
+
+    interval_samples = (
+        sample_rate * 60.0 / bpm_value
+    )
+
+    if not (
+        _finite_number(interval_samples)
+        and interval_samples > 0
+    ):
+        return []
+
+    # Move the Engine anchor forward until the first visible beat.
+    first_sample = anchor_samples
+
+    if first_sample < 0:
+        steps = int(
+            (-first_sample) // interval_samples
+        )
+        first_sample += steps * interval_samples
+
+        while first_sample < 0:
+            first_sample += interval_samples
+
+    # If the anchor happens to be beyond the beginning, preserve it.
+    first_time = first_sample / sample_rate
+
+    if first_time > duration + 1.0:
+        return []
+
+    out = []
+    beat_number = 1
+    sample_position = first_sample
+
+    # The stored count is a useful sanity check, but Engine can include
+    # beats just outside the audible file, so duration remains authoritative.
+    maximum = max(
+        32,
+        min(
+            20000,
+            stored_beat_count + 32
+            if 0 < stored_beat_count < 20000
+            else 20000,
+        ),
+    )
+
+    while beat_number <= maximum:
+        time_sec = sample_position / sample_rate
+
+        if time_sec > duration + 0.001:
+            break
+
+        if time_sec >= 0:
+            out.append({
+                "time_sec": round(time_sec, 6),
+                "beat": beat_number,
+                "bar": int((beat_number - 1) // 4) + 1,
+                "is_bar_start": (
+                    (beat_number - 1) % 4
+                ) == 0,
+                "is_phrase_start": (
+                    (beat_number - 1) % 16
+                ) == 0,
+            })
+
+        beat_number += 1
+        sample_position += interval_samples
+
+    return out
+
+
 def _beat_grid_from_positions(positions):
     out = []
     for idx, pos in enumerate(sorted({round(float(p), 3) for p in positions if _finite_number(p) and p >= 0.0}), start=1):
@@ -1059,13 +1194,36 @@ def get_track_waveform_detail(track_id):
     bpm = row["bpmAnalyzed"] if row["bpmAnalyzed"] is not None else row["bpm"]
     overview_raw = _decode_engine_zlib_blob(row["overviewWaveFormData"])
     overview = _parse_overview_waveform(overview_raw)
-    beat_raw = _decode_engine_zlib_blob(row["beatData"])
-    beat_positions = _extract_positions_seconds(beat_raw, duration_sec, endian=">", aligned_offset=8)
-    beat_grid = _beat_grid_from_positions(beat_positions)
-    beat_source = "engine_db" if beat_grid else "not_found"
+    beat_raw = _decode_engine_zlib_blob(
+        row["beatData"]
+    )
+    beat_grid = _engine_beat_grid_from_raw(
+        beat_raw,
+        bpm,
+        duration_sec,
+    )
+    beat_source = (
+        "engine_db"
+        if len(beat_grid) >= 4
+        else "not_found"
+    )
+
     if len(beat_grid) < 4:
-        beat_grid = _beat_grid_from_bpm(bpm, duration_sec, 0.0)
-        beat_source = "bpm_fallback" if beat_grid else "not_found"
+        beat_grid = _beat_grid_from_bpm(
+            bpm,
+            duration_sec,
+            0.0,
+        )
+        beat_source = (
+            "bpm_fallback"
+            if beat_grid
+            else "not_found"
+        )
+
+    beat_positions = [
+        beat["time_sec"]
+        for beat in beat_grid
+    ]
 
     qc_raw = _decode_engine_zlib_blob(row["quickCues"])
     cues_raw = _parse_quick_cues(qc_raw, duration_sec)
@@ -1182,6 +1340,87 @@ def _suggest_snap_time(time_sec, beat_grid, bpm, duration_sec, unit_beats=16):
     beat_sec = _suggest_beat_seconds(bpm, beat_grid)
     step = max(0.001, beat_sec * unit)
     return round(max(0.0, min(duration or time_sec, round(time_sec / step) * step)), 3)
+
+
+def _suggest_loop_bounds(
+    raw_start_sec,
+    length_beats,
+    beat_grid,
+    bpm,
+    duration_sec,
+    snap_unit_beats=1,
+):
+    duration = max(0.0, float(duration_sec or 0.0))
+    length_beats = max(1, int(length_beats or 1))
+
+    start_sec = _suggest_snap_time(
+        raw_start_sec,
+        beat_grid,
+        bpm,
+        duration,
+        snap_unit_beats,
+    )
+
+    valid_beats = [
+        beat
+        for beat in (beat_grid or [])
+        if _finite_number(beat.get("time_sec"))
+    ]
+    valid_beats.sort(
+        key=lambda beat: float(beat.get("time_sec"))
+    )
+
+    if valid_beats:
+        start_index = min(
+            range(len(valid_beats)),
+            key=lambda index: abs(
+                float(valid_beats[index]["time_sec"])
+                - start_sec
+            ),
+        )
+
+        end_index = start_index + length_beats
+
+        if end_index < len(valid_beats):
+            exact_start = float(
+                valid_beats[start_index]["time_sec"]
+            )
+            exact_end = float(
+                valid_beats[end_index]["time_sec"]
+            )
+
+            if exact_end > exact_start:
+                return {
+                    "start_sec": round(exact_start, 3),
+                    "end_sec": round(
+                        min(duration or exact_end, exact_end),
+                        3,
+                    ),
+                    "start_beat_index": start_index,
+                    "end_beat_index": end_index,
+                    "grid_source": "beat_grid",
+                }
+
+    beat_sec = _suggest_beat_seconds(
+        bpm,
+        beat_grid,
+    )
+
+    end_sec = min(
+        duration or (start_sec + beat_sec * length_beats),
+        start_sec + beat_sec * length_beats,
+    )
+
+    if end_sec <= start_sec:
+        return None
+
+    return {
+        "start_sec": round(start_sec, 3),
+        "end_sec": round(end_sec, 3),
+        "start_beat_index": None,
+        "end_beat_index": None,
+        "grid_source": "bpm_fallback",
+    }
 
 
 def _suggest_energy_curve(detail):
@@ -1364,35 +1603,97 @@ def _suggest_track_marks_for_track(track_id):
 
     loops = []
     outro_len = 32 if outro + beat_sec * 32 <= duration else 16
-    outro_start = _suggest_snap_time(outro, beat_grid, bpm, duration, 16)
-    outro_end = min(duration, outro_start + beat_sec * outro_len)
-    if outro_end > outro_start + beat_sec * 4:
+    outro_bounds = _suggest_loop_bounds(
+        outro,
+        outro_len,
+        beat_grid,
+        bpm,
+        duration,
+        snap_unit_beats=16,
+    )
+    if (
+        outro_bounds
+        and outro_bounds["end_sec"]
+        > outro_bounds["start_sec"]
+    ):
         loops.append({
             "type": "OUTRO_LOOP",
             "name": f"Auto Outro Loop {outro_len}",
-            "start_sec": round(outro_start, 3),
-            "end_sec": round(outro_end, 3),
+            "start_sec": outro_bounds["start_sec"],
+            "end_sec": outro_bounds["end_sec"],
             "raw_start_sec": round(outro, 3),
             "length_beats": outro_len,
+            "start_beat_index": (
+                outro_bounds["start_beat_index"]
+            ),
+            "end_beat_index": (
+                outro_bounds["end_beat_index"]
+            ),
+            "grid_source": outro_bounds["grid_source"],
             "confidence": 0.62 if curve else 0.42,
-            "reason": f"loop from outro phrase, {outro_len} beats",
+            "reason": (
+                f"loop from outro phrase, "
+                f"{outro_len} beats, "
+                f"{outro_bounds['grid_source']}"
+            ),
             "source": "auto",
         })
 
-    emergency_len = 16 if duration - mix_out >= beat_sec * 16 else 8
-    emergency_raw = max(mix_out, min(last_energy - beat_sec * emergency_len, duration - beat_sec * emergency_len - beat_sec * 2))
-    emergency_start = _suggest_snap_time(emergency_raw, beat_grid, bpm, duration, 4)
-    emergency_end = min(duration, emergency_start + beat_sec * emergency_len)
-    if emergency_end > emergency_start + beat_sec * 4:
+    emergency_len = (
+        16
+        if duration - mix_out >= beat_sec * 16
+        else 8
+    )
+    emergency_raw = max(
+        mix_out,
+        min(
+            last_energy - beat_sec * emergency_len,
+            duration
+            - beat_sec * emergency_len
+            - beat_sec * 2,
+        ),
+    )
+    emergency_bounds = _suggest_loop_bounds(
+        emergency_raw,
+        emergency_len,
+        beat_grid,
+        bpm,
+        duration,
+        snap_unit_beats=4,
+    )
+    if (
+        emergency_bounds
+        and emergency_bounds["end_sec"]
+        > emergency_bounds["start_sec"]
+    ):
         loops.append({
             "type": "EMERGENCY_LOOP",
-            "name": f"Auto Emergency Loop {emergency_len}",
-            "start_sec": round(emergency_start, 3),
-            "end_sec": round(emergency_end, 3),
-            "raw_start_sec": round(emergency_raw, 3),
+            "name": (
+                f"Auto Emergency Loop "
+                f"{emergency_len}"
+            ),
+            "start_sec": emergency_bounds["start_sec"],
+            "end_sec": emergency_bounds["end_sec"],
+            "raw_start_sec": round(
+                emergency_raw,
+                3,
+            ),
             "length_beats": emergency_len,
+            "start_beat_index": (
+                emergency_bounds["start_beat_index"]
+            ),
+            "end_beat_index": (
+                emergency_bounds["end_beat_index"]
+            ),
+            "grid_source": (
+                emergency_bounds["grid_source"]
+            ),
             "confidence": 0.56 if curve else 0.38,
-            "reason": f"late fallback loop before fade/end, {emergency_len} beats",
+            "reason": (
+                f"late fallback loop before fade/end, "
+                f"{emergency_len} beats, "
+                f"{emergency_bounds['grid_source']}"
+            ),
             "source": "auto",
         })
 
@@ -1976,15 +2277,40 @@ def export_track_marks_to_engine(data):
 def get_track_performance(track_id):
     track_id = int(track_id)
     with open_db() as con:
-        trow = con.execute("SELECT length FROM Track WHERE id=?", (track_id,)).fetchone()
+        trow = con.execute(
+            """
+            SELECT
+                length,
+                bpmAnalyzed,
+                bpm
+            FROM Track
+            WHERE id = ?
+            """,
+            (track_id,),
+        ).fetchone()
         row = con.execute(
             "SELECT overviewWaveFormData, beatData, quickCues, loops FROM PerformanceData WHERE trackId=?",
             (track_id,),
         ).fetchone()
         if not row:
             raise ValueError("PerformanceData not found for track")
-    track_len = 0 if not trow else int(trow["length"] or 0)
-    overview_raw = _decode_engine_zlib_blob(row["overviewWaveFormData"])
+    track_len = (
+        0
+        if not trow
+        else int(trow["length"] or 0)
+    )
+    track_bpm = (
+        None
+        if not trow
+        else (
+            trow["bpmAnalyzed"]
+            if trow["bpmAnalyzed"] is not None
+            else trow["bpm"]
+        )
+    )
+    overview_raw = _decode_engine_zlib_blob(
+        row["overviewWaveFormData"]
+    )
     overview = _parse_overview_waveform(overview_raw)
 
     markers = []
@@ -1998,7 +2324,15 @@ def get_track_performance(track_id):
     cues = _parse_quick_cues(qc_raw, track_len)
     loops = _parse_loops(lp_raw, track_len)
     qc_pos = sorted({c["pos_s"] for c in cues})
-    bd_pos = _extract_positions_seconds(bd_raw, track_len, endian=">", aligned_offset=8)
+    engine_grid = _engine_beat_grid_from_raw(
+        bd_raw,
+        track_bpm,
+        track_len,
+    )
+    bd_pos = [
+        beat["time_sec"]
+        for beat in engine_grid
+    ]
 
     markers.extend(_positions_to_markers(qc_pos, kind="cue", track_len_s=track_len))
     markers.extend(_positions_to_markers(bd_pos, kind="beat", track_len_s=track_len))

@@ -36,14 +36,40 @@
         const snapped = snapTimeToGrid(raw, mark.snap || trackPrepSnap);
         return normalizePrepMark({ ...mark, time_sec: snapped, raw_time_sec: raw }) || mark;
       });
-      const beatSec = estimateBeatSeconds();
-      trackPrep.loops = (trackPrep.loops || []).map(loop => {
-        const raw = loop.raw_start_sec == null ? loop.start_sec : loop.raw_start_sec;
-        const start = snapTimeToGrid(raw, loop.snap || trackPrepSnap);
-        const lengthBeats = Number(loop.length_beats || 0);
-        const end = beatSec > 0 && lengthBeats > 0 ? clampTrackTime(start + beatSec * lengthBeats) : loop.end_sec;
-        return normalizePrepLoop({ ...loop, start_sec: start, end_sec: end, raw_start_sec: raw }) || loop;
-      }).filter(Boolean);
+      trackPrep.loops = (trackPrep.loops || [])
+        .map(loop => {
+          const raw = loop.raw_start_sec == null
+            ? loop.start_sec
+            : loop.raw_start_sec;
+          const lengthBeats = Number(
+            loop.length_beats || 0
+          );
+          const bounds = lengthBeats > 0
+            ? exactLoopBounds(
+                raw,
+                lengthBeats,
+                loop.snap || trackPrepSnap
+              )
+            : null;
+
+          if (!bounds) {
+            return normalizePrepLoop(loop) || loop;
+          }
+
+          return normalizePrepLoop({
+            ...loop,
+            start_sec: bounds.start_sec,
+            end_sec: bounds.end_sec,
+            raw_start_sec: raw,
+            start_beat_index:
+              bounds.start_beat_index,
+            end_beat_index:
+              bounds.end_beat_index,
+            grid_source:
+              bounds.grid_source
+          }) || loop;
+        })
+        .filter(Boolean);
     }
 
     function trackPrepPayload() {

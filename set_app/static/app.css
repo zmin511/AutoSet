@@ -1638,3 +1638,64 @@ main *::after {
   background: var(--accent);
   transition: width .25s ease;
 }
+
+
+/* Loop grid diagnostics */
+.prep-loop-item {
+  display: inline-grid !important;
+  grid-template-columns:
+    minmax(0, 1fr) auto !important;
+  grid-template-areas:
+    "main delete"
+    "diag delete";
+  align-items: center !important;
+  column-gap: 5px !important;
+  row-gap: 0 !important;
+  max-width: 100% !important;
+}
+
+.prep-loop-main {
+  grid-area: main;
+  white-space: nowrap;
+}
+
+.prep-loop-diagnostics {
+  grid-area: diag;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: .72;
+  font-size: 10px;
+  line-height: 1.15;
+  font-weight: 400;
+}
+
+.prep-loop-item .prep-delete {
+  grid-area: delete;
+  align-self: center;
+}
+
+
+
+
+/* Folder rows only: keep full folder name visible */
+.folder-row .folder {
+  width: auto !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: nowrap !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
+/* Keep folder rows compact */
+.folder-row {
+  min-height: 36px !important;
+  height: 36px !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}

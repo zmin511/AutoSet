@@ -41,40 +41,94 @@
 
     function addTrackPrepLoop(lengthBeats) {
       if (!window.__waveDetail) return;
-      const beats = Math.max(1, Math.min(512, Number(lengthBeats) || 0));
-      const beatSec = estimateBeatSeconds();
-      if (!(beatSec > 0)) {
-        prepStatus('Для петель нужен BPM или beat-grid', true);
-        return;
-      }
+
+      const beats = Math.max(
+        1,
+        Math.min(
+          512,
+          Number(lengthBeats) || 0
+        )
+      );
+
       const anchorMark = selectedPrepMark();
-      const raw = clampTrackTime(anchorMark ? Number(anchorMark.time_sec) : currentPlaybackTime());
-      const start = snapTargetForPlacement(raw);
-      const end = clampTrackTime(start + beatSec * beats);
-      if (!(end > start)) {
-        prepStatus('Конец петли выходит за длительность трека', true);
+
+      const raw = clampTrackTime(
+        anchorMark
+          ? Number(anchorMark.time_sec)
+          : currentPlaybackTime()
+      );
+
+      const loopSnap =
+        beats <= 8
+          ? 'bar'
+          : 'phrase16';
+
+      const bounds = exactLoopBounds(
+        raw,
+        beats,
+        loopSnap
+      );
+
+      if (!bounds) {
+        prepStatus(
+          '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0438\u0442\u044c \u0433\u0440\u0430\u043d\u0438\u0446\u044b loop',
+          true
+        );
         return;
       }
-      const type = $('trackPrepLoopType')?.value === 'EMERGENCY_LOOP' ? 'EMERGENCY_LOOP' : 'OUTRO_LOOP';
-      const role = type === 'EMERGENCY_LOOP' ? 'EMERGENCY LOOP' : 'OUTRO LOOP';
+
+      const start = bounds.start_sec;
+      const end = bounds.end_sec;
+
+      if (!(end > start)) {
+        prepStatus(
+          '\u041a\u043e\u043d\u0435\u0446 loop \u0432\u044b\u0445\u043e\u0434\u0438\u0442 \u0437\u0430 \u0434\u043b\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u0442\u0440\u0435\u043a\u0430',
+          true
+        );
+        return;
+      }
+
+      const type =
+        $('trackPrepLoopType')?.value ===
+        'EMERGENCY_LOOP'
+          ? 'EMERGENCY_LOOP'
+          : 'OUTRO_LOOP';
+
+      const role =
+        type === 'EMERGENCY_LOOP'
+          ? 'EMERGENCY LOOP'
+          : 'OUTRO LOOP';
+
       const loop = normalizePrepLoop({
         id: `${type.toLowerCase()}_${beats}_${Math.round(start * 1000)}`,
         type,
         name: `${role} ${beats}`,
         start_sec: start,
         end_sec: end,
-        raw_start_sec: anchorMark ? start : raw,
+        raw_start_sec: anchorMark
+          ? start
+          : raw,
         length_beats: beats,
-        snap: trackPrepSnap,
-        from_mark_type: anchorMark?.type || undefined,
+        start_beat_index:
+          bounds.start_beat_index,
+        end_beat_index:
+          bounds.end_beat_index,
+        grid_source:
+          bounds.grid_source,
+        snap: loopSnap,
+        from_mark_type:
+          anchorMark?.type || undefined,
         confidence: 1
       });
+
       if (!loop) return;
+
       clearTrackPrepExportState();
       trackPrep.loops.push(loop);
       trackPrepDirty = true;
       redrawTrackPrep();
     }
+
 
     function deleteTrackPrepItem(kind, id) {
       if (kind === 'mark') {
