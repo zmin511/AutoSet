@@ -126,6 +126,18 @@
           end_sec: loop.end_sec,
           raw_start_sec: loop.raw_start_sec,
           length_beats: loop.length_beats,
+          start_beat_index:
+            loop.start_beat_index,
+          end_beat_index:
+            loop.end_beat_index,
+          grid_source:
+            loop.grid_source,
+          snap:
+            loop.snap || (
+              Number(loop.length_beats || 0) <= 8
+                ? 'bar'
+                : 'phrase16'
+            ),
           from_mark_type: loop.from_mark_type,
           confidence: Number(loop.confidence ?? 1),
           source: 'manual'

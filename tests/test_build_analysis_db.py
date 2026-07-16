@@ -188,3 +188,152 @@ def test_dry_run_does_not_create_analysis_database(tmp_path):
     assert stats.analyzed == 1
     assert stats.errors == 0
     assert not analysis_db.exists()
+
+
+def test_build_analysis_database_prunes_missing_profiles(
+    tmp_path,
+    monkeypatch,
+):
+    import sqlite3
+
+    import build_analysis_db
+    from analysis_db import (
+        list_profiles,
+        open_analysis_db,
+        upsert_profile,
+    )
+    from track_analysis import TrackProfile
+
+    engine_db = tmp_path / "m.db"
+    sqlite3.connect(engine_db).close()
+
+    music_root = tmp_path / "Music"
+    music_root.mkdir()
+
+    analysis_db = tmp_path / "analysis.db"
+
+    connection = open_analysis_db(analysis_db)
+
+    upsert_profile(
+        connection,
+        TrackProfile(
+            track_id="old",
+            file_path=str(
+                music_root / "missing.mp3"
+            ),
+            file_size=100,
+            file_mtime=1.0,
+            analysis_version=1,
+            duration_seconds=180.0,
+            bpm=128.0,
+            camelot_key="8A",
+            genre="House",
+            energy_mean=0.5,
+        ),
+    )
+
+    connection.close()
+
+    monkeypatch.setattr(
+        build_analysis_db,
+        "open_db",
+        lambda _path: sqlite3.connect(engine_db),
+    )
+
+    monkeypatch.setattr(
+        build_analysis_db,
+        "load_tracks",
+        lambda _connection, _music_root: [],
+    )
+
+    stats = build_analysis_db.build_analysis_database(
+        engine_db_path=engine_db,
+        music_root=music_root,
+        analysis_db_path=analysis_db,
+        prune=True,
+    )
+
+    connection = open_analysis_db(analysis_db)
+
+    try:
+        profiles = list_profiles(connection)
+    finally:
+        connection.close()
+
+    assert stats.pruned == 1
+    assert profiles == []
+
+
+def test_build_analysis_database_does_not_prune_with_limit(
+    tmp_path,
+    monkeypatch,
+):
+    import sqlite3
+
+    import build_analysis_db
+    from analysis_db import (
+        list_profiles,
+        open_analysis_db,
+        upsert_profile,
+    )
+    from track_analysis import TrackProfile
+
+    engine_db = tmp_path / "m.db"
+    sqlite3.connect(engine_db).close()
+
+    music_root = tmp_path / "Music"
+    music_root.mkdir()
+
+    analysis_db = tmp_path / "analysis.db"
+
+    connection = open_analysis_db(analysis_db)
+
+    upsert_profile(
+        connection,
+        TrackProfile(
+            track_id="old",
+            file_path=str(
+                music_root / "missing.mp3"
+            ),
+            file_size=100,
+            file_mtime=1.0,
+            analysis_version=1,
+            duration_seconds=180.0,
+            bpm=128.0,
+            camelot_key="8A",
+            genre="House",
+            energy_mean=0.5,
+        ),
+    )
+
+    connection.close()
+
+    monkeypatch.setattr(
+        build_analysis_db,
+        "open_db",
+        lambda _path: sqlite3.connect(engine_db),
+    )
+
+    monkeypatch.setattr(
+        build_analysis_db,
+        "load_tracks",
+        lambda _connection, _music_root: [],
+    )
+
+    stats = build_analysis_db.build_analysis_database(
+        engine_db_path=engine_db,
+        music_root=music_root,
+        analysis_db_path=analysis_db,
+        limit=10,
+        prune=True,
+    )
+
+    connection = open_analysis_db(analysis_db)
+
+    try:
+        profiles = list_profiles(connection)
+    finally:
+        connection.close()
+
+    assert stats.pruned == 0
+    assert len(profiles) == 1

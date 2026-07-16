@@ -294,19 +294,83 @@ function updateFollowWaveWindow() {
     }
 
     function setWaveHoverFromEvent(event) {
+      const canvas = $('waveZoomCanvas');
       const t = _waveZoomTimeFromEvent(event);
+
       if (t == null) return false;
-      const snap = snapPreviewForTime(t);
+
+      const snap = event?.altKey
+        ? {
+            time_sec: t,
+            kind: 'free',
+            snapped: false
+          }
+        : snapPreviewForTime(t);
+
+      const snappedTime = Number(
+        snap?.time_sec
+      );
+
       waveHover = {
         active: true,
         time_sec: t,
-        snap_time_sec: snap.time_sec,
-        snap_kind: snap.kind,
-        snapped: !!snap.snapped
+        snap_time_sec:
+          Number.isFinite(snappedTime)
+            ? snappedTime
+            : t,
+        snap_kind:
+          String(snap?.kind || ''),
+        snapped:
+          !!snap?.snapped
       };
+
+      if (canvas) {
+        canvas.title = waveHover.snapped
+          ? (
+              `????????: ${waveHover.snap_kind || 'Engine DJ beat'}`
+              + ` ? ${fmtTimePrecise(waveHover.snap_time_sec, true)}`
+              + ` ? Alt: ????????? ?????????`
+            )
+          : (
+              `????????? ???????: ${fmtTimePrecise(t, true)}`
+              + ` ? ??????? Alt ??? ????????`
+            );
+      }
+
       drawZoomWaveform();
       return true;
     }
+
+    function snapZoomClickTime(
+      timeSec,
+      event = null
+    ) {
+      const raw = Number(timeSec);
+
+      if (!Number.isFinite(raw)) {
+        return null;
+      }
+
+      if (event?.altKey) {
+        return raw;
+      }
+
+      const snap =
+        snapPreviewForTime(raw);
+
+      const snapped =
+        Number(snap?.time_sec);
+
+      if (
+        snap?.snapped
+        && Number.isFinite(snapped)
+      ) {
+        return snapped;
+      }
+
+      return raw;
+    }
+
 
     function clearWaveHover() {
       if (!waveHover.active) return;
@@ -401,10 +465,26 @@ function updateFollowWaveWindow() {
           if (e.target === zoomCanvas) return;
           if (e.target?.closest?.('button,input,select,label')) return;
           if (!canNavigateWaveform()) return;
-          const t = _waveZoomTimeFromAreaEvent(e);
-          if (t == null) return;
+          const rawTime =
+            _waveZoomTimeFromAreaEvent(e);
+
+          if (rawTime == null) return;
+
+          const targetTime =
+            snapZoomClickTime(
+              rawTime,
+              e
+            );
+
+          if (targetTime == null) return;
+
           followPlayhead = false;
-          _seekPlayerToTime(t, { centerZoom: true });
+
+          _seekPlayerToTime(
+            targetTime,
+            { centerZoom: true }
+          );
+
           syncWaveScrollControl();
           e.preventDefault();
         });
@@ -424,19 +504,36 @@ function updateFollowWaveWindow() {
           if (!canNavigateWaveform()) return;
           const mark = manualMarkFromZoomEvent(e);
           if (mark && selectPrepMark(mark.type)) return;
-          const t = _waveZoomTimeFromEvent(e);
-          if (t == null) return;
+          const rawTime =
+            _waveZoomTimeFromEvent(e);
+
+          if (rawTime == null) return;
+
+          const clickTime =
+            snapZoomClickTime(
+              rawTime,
+              e
+            );
+
+          if (clickTime == null) return;
+
           const state = waveWindowState();
+
           followPlayhead = false;
           waveDragActive = true;
           waveDragMode = 'zoom-pan';
+
           waveZoomDrag = {
             startX: e.clientX,
             startOffset: waveOffsetSec,
             windowSec: state.windowSec,
             duration: state.duration,
             width: state.width,
-            clickTime: t,
+            clickTime,
+            rawClickTime: rawTime,
+            snapped:
+              Math.abs(clickTime - rawTime)
+              > 0.000001,
             moved: false
           };
           syncWaveScrollControl();
@@ -466,12 +563,28 @@ function updateFollowWaveWindow() {
         if (webAudioPlaying || (player && !player.paused)) return;
         if (!selectedTrackId() || !(durationForSeek() > 0)) return;
         if (event.target?.closest?.('button,input,select,label')) return;
-        const t = event.currentTarget?.id === 'waveZoomCanvas'
-          ? _waveZoomTimeFromEvent(event)
-          : _waveZoomTimeFromAreaEvent(event);
-        if (t == null) return;
+        const rawTime =
+          event.currentTarget?.id
+            === 'waveZoomCanvas'
+            ? _waveZoomTimeFromEvent(event)
+            : _waveZoomTimeFromAreaEvent(event);
+
+        if (rawTime == null) return;
+
+        const targetTime =
+          snapZoomClickTime(
+            rawTime,
+            event
+          );
+
+        if (targetTime == null) return;
+
         followPlayhead = false;
-        _seekPlayerToTime(t, { centerZoom: true });
+
+        _seekPlayerToTime(
+          targetTime,
+          { centerZoom: true }
+        );
         event.preventDefault();
         event.stopPropagation();
       };

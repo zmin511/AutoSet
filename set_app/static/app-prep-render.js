@@ -1,35 +1,223 @@
 // Track Prep rendering and waveform display item sync. Loaded before modules call redrawTrackPrep.
+    function loopGridSourceLabel(loop) {
+      const source = String(
+        loop?.grid_source || ''
+      ).toLowerCase();
+
+      if (
+        source === 'engine_grid'
+        || source === 'beat_grid'
+      ) {
+        return 'Engine DJ';
+      }
+
+      if (source === 'bpm_fallback') {
+        return 'BPM fallback';
+      }
+
+      const detailSource = String(
+        window.__waveDetail?.source?.beat_grid || ''
+      ).toLowerCase();
+
+      if (detailSource === 'engine_db') {
+        return 'Engine DJ';
+      }
+
+      if (detailSource === 'bpm_fallback') {
+        return 'BPM fallback';
+      }
+
+      return 'Grid unknown';
+    }
+
+    function loopSnapLabel(loop) {
+      const snap = String(loop?.snap || '');
+
+      if (snap === 'bar') return 'Bar';
+      if (snap === 'phrase16') return 'Phrase 16';
+      if (snap === 'phrase32') return 'Phrase 32';
+      if (snap === 'beat') return 'Beat';
+
+      return 'Snap unknown';
+    }
+
+    function loopBeatRangeLabel(loop) {
+      const startIndex = Number(loop?.start_beat_index);
+      const endIndex = Number(loop?.end_beat_index);
+
+      if (
+        Number.isInteger(startIndex)
+        && Number.isInteger(endIndex)
+      ) {
+        return `beats ${startIndex + 1}-${endIndex + 1}`;
+      }
+
+      const length = Number(loop?.length_beats || 0);
+
+      return length > 0
+        ? `${length} beats`
+        : 'manual length';
+    }
+
+    function loopDurationLabel(loop) {
+      const start = Number(loop?.start_sec);
+      const end = Number(loop?.end_sec);
+
+      if (
+        !Number.isFinite(start)
+        || !Number.isFinite(end)
+        || !(end > start)
+      ) {
+        return '';
+      }
+
+      return `${(end - start).toFixed(3)} s`;
+    }
+
+    function loopDiagnosticsLabel(loop) {
+      return [
+        loopGridSourceLabel(loop),
+        loopSnapLabel(loop),
+        loopBeatRangeLabel(loop),
+        loopDurationLabel(loop)
+      ].filter(Boolean).join(' \u00b7 ');
+    }
+
+
     function renderTrackPrepList() {
       const box = $('trackPrepList');
       if (!box) return;
-      const marks = [...(trackPrep.marks || [])].sort((a, b) => {
-        const ai = PREP_MARKS.findIndex(m => m.type === a.type);
-        const bi = PREP_MARKS.findIndex(m => m.type === b.type);
-        return ai - bi;
-      });
-      const loops = [...(trackPrep.loops || [])].sort((a, b) => Number(a.start_sec) - Number(b.start_sec));
+
+      const marks = [...(trackPrep.marks || [])]
+        .sort((a, b) => {
+          const ai = PREP_MARKS.findIndex(
+            item => item.type === a.type
+          );
+          const bi = PREP_MARKS.findIndex(
+            item => item.type === b.type
+          );
+          return ai - bi;
+        });
+
+      const loops = [...(trackPrep.loops || [])]
+        .sort(
+          (a, b) =>
+            Number(a.start_sec) - Number(b.start_sec)
+        );
+
       const rows = [];
+
       for (const mark of marks) {
-        const selected = mark.type === selectedPrepMarkType ? ' selected' : '';
-        rows.push(`<span class="prep-item mark${selected}" data-prep-select="mark" data-id="${esc(mark.type)}" title="Play from mark">${esc(prepMarkLabel(mark.type))} ${esc(fmtTime(mark.time_sec))}<button class="prep-delete" type="button" data-prep-delete="mark" data-id="${esc(mark.type)}" title="Delete">×</button></span>`);
+        const selected =
+          mark.type === selectedPrepMarkType
+            ? ' selected'
+            : '';
+
+        rows.push(
+          `<span class="prep-item mark${selected}" `
+          + `data-prep-select="mark" `
+          + `data-id="${esc(mark.type)}" `
+          + `title="Play from mark">`
+          + `${esc(prepMarkLabel(mark.type))} `
+          + `${esc(fmtTime(mark.time_sec))}`
+          + `<button class="prep-delete" `
+          + `type="button" `
+          + `data-prep-delete="mark" `
+          + `data-id="${esc(mark.type)}" `
+          + `title="Delete">\u00d7</button>`
+          + `</span>`
+        );
       }
+
       for (const loop of loops) {
         const role = loopRoleLabel(loop, true);
-        rows.push(`<span class="prep-item loop" data-prep-select="loop" data-id="${esc(loop.id)}" title="Play loop">${esc(role)} ${esc(fmtTime(loop.start_sec))} - ${esc(fmtTime(loop.end_sec))}<button class="prep-delete" type="button" data-prep-delete="loop" data-id="${esc(loop.id)}" title="Delete">×</button></span>`);
+        const diagnostics =
+          loopDiagnosticsLabel(loop);
+
+        rows.push(
+          `<span class="prep-item loop prep-loop-item" `
+          + `data-prep-select="loop" `
+          + `data-id="${esc(loop.id)}" `
+          + `title="${esc(diagnostics)}">`
+          + `<span class="prep-loop-main">`
+          + `${esc(role)} `
+          + `${esc(fmtTime(loop.start_sec))} - `
+          + `${esc(fmtTime(loop.end_sec))}`
+          + `</span>`
+          + `<small class="prep-loop-diagnostics">`
+          + `${esc(diagnostics)}`
+          + `</small>`
+          + `<button class="prep-delete" `
+          + `type="button" `
+          + `data-prep-delete="loop" `
+          + `data-id="${esc(loop.id)}" `
+          + `title="Delete">\u00d7</button>`
+          + `</span>`
+        );
       }
-      const suggestedMarks = Array.isArray(trackPrepSuggestions?.marks) ? trackPrepSuggestions.marks : [];
-      const suggestedLoops = Array.isArray(trackPrepSuggestions?.loops) ? trackPrepSuggestions.loops : [];
+
+      const suggestedMarks = Array.isArray(
+        trackPrepSuggestions?.marks
+      )
+        ? trackPrepSuggestions.marks
+        : [];
+
+      const suggestedLoops = Array.isArray(
+        trackPrepSuggestions?.loops
+      )
+        ? trackPrepSuggestions.loops
+        : [];
+
       for (const mark of suggestedMarks) {
-        const title = [mark.reason, mark.confidence != null ? `confidence ${Number(mark.confidence).toFixed(2)}` : ''].filter(Boolean).join(' · ');
-        rows.push(`<span class="prep-item mark suggested" title="${esc(title || 'Suggested mark')}">${esc(prepMarkLabel(mark.type))} ${esc(fmtTime(mark.time_sec))}</span>`);
+        const title = [
+          mark.reason,
+          mark.confidence != null
+            ? `confidence ${Number(mark.confidence).toFixed(2)}`
+            : ''
+        ].filter(Boolean).join(' \u00b7 ');
+
+        rows.push(
+          `<span class="prep-item mark suggested" `
+          + `title="${esc(title || 'Suggested mark')}">`
+          + `${esc(prepMarkLabel(mark.type))} `
+          + `${esc(fmtTime(mark.time_sec))}`
+          + `</span>`
+        );
       }
+
       for (const loop of suggestedLoops) {
         const role = loopRoleLabel(loop, true);
-        const title = [loop.reason, loop.length_beats ? `${loop.length_beats} beats` : '', loop.confidence != null ? `confidence ${Number(loop.confidence).toFixed(2)}` : ''].filter(Boolean).join(' · ');
-        rows.push(`<span class="prep-item loop suggested" title="${esc(title || 'Suggested loop')}">${esc(role)} ${esc(fmtTime(loop.start_sec))} - ${esc(fmtTime(loop.end_sec))}</span>`);
+        const diagnostics =
+          loopDiagnosticsLabel(loop);
+
+        const title = [
+          loop.reason,
+          diagnostics,
+          loop.confidence != null
+            ? `confidence ${Number(loop.confidence).toFixed(2)}`
+            : ''
+        ].filter(Boolean).join(' \u00b7 ');
+
+        rows.push(
+          `<span class="prep-item loop suggested prep-loop-item" `
+          + `title="${esc(title || 'Suggested loop')}">`
+          + `<span class="prep-loop-main">`
+          + `${esc(role)} `
+          + `${esc(fmtTime(loop.start_sec))} - `
+          + `${esc(fmtTime(loop.end_sec))}`
+          + `</span>`
+          + `<small class="prep-loop-diagnostics">`
+          + `${esc(diagnostics)}`
+          + `</small>`
+          + `</span>`
+        );
       }
-      box.innerHTML = rows.length ? rows.join('') : '<span>Нет ручных меток</span>';
+
+      box.innerHTML = rows.length
+        ? rows.join('')
+        : '<span>\u041d\u0435\u0442 \u0440\u0443\u0447\u043d\u044b\u0445 \u043c\u0435\u0442\u043e\u043a</span>';
     }
+
 
     function syncTrackPrepControls() {
       const hasTrack = !!selectedTrackId();
@@ -179,6 +367,14 @@
           start_frac: fracFor(s),
           end_frac: fracFor(e),
           length_beats: loop.length_beats,
+          start_beat_index:
+            loop.start_beat_index,
+          end_beat_index:
+            loop.end_beat_index,
+          grid_source:
+            loop.grid_source,
+          snap:
+            loop.snap,
           from_mark_type: loop.from_mark_type,
           color: loop.type === 'EMERGENCY_LOOP' ? 'rgba(239,107,115,0.9)' : 'rgba(255,138,61,0.86)',
           source: 'manual',
@@ -200,6 +396,14 @@
           start_frac: fracFor(s),
           end_frac: fracFor(e),
           length_beats: loop.length_beats,
+          start_beat_index:
+            loop.start_beat_index,
+          end_beat_index:
+            loop.end_beat_index,
+          grid_source:
+            loop.grid_source,
+          snap:
+            loop.snap,
           from_mark_type: loop.from_mark_type,
           color: loop.type === 'EMERGENCY_LOOP' ? 'rgba(239,107,115,0.9)' : 'rgba(255,224,108,0.92)',
           source: 'suggested',

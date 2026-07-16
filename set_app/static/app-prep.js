@@ -34,7 +34,7 @@
     let waveHover = { active: false, time_sec: null, snap_time_sec: null, snap_kind: '', snapped: false };
     let overviewHover = { active: false, time_sec: null, label: '' };
     const WAVE_SNAP_PREVIEW_PX = 10;
-    const DEFAULT_WAVE_ZOOM = 4.0;
+    const DEFAULT_WAVE_ZOOM = 10.0;
     const MAX_WAVE_ZOOM = 12;
     let waveZoom = DEFAULT_WAVE_ZOOM;
     let waveOffsetSec = 0;
@@ -251,6 +251,103 @@
       waveOffsetSec = Math.max(0, Math.min(state.maxOffset, t - state.windowSec / 2));
     }
 
+    function exactLoopBounds(
+      rawStart,
+      lengthBeats,
+      snap = trackPrepSnap
+    ) {
+      const beats = Array.isArray(
+        window.__waveDetail?.beat_grid
+      )
+        ? window.__waveDetail.beat_grid
+        : [];
+
+      const requestedBeats = Math.max(
+        1,
+        Math.min(
+          512,
+          Number(lengthBeats) || 1
+        )
+      );
+
+      const start = snapTimeToGrid(
+        rawStart,
+        snap
+      );
+
+      const validBeats = beats
+        .map((beat, index) => ({
+          time_sec: Number(beat?.time_sec),
+          beat: Number(beat?.beat || index + 1),
+          index
+        }))
+        .filter(item => Number.isFinite(item.time_sec))
+        .sort((a, b) => a.time_sec - b.time_sec);
+
+      if (validBeats.length) {
+        let startIndex = 0;
+        let bestDistance = Infinity;
+
+        validBeats.forEach((item, index) => {
+          const distance = Math.abs(
+            item.time_sec - start
+          );
+
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            startIndex = index;
+          }
+        });
+
+        const endIndex =
+          startIndex + requestedBeats;
+
+        if (endIndex < validBeats.length) {
+          const exactStart =
+            validBeats[startIndex].time_sec;
+          const exactEnd =
+            validBeats[endIndex].time_sec;
+
+          if (exactEnd > exactStart) {
+            return {
+              start_sec: Number(
+                exactStart.toFixed(3)
+              ),
+              end_sec: Number(
+                exactEnd.toFixed(3)
+              ),
+              start_beat_index: startIndex,
+              end_beat_index: endIndex,
+              grid_source: 'engine_grid'
+            };
+          }
+        }
+      }
+
+      const beatSec = estimateBeatSeconds();
+
+      if (!(beatSec > 0)) {
+        return null;
+      }
+
+      const end = clampTrackTime(
+        start + beatSec * requestedBeats
+      );
+
+      if (!(end > start)) {
+        return null;
+      }
+
+      return {
+        start_sec: Number(start.toFixed(3)),
+        end_sec: Number(end.toFixed(3)),
+        start_beat_index: null,
+        end_beat_index: null,
+        grid_source: 'bpm_fallback'
+      };
+    }
+
+
     function snapLabelForMode(snap = trackPrepSnap) {
       if (snap === 'bar') return 'Bar';
       if (snap === 'phrase16') return '16 beats';
@@ -373,6 +470,12 @@
         end_sec: Number(end.toFixed(3)),
         raw_start_sec: Number((loop?.raw_start_sec == null ? start : clampTrackTime(loop.raw_start_sec)).toFixed(3)),
         length_beats: lengthBeats,
+        start_beat_index:
+          loop?.start_beat_index ?? null,
+        end_beat_index:
+          loop?.end_beat_index ?? null,
+        grid_source:
+          loop?.grid_source || '',
         snap: loop?.snap || trackPrepSnap,
         source: 'manual',
         confidence: Number(loop?.confidence ?? 1)

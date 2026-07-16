@@ -658,14 +658,14 @@ ${suggestion.reason || ''}`
       renderHeader(box);
       if ((currentRows.rel || '') && currentRows.parent !== undefined) {
         const up = document.createElement('button');
-        up.className = 'item';
+        up.className = 'item folder-row';
         up.innerHTML = '<div></div><div class="folder">..</div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>';
         up.onclick = () => browse(currentRows.parent || '');
         box.appendChild(up);
       }
       currentRows.dirs.forEach(dir => {
         const btn = document.createElement('button');
-        btn.className = 'item';
+        btn.className = 'item folder-row';
         btn.innerHTML = `<div></div><div class="folder">${esc(dir.name)}</div><div></div><div></div><div></div><div>Папка</div><div></div><div></div><div></div>`;
         btn.onclick = () => browse(dir.rel);
         box.appendChild(btn);
