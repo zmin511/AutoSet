@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoSet</title>
-  <link rel="stylesheet" href="/static/app.css?v=1.5.46">
+  <link rel="stylesheet" href="/static/app.css?v=1.5.48">
 
 </head>
 <body>
@@ -135,6 +135,7 @@
 
     <div class="lower-workspace">
       <section class="library-frame">
+        <div class="library-config-row">
         <div class="path-config">
           <div>
             <label for="musicRoot">Музыкальная библиотека</label>
@@ -151,6 +152,20 @@
             </div>
           </div>
           <button id="savePaths">Сохранить пути</button>
+        </div>
+
+        <div class="analysis-controls" id="analysisControls">
+          <div class="analysis-info">
+            <span class="analysis-title">&#1041;&#1072;&#1079;&#1072; &#1072;&#1085;&#1072;&#1083;&#1080;&#1079;&#1072;</span>
+            <span class="analysis-status" id="analysisStatus">&#1047;&#1072;&#1075;&#1088;&#1091;&#1079;&#1082;&#1072;...</span>
+            <span class="analysis-details" id="analysisDetails"></span>
+            <div class="analysis-progress"><div id="analysisProgress"></div></div>
+          </div>
+          <div class="analysis-actions">
+            <button id="analysisUpdate" type="button">&#1054;&#1073;&#1085;&#1086;&#1074;&#1080;&#1090;&#1100; &#1072;&#1085;&#1072;&#1083;&#1080;&#1079;</button>
+            <button id="analysisRebuild" type="button" title="&#1055;&#1086;&#1083;&#1085;&#1099;&#1081; &#1087;&#1077;&#1088;&#1077;&#1089;&#1095;&#1105;&#1090; &#1080; &#1091;&#1076;&#1072;&#1083;&#1077;&#1085;&#1080;&#1077; &#1087;&#1088;&#1086;&#1092;&#1080;&#1083;&#1077;&#1081; &#1086;&#1090;&#1089;&#1091;&#1090;&#1089;&#1090;&#1074;&#1091;&#1102;&#1097;&#1080;&#1093; &#1090;&#1088;&#1077;&#1082;&#1086;&#1074;">&#1055;&#1077;&#1088;&#1077;&#1089;&#1095;&#1080;&#1090;&#1072;&#1090;&#1100; &#1074;&#1089;&#1105;</button>
+          </div>
+        </div>
         </div>
 
         <div class="crumb-search">
@@ -282,6 +297,7 @@
   <script src="/static/app-prep-manual.js?v=1.5.46"></script>
   <script src="/static/app-prep-storage.js?v=1.5.46"></script>
   <script src="/static/app-waveform.js?v=1.5.46"></script>
+  <script src="/static/app-analysis.js?v=1.5.48"></script>
   <script src="/static/app-actions.js?v=1.5.46"></script>
   <script src="/static/app-boot.js?v=1.5.46"></script>
 

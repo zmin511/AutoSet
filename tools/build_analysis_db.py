@@ -5,7 +5,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -92,6 +92,7 @@ def build_analysis_database(
     force: bool = False,
     dry_run: bool = False,
     prune: bool = False,
+    progress_callback: Optional[Callable[[BuildStats, int], None]] = None,
 ) -> BuildStats:
     stats = BuildStats()
 
@@ -109,6 +110,9 @@ def build_analysis_database(
 
         current_file_paths = set()
 
+        processed = 0
+
+
         for track in tracks:
             resolved_path = resolve_track_path(
                 track,
@@ -119,6 +123,13 @@ def build_analysis_database(
                 current_file_paths.add(
                     str(resolved_path)
                 )
+
+
+            processed += 1
+
+            if progress_callback is not None:
+
+                progress_callback(stats, processed)
 
         if not dry_run:
             analysis_connection = open_analysis_db(analysis_db_path)

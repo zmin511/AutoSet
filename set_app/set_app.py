@@ -84,7 +84,19 @@ APP_NAME = "AutoSet"
 APP_VERSION = "1.5.46"
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
-APP_STATE = {"startup_refresh": "waiting"}
+APP_STATE = {
+    "startup_refresh": "waiting",
+    "analysis": {
+        "running": False,
+        "mode": "",
+        "message": "waiting",
+        "started_at": None,
+        "finished_at": None,
+        "result": None,
+        "error": None,
+    },
+}
+ANALYSIS_JOB_LOCK = threading.Lock()
 
 
 def is_hidden_or_system_path(path):
@@ -3575,6 +3587,204 @@ def startup_refresh_new():
 
 
 
+
+def analysis_database_status():
+    from analysis_db import DEFAULT_ANALYSIS_DB_PATH
+
+    analysis_db_path = Path(DEFAULT_ANALYSIS_DB_PATH)
+    profile_count = 0
+    database_size = 0
+    modified_at = None
+
+    if analysis_db_path.is_file():
+        database_size = analysis_db_path.stat().st_size
+        modified_at = datetime.fromtimestamp(
+            analysis_db_path.stat().st_mtime
+        ).isoformat(timespec="seconds")
+
+        connection = sqlite3.connect(analysis_db_path)
+
+        try:
+            row = connection.execute(
+                "SELECT COUNT(*) FROM track_analysis"
+            ).fetchone()
+
+            profile_count = int(row[0] if row else 0)
+        except sqlite3.Error:
+            profile_count = 0
+        finally:
+            connection.close()
+
+    state = dict(APP_STATE.get("analysis") or {})
+
+    return {
+        "ok": True,
+        "database_path": str(analysis_db_path),
+        "database_exists": analysis_db_path.is_file(),
+        "database_size": database_size,
+        "profile_count": profile_count,
+        "modified_at": modified_at,
+        **state,
+    }
+
+
+def _run_analysis_job(mode):
+    from analysis_db import DEFAULT_ANALYSIS_DB_PATH
+    from build_analysis_db import build_analysis_database
+
+    started_at = datetime.now().isoformat(timespec="seconds")
+
+    with ANALYSIS_JOB_LOCK:
+        APP_STATE["analysis"] = {
+            "running": True,
+            "mode": mode,
+            "message": (
+                "full rebuild"
+                if mode == "rebuild"
+                else "incremental update"
+            ),
+            "started_at": started_at,
+            "finished_at": None,
+            "result": None,
+            "error": None,
+        }
+
+    try:
+        force = mode == "rebuild"
+        prune = mode == "rebuild"
+
+        started_monotonic = time.monotonic()
+
+        def report_progress(stats, processed):
+            total = max(0, int(stats.total or 0))
+            processed = max(0, int(processed or 0))
+            percent = (
+                round(processed * 100.0 / total, 1)
+                if total
+                else 0.0
+            )
+
+            with ANALYSIS_JOB_LOCK:
+                current = dict(
+                    APP_STATE.get("analysis") or {}
+                )
+
+                current.update({
+                    "running": True,
+                    "mode": mode,
+                    "message": "processing",
+                    "processed": processed,
+                    "total": total,
+                    "percent": percent,
+                    "elapsed_seconds": round(
+                        time.monotonic() - started_monotonic,
+                        1,
+                    ),
+                    "analyzed": int(stats.analyzed or 0),
+                    "skipped": int(stats.skipped or 0),
+                    "missing_files": int(
+                        stats.missing_files or 0
+                    ),
+                    "pruned": int(stats.pruned or 0),
+                    "errors": int(stats.errors or 0),
+                })
+
+                APP_STATE["analysis"] = current
+
+        stats = build_analysis_database(
+            engine_db_path=Path(DB_PATH),
+            music_root=Path(MUSIC_ROOT),
+            analysis_db_path=Path(DEFAULT_ANALYSIS_DB_PATH),
+            force=force,
+            prune=prune,
+            progress_callback=report_progress,
+        )
+
+        result = {
+            "total": stats.total,
+            "analyzed": stats.analyzed,
+            "skipped": stats.skipped,
+            "missing_files": stats.missing_files,
+            "pruned": stats.pruned,
+            "errors": stats.errors,
+        }
+
+        with ANALYSIS_JOB_LOCK:
+            APP_STATE["analysis"] = {
+                "running": False,
+                "mode": mode,
+                "message": "completed",
+                "started_at": started_at,
+                "finished_at": datetime.now().isoformat(
+                    timespec="seconds"
+                ),
+                "result": result,
+                "error": None,
+            }
+
+    except Exception as exc:
+        with ANALYSIS_JOB_LOCK:
+            APP_STATE["analysis"] = {
+                "running": False,
+                "mode": mode,
+                "message": "error",
+                "started_at": started_at,
+                "finished_at": datetime.now().isoformat(
+                    timespec="seconds"
+                ),
+                "result": None,
+                "error": repr(exc),
+            }
+
+
+def start_analysis_job(mode="update"):
+    if mode not in {"update", "rebuild", "startup"}:
+        return {
+            "ok": False,
+            "started": False,
+            "error": f"Unknown analysis mode: {mode}",
+        }
+
+    actual_mode = "update" if mode == "startup" else mode
+
+    with ANALYSIS_JOB_LOCK:
+        state = APP_STATE.get("analysis") or {}
+
+        if state.get("running"):
+            return {
+                "ok": False,
+                "started": False,
+                "error": "Analysis is already running",
+                "status": analysis_database_status(),
+            }
+
+        APP_STATE["analysis"] = {
+            "running": True,
+            "mode": actual_mode,
+            "message": "starting",
+            "started_at": datetime.now().isoformat(
+                timespec="seconds"
+            ),
+            "finished_at": None,
+            "result": None,
+            "error": None,
+        }
+
+    thread = threading.Thread(
+        target=_run_analysis_job,
+        args=(actual_mode,),
+        daemon=True,
+        name=f"autoset-analysis-{actual_mode}",
+    )
+    thread.start()
+
+    return {
+        "ok": True,
+        "started": True,
+        "mode": actual_mode,
+    }
+
+
 def get_transition_scores_payload(
     reference_track_id,
     candidate_track_ids,
@@ -3776,6 +3986,18 @@ class Handler(BaseHTTPRequestHandler):
                 "startup_refresh": APP_STATE.get("startup_refresh", ""),
             })
             return
+        if parsed.path == "/api/analysis-status":
+            try:
+                self.send_json(analysis_database_status())
+            except Exception as exc:
+                self.send_json(
+                    {
+                        "ok": False,
+                        "error": repr(exc),
+                    },
+                    status=500,
+                )
+            return
         if parsed.path == "/api/search":
             qs = parse_qs(parsed.query)
             query = qs.get("q", [""])[0]
@@ -3895,7 +4117,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks", "/api/export_track_marks_to_engine", "/api/suggest_track_marks", "/api/batch_suggest_track_marks"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks", "/api/export_track_marks_to_engine", "/api/suggest_track_marks", "/api/batch_suggest_track_marks", "/api/analysis-update", "/api/analysis-rebuild"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -3910,6 +4132,14 @@ class Handler(BaseHTTPRequestHandler):
                     "db_ready": DB_PATH.exists(),
                     "ready": DB_PATH.exists() and MUSIC_ROOT.exists() and BUILDER.exists(),
                 })
+            elif parsed_path == "/api/analysis-update":
+                self.send_json(
+                    start_analysis_job("update")
+                )
+            elif parsed_path == "/api/analysis-rebuild":
+                self.send_json(
+                    start_analysis_job("rebuild")
+                )
             elif parsed_path == "/api/track_marks":
                 self.send_json(write_track_marks(data))
             elif parsed_path == "/api/export_track_marks_to_engine":
@@ -4006,8 +4236,17 @@ def main():
         raise SystemExit("No free local port found in 8765..8779")
     url = f"http://127.0.0.1:{port}/"
     print(f"Set Builder UI: {url}")
-    threading.Thread(target=startup_refresh_new, daemon=True).start()
-    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    threading.Thread(
+        target=startup_refresh_new,
+        daemon=True,
+    ).start()
+
+    start_analysis_job("startup")
+
+    threading.Timer(
+        0.8,
+        lambda: webbrowser.open(url),
+    ).start()
     server.serve_forever()
 
 
