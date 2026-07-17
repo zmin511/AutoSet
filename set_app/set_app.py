@@ -3648,57 +3648,54 @@ def create_engine_playlist_from_tracks(tracks, folder_path, title):
     if not tracks:
         raise ValueError("Empty track list")
 
-    con = sqlite3.connect(str(DB_PATH))
-    try:
-        con.execute("PRAGMA foreign_keys=ON;")
+    def write_playlist(con, _backup_path):
         database_uuid = _get_engine_database_uuid(con)
-        with con:
-            parent_id = _ensure_folder_path(con, folder_path)
-            final_title = _next_available_playlist_title(con, parent_id, title)
-            list_id = _insert_playlist(con, parent_id, final_title)
+        parent_id = _ensure_folder_path(con, folder_path)
+        final_title = _next_available_playlist_title(con, parent_id, title)
+        list_id = _insert_playlist(con, parent_id, final_title)
 
-            missing = []
-            track_ids = []
-            for item in tracks:
-                track_id, missing_path = _engine_track_id_for_playlist_item(con, item)
-                if not track_id:
-                    missing.append(missing_path)
-                    continue
-                track_ids.append(int(track_id))
+        missing = []
+        track_ids = []
+        for item in tracks:
+            track_id, missing_path = _engine_track_id_for_playlist_item(con, item)
+            if not track_id:
+                missing.append(missing_path)
+                continue
+            track_ids.append(int(track_id))
 
-            if missing:
-                lines = ["Some tracks are not imported in Engine DB (Track.path not found):"]
-                for abs_path, engine_path in missing[:30]:
-                    lines.append(f"- {abs_path} (expected: {engine_path})")
-                if len(missing) > 30:
-                    lines.append(f"... and {len(missing) - 30} more")
-                raise ValueError("\n".join(lines))
+        if missing:
+            lines = ["Some tracks are not imported in Engine DB (Track.path not found):"]
+            for abs_path, engine_path in missing[:30]:
+                lines.append(f"- {abs_path} (expected: {engine_path})")
+            if len(missing) > 30:
+                lines.append(f"... and {len(missing) - 30} more")
+            raise ValueError("\n".join(lines))
 
-            # Insert rows in the same visible order as the playlist.
-            # Then patch nextEntityId in a second pass. This is closer to how
-            # Engine DJ writes playlist entities than reverse insertion.
-            entity_ids = []
-            for track_id in track_ids:
-                track_database_uuid = _database_uuid_for_track(con, track_id, database_uuid)
-                cur = con.execute(
-                    """
-                    INSERT INTO PlaylistEntity(listId, trackId, databaseUuid, nextEntityId, membershipReference)
-                    VALUES (?, ?, ?, 0, 0)
-                    """,
-                    (int(list_id), int(track_id), track_database_uuid),
-                )
-                entity_ids.append(int(cur.lastrowid))
+        # Insert rows in the same visible order as the playlist.
+        # Then patch nextEntityId in a second pass. This is closer to how
+        # Engine DJ writes playlist entities than reverse insertion.
+        entity_ids = []
+        for track_id in track_ids:
+            track_database_uuid = _database_uuid_for_track(con, track_id, database_uuid)
+            cur = con.execute(
+                """
+                INSERT INTO PlaylistEntity(listId, trackId, databaseUuid, nextEntityId, membershipReference)
+                VALUES (?, ?, ?, 0, 0)
+                """,
+                (int(list_id), int(track_id), track_database_uuid),
+            )
+            entity_ids.append(int(cur.lastrowid))
 
-            for current_entity_id, next_entity_id in zip(entity_ids, entity_ids[1:]):
-                con.execute(
-                    "UPDATE PlaylistEntity SET nextEntityId=? WHERE id=?",
-                    (int(next_entity_id), int(current_entity_id)),
-                )
+        for current_entity_id, next_entity_id in zip(entity_ids, entity_ids[1:]):
+            con.execute(
+                "UPDATE PlaylistEntity SET nextEntityId=? WHERE id=?",
+                (int(next_entity_id), int(current_entity_id)),
+            )
 
-            now = _engine_now_str()
-            con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (now, int(list_id)))
-            # Also touch the parent folder so Engine notices externally-created playlist changes.
-            con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (now, int(parent_id)))
+        now = _engine_now_str()
+        con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (now, int(list_id)))
+        # Also touch the parent folder so Engine notices externally-created playlist changes.
+        con.execute("UPDATE Playlist SET lastEditTime=? WHERE id=?", (now, int(parent_id)))
 
         return {
             "ok": True,
@@ -3707,8 +3704,54 @@ def create_engine_playlist_from_tracks(tracks, folder_path, title):
             "playlist_title": final_title,
             "output": f"Engine playlist created: {folder_path}/{final_title} (id={list_id}), tracks: {len(track_ids)}",
         }
-    finally:
-        con.close()
+
+    try:
+        result, _backup_path = safe_engine_db_write(
+            DB_PATH,
+            ENGINE_DB_BACKUP_DIR,
+            "create_engine_playlist",
+            write_playlist,
+            foreign_keys=True,
+        )
+        return result
+    except EngineDBWriteError as exc:
+        response = {
+            "ok": False,
+            "reason": exc.code,
+            "error": str(exc),
+            "db_path": str(DB_PATH),
+        }
+        if exc.backup_path is not None:
+            response["backup_path"] = str(exc.backup_path)
+        return response
+
+
+def create_engine_playlist(data):
+    playlist = _build_playlist_only(
+        data["track_id"],
+        data.get("role", "start"),
+        data.get("minutes", 90),
+        data.get("max_key_step", 3),
+        data.get("bpm_window", 5),
+        data.get("style_filter", []),
+    )
+    base_name = _engine_playlist_local_folder_name(playlist, data.get("role", "start"))
+    # First create the Engine playlist and use its collision-safe final name.
+    result = create_engine_playlist_from_tracks(
+        playlist.get("tracks") or [], data.get("folder", ""), base_name
+    )
+    if not result.get("ok"):
+        return result
+
+    engine_title = result.get("playlist_title") or base_name
+    local_out = write_local_playlist_no_copy(
+        playlist, SETS_DIR / engine_title, engine_title
+    )
+    result["local_playlist_folder"] = local_out["folder"]
+    result["local_m3u"] = local_out["m3u"]
+    result["local_csv"] = local_out["csv"]
+    result["engine_playlist_title"] = engine_title
+    return result
 
 
 def refresh_tags(rel):
@@ -4484,27 +4527,8 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed_path == "/api/build":
                 self.send_json(build_set(data["track_id"], data.get("role", "start"), data.get("minutes", 90), data.get("max_key_step", 3), data.get("bpm_window", 5), data.get("style_filter", [])))
             elif parsed_path == "/api/engine-playlist":
-                playlist = _build_playlist_only(
-                    data["track_id"],
-                    data.get("role", "start"),
-                    data.get("minutes", 90),
-                    data.get("max_key_step", 3),
-                    data.get("bpm_window", 5),
-                    data.get("style_filter", []),
-                )
-                base_name = _engine_playlist_local_folder_name(playlist, data.get("role", "start"))
-                # Сначала создаем Engine playlist и получаем фактическое имя.
-                # Если такое имя уже есть, create_engine_playlist_from_tracks добавит _2, _3 и т.д.
-                result = create_engine_playlist_from_tracks(playlist.get("tracks") or [], data.get("folder", ""), base_name)
-                engine_title = result.get("playlist_title") or base_name
-                # Локальный m3u/csv должен называться так же, как новый плейлист Engine,
-                # чтобы тестовые прогоны не перезаписывали один и тот же файл.
-                local_out = write_local_playlist_no_copy(playlist, SETS_DIR / engine_title, engine_title)
-                result["local_playlist_folder"] = local_out["folder"]
-                result["local_m3u"] = local_out["m3u"]
-                result["local_csv"] = local_out["csv"]
-                result["engine_playlist_title"] = engine_title
-                self.send_json(result)
+                result = create_engine_playlist(data)
+                self.send_json(result, status=200 if result.get("ok") else 500)
             elif parsed_path == "/api/refresh-tags":
                 self.send_json(refresh_tags(data.get("path", "")))
             elif parsed_path == "/api/write-energy-ratings":

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from set_app import set_app
+import engine_db_write  # noqa: E402
 from engine_db_write import (  # noqa: E402
     EngineDBBackupError,
     EngineDBLockedError,
@@ -90,6 +91,76 @@ def test_successful_change_is_committed(tmp_path):
     safe_engine_db_write(db_path, tmp_path / "backups", "commit", _write_value)
 
     assert _read_value(db_path) == "changed"
+
+
+def test_default_write_keeps_foreign_keys_disabled_and_still_succeeds(tmp_path):
+    db_path = tmp_path / "m.db"
+    _create_db(db_path)
+    observed = []
+
+    def write_without_foreign_keys(connection, _backup):
+        observed.append(connection.execute("PRAGMA foreign_keys").fetchone()[0])
+        connection.execute("UPDATE sample SET value = 'default-write' WHERE id = 1")
+
+    safe_engine_db_write(
+        db_path,
+        tmp_path / "backups",
+        "default_foreign_keys",
+        write_without_foreign_keys,
+    )
+
+    assert observed == [0]
+    assert _read_value(db_path) == "default-write"
+
+
+def test_unconfirmed_foreign_keys_fail_before_begin_backup_and_callback(
+    tmp_path, monkeypatch
+):
+    statements = []
+    callback_called = False
+
+    class FakeCursor:
+        def fetchone(self):
+            return (0,)
+
+    class FakeConnection:
+        row_factory = None
+
+        def execute(self, statement):
+            statements.append(statement)
+            return FakeCursor()
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        engine_db_write.sqlite3,
+        "connect",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+
+    def should_not_run(_connection, _backup):
+        nonlocal callback_called
+        callback_called = True
+
+    backup_dir = tmp_path / "backups"
+    with pytest.raises(EngineDBWriteError) as caught:
+        safe_engine_db_write(
+            tmp_path / "engine.db",
+            backup_dir,
+            "foreign_keys_not_enabled",
+            should_not_run,
+            foreign_keys=True,
+        )
+
+    assert caught.value.code == "write_failed"
+    assert str(caught.value) == "SQLite did not enable foreign key enforcement"
+    assert statements == ["PRAGMA foreign_keys=ON", "PRAGMA foreign_keys"]
+    assert callback_called is False
+    assert backup_dir.exists() is False
 
 
 def test_missing_source_db_is_not_created_or_backed_up(tmp_path):
