@@ -3,7 +3,6 @@ import json
 import mimetypes
 import os
 import re
-import shutil
 import socket
 import sqlite3
 import struct
@@ -28,6 +27,7 @@ BUILDER = TOOLS_DIR / "engine_set_builder.py"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 from engine_write_tags import write_audio_tags  # noqa: E402
+from engine_db_write import EngineDBWriteError, safe_engine_db_write  # noqa: E402
 from engine_cue_loop_codec import (  # noqa: E402
     build_loops,
     build_quick_cues,
@@ -2002,20 +2002,6 @@ def delete_track_marks(track_id):
     return payload
 
 
-def _engine_backup_db():
-    if not DB_PATH.exists():
-        raise FileNotFoundError(str(DB_PATH))
-    ENGINE_DB_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup = ENGINE_DB_BACKUP_DIR / f"{stamp}_m.db"
-    counter = 1
-    while backup.exists():
-        backup = ENGINE_DB_BACKUP_DIR / f"{stamp}_{counter}_m.db"
-        counter += 1
-    shutil.copy2(DB_PATH, backup)
-    return backup
-
-
 def _engine_track_export_row(con, track_id):
     return con.execute(
         """
@@ -2240,16 +2226,7 @@ def export_track_marks_to_engine(data):
     if not (plan.get("exported_cues") or plan.get("exported_loops")):
         return {"ok": False, "reason": "nothing_to_export", "warnings": plan.get("warnings") or []}
 
-    try:
-        backup = _engine_backup_db()
-    except Exception as exc:
-        return {"ok": False, "reason": "backup_failed", "error": str(exc)}
-
-    con = None
-    try:
-        con = sqlite3.connect(str(DB_PATH), timeout=1.0)
-        con.row_factory = sqlite3.Row
-        con.execute("BEGIN IMMEDIATE")
+    def write_export(con, backup):
         row = _engine_track_export_row(con, track_id)
         if not row:
             con.rollback()
@@ -2267,28 +2244,34 @@ def export_track_marks_to_engine(data):
             (plan["quickCues"], plan["loops"], track_id),
         )
         con.execute("UPDATE Track SET lastEditTime = ? WHERE id = ?", (_engine_now_str(), track_id))
-        con.commit()
-    except sqlite3.OperationalError as exc:
-        if con:
-            con.rollback()
-        reason = "db_locked" if "locked" in str(exc).lower() else "db_error"
-        return {"ok": False, "reason": reason, "error": str(exc), "backup_path": str(backup), "db_path": str(DB_PATH)}
-    except Exception as exc:
-        if con:
-            con.rollback()
-        return {"ok": False, "reason": "export_failed", "error": str(exc), "backup_path": str(backup)}
-    finally:
-        if con:
-            con.close()
+        return {
+            "ok": True,
+            "backup_path": str(backup),
+            "exported_cues": plan.get("exported_cues") or [],
+            "exported_loops": plan.get("exported_loops") or [],
+            "conflicts": [],
+            "warnings": plan.get("warnings") or [],
+        }
 
-    return {
-        "ok": True,
-        "backup_path": str(backup),
-        "exported_cues": plan.get("exported_cues") or [],
-        "exported_loops": plan.get("exported_loops") or [],
-        "conflicts": [],
-        "warnings": plan.get("warnings") or [],
-    }
+    try:
+        result, _backup = safe_engine_db_write(
+            DB_PATH,
+            ENGINE_DB_BACKUP_DIR,
+            "export_track_marks_to_engine",
+            write_export,
+        )
+        return result
+    except EngineDBWriteError as exc:
+        response = {
+            "ok": False,
+            "reason": exc.code,
+            "error": str(exc),
+            "db_path": str(DB_PATH),
+        }
+        if exc.backup_path is not None:
+            response["backup_path"] = str(exc.backup_path)
+        return response
+
 
 def get_track_performance(track_id):
     track_id = int(track_id)
