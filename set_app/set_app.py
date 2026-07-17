@@ -1381,35 +1381,37 @@ def _suggest_loop_bounds(
 
         end_index = start_index + length_beats
 
-        if end_index < len(valid_beats):
-            exact_start = float(
-                valid_beats[start_index]["time_sec"]
-            )
-            exact_end = float(
-                valid_beats[end_index]["time_sec"]
-            )
+        if end_index >= len(valid_beats):
+            return None
 
-            if exact_end > exact_start:
-                return {
-                    "start_sec": round(exact_start, 3),
-                    "end_sec": round(
-                        min(duration or exact_end, exact_end),
-                        3,
-                    ),
-                    "start_beat_index": start_index,
-                    "end_beat_index": end_index,
-                    "grid_source": "beat_grid",
-                }
+        exact_start = float(
+            valid_beats[start_index]["time_sec"]
+        )
+        exact_end = float(
+            valid_beats[end_index]["time_sec"]
+        )
+
+        if duration and exact_end > duration + 0.001:
+            return None
+
+        if exact_end > exact_start:
+            return {
+                "start_sec": round(exact_start, 3),
+                "end_sec": round(exact_end, 3),
+                "start_beat_index": start_index,
+                "end_beat_index": end_index,
+                "grid_source": "beat_grid",
+            }
 
     beat_sec = _suggest_beat_seconds(
         bpm,
         beat_grid,
     )
 
-    end_sec = min(
-        duration or (start_sec + beat_sec * length_beats),
-        start_sec + beat_sec * length_beats,
-    )
+    end_sec = start_sec + beat_sec * length_beats
+
+    if duration and end_sec > duration + 0.001:
+        return None
 
     if end_sec <= start_sec:
         return None
