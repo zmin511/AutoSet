@@ -2892,17 +2892,78 @@ def _file_tag_summary(result):
     }
 
 
+def _engine_db_preflight_failure(exc):
+    error = str(exc)
+    folded = error.casefold()
+    if any(
+        marker in folded
+        for marker in (
+            "database is locked",
+            "database table is locked",
+            "database is busy",
+        )
+    ):
+        reason = "db_locked"
+    elif any(
+        marker in folded
+        for marker in (
+            "file is not a database",
+            "database disk image is malformed",
+        )
+    ):
+        reason = "integrity_check_failed"
+    else:
+        reason = "write_failed"
+    return {
+        "ok": False,
+        "reason": reason,
+        "error": error,
+        "db_path": str(DB_PATH),
+    }
+
+
 def update_genre(track_id, genre):
     genre = _normalize_genre_value(genre)
-    with open_db() as con:
-        row = con.execute(
-            "SELECT id, filename, length, bitrate, bpmAnalyzed, key, rating, genre, artist, title, path FROM Track WHERE id = ?",
-            (int(track_id),),
-        ).fetchone()
-        if not row:
+    track_id = int(track_id)
+    db_uri = f"{Path(DB_PATH).expanduser().resolve().as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(db_uri, timeout=1.0, uri=True) as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute(
+                "SELECT id, filename, length, bitrate, bpmAnalyzed, key, rating, genre, artist, title, path FROM Track WHERE id = ?",
+                (track_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Track not found")
+    except sqlite3.Error as exc:
+        return _engine_db_preflight_failure(exc)
+
+    def write_genre(con, _backup_path):
+        if not con.execute("SELECT 1 FROM Track WHERE id = ?", (track_id,)).fetchone():
             raise ValueError("Track not found")
-        con.execute("UPDATE Track SET genre = ?, lastEditTime = ? WHERE id = ?", (genre, _engine_now_str(), int(track_id)))
-        con.commit()
+        con.execute(
+            "UPDATE Track SET genre = ?, lastEditTime = ? WHERE id = ?",
+            (genre, _engine_now_str(), track_id),
+        )
+
+    try:
+        safe_engine_db_write(
+            DB_PATH,
+            ENGINE_DB_BACKUP_DIR,
+            "update_track_genre",
+            write_genre,
+        )
+    except EngineDBWriteError as exc:
+        response = {
+            "ok": False,
+            "reason": exc.code,
+            "error": str(exc),
+            "db_path": str(DB_PATH),
+        }
+        if exc.backup_path is not None and Path(exc.backup_path).exists():
+            response["backup_path"] = str(exc.backup_path)
+        return response
+
     track = row_to_track(row)
     path = safe_media_path(track["rel"] or track["path"])
     file_result = _track_file_tag_result(
@@ -4554,7 +4615,8 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("source", "online"),
                 ))
             else:
-                self.send_json(update_genre(data["track_id"], data["genre"]))
+                result = update_genre(data["track_id"], data["genre"])
+                self.send_json(result, status=200 if result.get("ok") else 500)
         except Exception as exc:
             self.send_json({"ok": False, "error": repr(exc)}, status=500)
 
