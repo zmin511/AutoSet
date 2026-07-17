@@ -36,7 +36,9 @@ def _create_engine_playlist_db(path: Path) -> None:
             trackId INTEGER NOT NULL,
             databaseUuid TEXT NOT NULL,
             nextEntityId INTEGER NOT NULL,
-            membershipReference INTEGER NOT NULL
+            membershipReference INTEGER NOT NULL,
+            FOREIGN KEY (listId) REFERENCES Playlist(id),
+            FOREIGN KEY (trackId) REFERENCES Track(id)
         );
         INSERT INTO Information(uuid) VALUES ('library-uuid');
         INSERT INTO Track(id, path, databaseUuid) VALUES
@@ -118,6 +120,32 @@ def test_create_engine_playlist_preserves_success_contract_and_track_order(playl
     ]
 
 
+def test_playlist_enables_foreign_keys_before_transaction_callback(
+    playlist_db, monkeypatch
+):
+    _db_path, _backup_dir = playlist_db
+    original_get_database_uuid = set_app._get_engine_database_uuid
+    callback_state = []
+
+    def observe_callback(connection):
+        callback_state.append(
+            (
+                connection.execute("PRAGMA foreign_keys").fetchone()[0],
+                connection.in_transaction,
+            )
+        )
+        return original_get_database_uuid(connection)
+
+    monkeypatch.setattr(set_app, "_get_engine_database_uuid", observe_callback)
+
+    response = set_app.create_engine_playlist_from_tracks(
+        [{"id": 1}], "Event", "Synthetic Set"
+    )
+
+    assert response["ok"] is True
+    assert callback_state == [(1, True)]
+
+
 def test_create_engine_playlist_preserves_folder_hierarchy_and_list_links(playlist_db):
     db_path, _backup_dir = playlist_db
 
@@ -193,6 +221,29 @@ def test_partial_entity_insert_rolls_back_playlist_hierarchy_and_links(
     assert response["ok"] is False
     assert response["reason"] == "write_failed"
     assert "synthetic failure" in response["error"]
+    assert Path(response["backup_path"]).is_file()
+    assert _playlist_rows(db_path) == [(1, "Existing", 0, 0)]
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM PlaylistEntity").fetchone() == (0,)
+
+
+def test_foreign_key_failure_rolls_back_all_playlist_rows_and_returns_backup(
+    playlist_db, monkeypatch
+):
+    db_path, _backup_dir = playlist_db
+    monkeypatch.setattr(
+        set_app,
+        "_engine_track_id_for_playlist_item",
+        lambda _connection, _item: (999, None),
+    )
+
+    response = set_app.create_engine_playlist_from_tracks(
+        [{"id": 1}], "Event/Sub", "Synthetic Set"
+    )
+
+    assert response["ok"] is False
+    assert response["reason"] == "write_failed"
+    assert "FOREIGN KEY constraint failed" in response["error"]
     assert Path(response["backup_path"]).is_file()
     assert _playlist_rows(db_path) == [(1, "Existing", 0, 0)]
     with sqlite3.connect(db_path) as connection:

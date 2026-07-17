@@ -3711,6 +3711,7 @@ def create_engine_playlist_from_tracks(tracks, folder_path, title):
             ENGINE_DB_BACKUP_DIR,
             "create_engine_playlist",
             write_playlist,
+            foreign_keys=True,
         )
         return result
     except EngineDBWriteError as exc:

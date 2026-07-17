@@ -133,6 +133,7 @@ def safe_engine_db_write(
     *,
     lock_timeout: float = 1.0,
     sqlite_timeout: float = 1.0,
+    foreign_keys: bool = False,
 ) -> tuple[T, Path]:
     """Run one Engine DB write after taking a verified SQLite backup."""
 
@@ -152,6 +153,13 @@ def safe_engine_db_write(
                 uri=True,
             )
             connection.row_factory = sqlite3.Row
+            if foreign_keys:
+                connection.execute("PRAGMA foreign_keys=ON")
+                foreign_keys_row = connection.execute("PRAGMA foreign_keys").fetchone()
+                if foreign_keys_row is None or foreign_keys_row[0] != 1:
+                    raise EngineDBOperationError(
+                        "SQLite did not enable foreign key enforcement"
+                    )
             connection.execute("BEGIN IMMEDIATE")
         except sqlite3.Error as exc:
             if _is_locked_error(exc):
