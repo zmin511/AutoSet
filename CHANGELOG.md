@@ -4,7 +4,9 @@
 
 ## 1.5.48
 
-- Added 24 regression tests for Engine DJ `beatData` decoding and loop boundaries, bringing the suite to 64 tests.
+- Added 24 regression tests for Engine DJ `beatData` decoding and loop boundaries.
+- After those regression tests, the main test suite contained 64 tests.
+- Including the new version-consistency test, the AutoSet 1.5.48 suite contains 65 tests in total.
 - Prevented shortened loops from being produced when the requested loop would extend past the end of a track.
 - Strengthened CI with required Ruff, Python compilation, pytest, JavaScript syntax, and whitespace checks on Ubuntu and Windows.
 - Synchronized the application version, asset cache-busting, release notes, and README documentation through a root `VERSION` file and an automated consistency test.
