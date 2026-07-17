@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, TypeVar
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 
 T = TypeVar("T")
@@ -63,6 +64,13 @@ def _safe_operation_name(operation: str) -> str:
     return name[:64] or "engine_write"
 
 
+def _sqlite_file_uri(path: Path, mode: str) -> str:
+    """Build an encoded cross-platform SQLite file URI with an explicit mode."""
+
+    parts = urlsplit(path.expanduser().resolve().as_uri())
+    return urlunsplit(parts._replace(query=urlencode({"mode": mode})))
+
+
 def _backup_path(backup_dir: Path, operation: str) -> Path:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     suffix = uuid.uuid4().hex[:10]
@@ -82,7 +90,11 @@ def _create_verified_backup(
     try:
         backup_dir.mkdir(parents=True, exist_ok=True)
         backup_path = _backup_path(backup_dir, operation)
-        source = sqlite3.connect(str(db_path), timeout=sqlite_timeout)
+        source = sqlite3.connect(
+            _sqlite_file_uri(db_path, "ro"),
+            timeout=sqlite_timeout,
+            uri=True,
+        )
         destination = sqlite3.connect(str(backup_path), timeout=sqlite_timeout)
         source.backup(destination)
         destination.commit()
@@ -134,7 +146,11 @@ def safe_engine_db_write(
     backup_path = None
     try:
         try:
-            connection = sqlite3.connect(str(resolved_db), timeout=sqlite_timeout)
+            connection = sqlite3.connect(
+                _sqlite_file_uri(resolved_db, "rw"),
+                timeout=sqlite_timeout,
+                uri=True,
+            )
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN IMMEDIATE")
         except sqlite3.Error as exc:
@@ -168,6 +184,8 @@ def safe_engine_db_write(
                 pass
         raise
     finally:
-        if connection is not None:
-            connection.close()
-        _ENGINE_WRITE_LOCK.release()
+        try:
+            if connection is not None:
+                connection.close()
+        finally:
+            _ENGINE_WRITE_LOCK.release()

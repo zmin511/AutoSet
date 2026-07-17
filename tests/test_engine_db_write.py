@@ -92,6 +92,62 @@ def test_successful_change_is_committed(tmp_path):
     assert _read_value(db_path) == "changed"
 
 
+def test_missing_source_db_is_not_created_or_backed_up(tmp_path):
+    db_path = tmp_path / "missing engine.db"
+    backup_dir = tmp_path / "backups"
+    called = False
+
+    def should_not_run(_connection, _backup):
+        nonlocal called
+        called = True
+
+    with pytest.raises(EngineDBWriteError) as caught:
+        safe_engine_db_write(db_path, backup_dir, "missing", should_not_run)
+
+    assert caught.value.code == "write_failed"
+    assert called is False
+    assert db_path.exists() is False
+    assert list(backup_dir.glob("*.db")) == []
+
+
+def test_database_path_with_spaces_and_special_characters_works(tmp_path):
+    db_dir = tmp_path / "Engine Library #1"
+    db_dir.mkdir()
+    db_path = db_dir / "Engine database #1.db"
+    backup_dir = tmp_path / "backup directory"
+    _create_db(db_path)
+
+    safe_engine_db_write(db_path, backup_dir, "special path", _write_value)
+
+    assert _read_value(db_path) == "changed"
+    assert len(list(backup_dir.glob("*.db"))) == 1
+
+
+def test_open_error_releases_process_write_lock(tmp_path):
+    missing_db = tmp_path / "missing.db"
+    valid_db = tmp_path / "valid.db"
+    _create_db(valid_db)
+
+    with pytest.raises(EngineDBWriteError) as caught:
+        safe_engine_db_write(
+            missing_db,
+            tmp_path / "missing backups",
+            "missing",
+            _write_value,
+        )
+
+    assert caught.value.code == "write_failed"
+    result, _backup = safe_engine_db_write(
+        valid_db,
+        tmp_path / "valid backups",
+        "after_open_error",
+        _write_value,
+        lock_timeout=0.0,
+    )
+    assert result == "written"
+    assert _read_value(valid_db) == "changed"
+
+
 def test_exception_rolls_back_and_leaves_source_unchanged(tmp_path):
     db_path = tmp_path / "m.db"
     _create_db(db_path)
