@@ -2892,18 +2892,51 @@ def _file_tag_summary(result):
     }
 
 
+def _engine_db_preflight_failure(exc):
+    error = str(exc)
+    folded = error.casefold()
+    if any(
+        marker in folded
+        for marker in (
+            "database is locked",
+            "database table is locked",
+            "database is busy",
+        )
+    ):
+        reason = "db_locked"
+    elif any(
+        marker in folded
+        for marker in (
+            "file is not a database",
+            "database disk image is malformed",
+        )
+    ):
+        reason = "integrity_check_failed"
+    else:
+        reason = "write_failed"
+    return {
+        "ok": False,
+        "reason": reason,
+        "error": error,
+        "db_path": str(DB_PATH),
+    }
+
+
 def update_genre(track_id, genre):
     genre = _normalize_genre_value(genre)
     track_id = int(track_id)
     db_uri = f"{Path(DB_PATH).expanduser().resolve().as_uri()}?mode=ro"
-    with sqlite3.connect(db_uri, timeout=1.0, uri=True) as con:
-        con.row_factory = sqlite3.Row
-        row = con.execute(
-            "SELECT id, filename, length, bitrate, bpmAnalyzed, key, rating, genre, artist, title, path FROM Track WHERE id = ?",
-            (track_id,),
-        ).fetchone()
-        if not row:
-            raise ValueError("Track not found")
+    try:
+        with sqlite3.connect(db_uri, timeout=1.0, uri=True) as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute(
+                "SELECT id, filename, length, bitrate, bpmAnalyzed, key, rating, genre, artist, title, path FROM Track WHERE id = ?",
+                (track_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Track not found")
+    except sqlite3.Error as exc:
+        return _engine_db_preflight_failure(exc)
 
     def write_genre(con, _backup_path):
         if not con.execute("SELECT 1 FROM Track WHERE id = ?", (track_id,)).fetchone():

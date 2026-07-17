@@ -208,15 +208,87 @@ def test_missing_database_is_not_created(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(set_app, "DB_PATH", db_path)
     monkeypatch.setattr(set_app, "ENGINE_DB_BACKUP_DIR", backup_dir)
-    monkeypatch.setattr(set_app, "safe_media_path", lambda path: path)
     monkeypatch.setattr(
-        set_app, "_track_file_tag_result", lambda *_args, **_kwargs: calls.append(True)
+        set_app, "safe_engine_db_write", lambda *_args, **_kwargs: calls.append("safe")
+    )
+    monkeypatch.setattr(
+        set_app, "safe_media_path", lambda _path: calls.append("media")
+    )
+    monkeypatch.setattr(
+        set_app,
+        "_track_file_tag_result",
+        lambda *_args, **_kwargs: calls.append("tags"),
     )
 
-    with pytest.raises(sqlite3.OperationalError):
-        set_app.update_genre(1, "Tech House")
+    response = set_app.update_genre(1, "Tech House")
 
+    assert response["ok"] is False
+    assert response["reason"] == "write_failed"
+    assert response["db_path"] == str(db_path)
+    assert response["error"]
+    assert "backup_path" not in response
     assert not db_path.exists()
+    assert not backup_dir.exists()
+    assert calls == []
+
+
+def test_preflight_external_exclusive_lock_returns_structured_failure(
+    tmp_path, monkeypatch
+):
+    db_path, backup_dir, _audio_path, calls, _file_result = _configure_update(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(
+        set_app, "safe_engine_db_write", lambda *_args, **_kwargs: calls.append("safe")
+    )
+    monkeypatch.setattr(
+        set_app, "safe_media_path", lambda _path: calls.append("media")
+    )
+    locker = sqlite3.connect(db_path, timeout=0)
+    locker.execute("BEGIN EXCLUSIVE")
+    try:
+        response = set_app.update_genre(1, "Tech House")
+    finally:
+        locker.rollback()
+        locker.close()
+
+    assert response["ok"] is False
+    assert response["reason"] == "db_locked"
+    assert response["db_path"] == str(db_path)
+    assert response["error"]
+    assert "backup_path" not in response
+    assert _read_track(db_path)["genre"] == "House"
+    assert not backup_dir.exists()
+    assert calls == []
+
+
+def test_preflight_corrupt_database_returns_integrity_failure(tmp_path, monkeypatch):
+    db_path = tmp_path / "corrupt.db"
+    backup_dir = tmp_path / "backups"
+    calls = []
+    db_path.write_bytes(b"synthetic corrupt sqlite content")
+    monkeypatch.setattr(set_app, "DB_PATH", db_path)
+    monkeypatch.setattr(set_app, "ENGINE_DB_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(
+        set_app, "safe_engine_db_write", lambda *_args, **_kwargs: calls.append("safe")
+    )
+    monkeypatch.setattr(
+        set_app, "safe_media_path", lambda _path: calls.append("media")
+    )
+    monkeypatch.setattr(
+        set_app,
+        "_track_file_tag_result",
+        lambda *_args, **_kwargs: calls.append("tags"),
+    )
+
+    response = set_app.update_genre(1, "Tech House")
+
+    assert response["ok"] is False
+    assert response["reason"] == "integrity_check_failed"
+    assert response["db_path"] == str(db_path)
+    assert response["error"]
+    assert "backup_path" not in response
+    assert db_path.read_bytes() == b"synthetic corrupt sqlite content"
     assert not backup_dir.exists()
     assert calls == []
 
