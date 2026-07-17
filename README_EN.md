@@ -1,6 +1,6 @@
 # AutoSet
 
-Version: `1.5.46`
+Version: `1.5.48`
 
 `AutoSet` is a local portable companion app for **Denon Engine DJ**. It
 helps build a harmonic DJ set from a selected reference track, inspect tracks
