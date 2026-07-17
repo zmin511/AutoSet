@@ -7,34 +7,44 @@ on:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11']
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
 
       - name: Compile Python files
-        run: python -m compileall set_app tools
+        run: python -m compileall set_app tools tests
 
-      - name: Ruff lint (non-blocking while historical warnings are cleaned up)
-        continue-on-error: true
-        run: python -m ruff check set_app tools
+      - name: Ruff lint
+        run: python -m ruff check --no-cache set_app tools tests
 
       - name: Pytest
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          tests = list(Path('.').glob('test_*.py')) + list(Path('.').glob('*_test.py')) + list(Path('tests').glob('test_*.py')) if Path('tests').exists() else list(Path('.').glob('test_*.py')) + list(Path('.').glob('*_test.py'))
-          if not tests:
-              print('No pytest tests found; skipping pytest run.')
-              raise SystemExit(0)
-          PY
-          python -m pytest
+        run: python -m pytest
+
+      - name: Check JavaScript syntax
+        run: python -c "import pathlib, subprocess; [subprocess.run(['node', '--check', str(path)], check=True) for path in sorted(pathlib.Path('set_app/static').glob('*.js'))]"
+
+      - name: Check whitespace
+        run: git diff --check "${{ github.event.pull_request.base.sha || github.event.before }}"

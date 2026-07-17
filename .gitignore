@@ -42,6 +42,7 @@ backups/
 *.ogg
 .pytest_cache/
 .ruff_cache/
+.venv/
 *_BACKUP_*.zip
 *_AUDIT_*.zip
 *_STABLE_*.zip

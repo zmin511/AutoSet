@@ -2,6 +2,22 @@
 
 Формат: `MAJOR.MINOR.PATCH`
 
+## 1.5.48
+
+- Added 24 regression tests for Engine DJ `beatData` decoding and loop boundaries, bringing the suite to 64 tests.
+- Prevented shortened loops from being produced when the requested loop would extend past the end of a track.
+- Strengthened CI with required Ruff, Python compilation, pytest, JavaScript syntax, and whitespace checks on Ubuntu and Windows.
+- Synchronized the application version, asset cache-busting, release notes, and README documentation through a root `VERSION` file and an automated consistency test.
+
+## 1.5.47
+
+- Added management of the local AutoSet `analysis.db` without modifying the Engine DJ database or audio files.
+- Decoded the real Engine DJ beat grid from `PerformanceData.beatData` and exposed its phase and beat metadata.
+- Built exact loop boundaries from Engine beat positions and added loop diagnostics.
+- Added sample-accurate WebAudio loop playback.
+- Added magnetic waveform snapping to beats, bars, and phrases.
+- Fixed folder display and refresh behavior in the library browser.
+
 ## 1.5.46
 
 - Added a sortable Transition column to the music-library table.

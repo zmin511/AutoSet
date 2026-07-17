@@ -81,7 +81,21 @@ AUDIO_MIME_TYPES = {".mp3": "audio/mpeg", ".flac": "audio/flac", ".m4a": "audio/
 SYSTEM_FILE_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
 SYSTEM_DIR_NAMES = {"__macosx", ".trashes", ".spotlight-v100", ".fseventsd", "$recycle.bin", "system volume information"}
 APP_NAME = "AutoSet"
-APP_VERSION = "1.5.47"
+VERSION_PATH = PROJECT_DIR / "VERSION"
+DEFAULT_APP_VERSION = "1.5.48"
+
+
+def _read_app_version():
+    try:
+        version = VERSION_PATH.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return DEFAULT_APP_VERSION
+    if re.fullmatch(r"\d+\.\d+\.\d+", version):
+        return version
+    return DEFAULT_APP_VERSION
+
+
+APP_VERSION = _read_app_version()
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {
