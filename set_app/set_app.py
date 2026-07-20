@@ -2960,33 +2960,16 @@ def _submit_post_commit_audio_tags(jobs):
             "ok": False,
             "queued": 0,
             "completed": 0,
-            "pending": len(jobs),
-            "error": warning,
+            "pending": 0,
+            "unqueued": len(jobs),
+            "queue_error": warning,
             "retry_queue_path": str(AUDIO_TAG_RETRY_QUEUE_PATH),
         }, failed
 
-    by_id = {
-        item["id"]: item["result"]
+    file_results = [
+        item["result"]
         for item in outcome.get("results", [])
-    }
-    file_results = []
-    for queued in outcome.get("jobs", []):
-        result = by_id.get(queued["id"])
-        if result is None and queued.get("status") == "completed":
-            result = {
-                "ok": True,
-                "file_tags_updated": False,
-                "file_tags_warning": None,
-                "written_fields": [],
-            }
-        if result is None:
-            result = {
-                "ok": False,
-                "file_tags_updated": False,
-                "file_tags_warning": queued.get("last_error") or "Audio tag write is pending",
-                "written_fields": [],
-            }
-        file_results.append(result)
+    ]
     return outcome, file_results
 
 

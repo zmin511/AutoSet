@@ -2,9 +2,12 @@ import ast
 import io
 import json
 import sqlite3
+import threading
+import time
 from pathlib import Path
 
 from set_app import set_app
+import audio_tag_post_commit
 from audio_tag_post_commit import (
     audio_tag_queue_status,
     enqueue_audio_tag_jobs,
@@ -65,7 +68,7 @@ def test_job_is_committed_pending_before_audio_writer_runs(tmp_path):
         writer=observe,
     )
 
-    assert observations == [("pending", 1, str(audio_path))]
+    assert observations == [("processing", 1, str(audio_path))]
     assert result["queued"] == result["completed"] == 1
     assert _queue_rows(queue_path)[0]["status"] == "completed"
 
@@ -229,7 +232,7 @@ def test_update_genre_commits_db_then_enqueues_then_writes(tmp_path, monkeypatch
     response = set_app.update_genre(1, "Tech House")
 
     assert response["ok"] is True
-    assert observations == [("Tech House", "pending")]
+    assert observations == [("Tech House", "processing")]
     assert _queue_rows(queue_path)[0]["status"] == "completed"
 
 
@@ -315,3 +318,294 @@ def test_startup_does_not_invoke_retry_queue_processing():
 
     assert "retry_pending_audio_tags" not in names
     assert "process_pending_audio_tag_jobs" not in names
+
+
+def test_two_parallel_workers_execute_writer_exactly_once(tmp_path):
+    queue_path = tmp_path / "retry.sqlite3"
+    queued = enqueue_audio_tag_jobs(
+        queue_path,
+        [_job(tmp_path / "track.mp3", "House")],
+    )
+    barrier = threading.Barrier(2)
+    calls = []
+    calls_lock = threading.Lock()
+    outcomes = []
+
+    def writer(job):
+        with calls_lock:
+            calls.append(job["claim_token"])
+        time.sleep(0.05)
+        return _success(job)
+
+    def worker():
+        barrier.wait()
+        outcomes.append(
+            process_pending_audio_tag_jobs(queue_path, writer=writer)
+        )
+
+    threads = [threading.Thread(target=worker) for _index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(calls) == 1
+    assert sum(outcome["attempted"] for outcome in outcomes) == 1
+    assert _queue_rows(queue_path)[0]["id"] == queued[0]["id"]
+    assert _queue_rows(queue_path)[0]["status"] == "completed"
+
+
+def test_expired_processing_job_is_reclaimed_after_simulated_crash(tmp_path):
+    queue_path = tmp_path / "retry.sqlite3"
+    job = enqueue_audio_tag_jobs(
+        queue_path,
+        [_job(tmp_path / "track.mp3", "House")],
+    )[0]
+    with sqlite3.connect(queue_path) as connection:
+        connection.execute(
+            """
+            UPDATE audio_tag_jobs
+            SET status = 'processing', claim_token = 'crashed-worker',
+                lease_expires_at = '2000-01-01T00:00:00.000000+00:00', attempts = 1
+            WHERE id = ?
+            """,
+            (job["id"],),
+        )
+    tokens = []
+
+    result = process_pending_audio_tag_jobs(
+        queue_path,
+        writer=lambda claimed: tokens.append(claimed["claim_token"])
+        or _success(claimed),
+    )
+
+    row = _queue_rows(queue_path)[0]
+    assert result["attempted"] == result["completed"] == 1
+    assert tokens and tokens != ["crashed-worker"]
+    assert row["status"] == "completed"
+    assert row["attempts"] == 2
+    assert row["claim_token"] is None
+    assert row["lease_expires_at"] is None
+
+
+def test_active_processing_lease_is_not_stolen(tmp_path):
+    queue_path = tmp_path / "retry.sqlite3"
+    job = enqueue_audio_tag_jobs(
+        queue_path,
+        [_job(tmp_path / "track.mp3", "House")],
+    )[0]
+    with sqlite3.connect(queue_path) as connection:
+        connection.execute(
+            """
+            UPDATE audio_tag_jobs
+            SET status = 'processing', claim_token = 'active-worker',
+                lease_expires_at = '2999-01-01T00:00:00.000000+00:00', attempts = 1
+            WHERE id = ?
+            """,
+            (job["id"],),
+        )
+    calls = []
+
+    result = process_pending_audio_tag_jobs(
+        queue_path,
+        writer=lambda claimed: calls.append(claimed) or _success(claimed),
+    )
+
+    row = _queue_rows(queue_path)[0]
+    assert result["attempted"] == 0
+    assert result["processing"] == 1
+    assert calls == []
+    assert row["status"] == "processing"
+    assert row["claim_token"] == "active-worker"
+    assert row["attempts"] == 1
+
+
+def test_only_claim_owner_can_complete_processing_job(tmp_path):
+    queue_path = tmp_path / "retry.sqlite3"
+    job = enqueue_audio_tag_jobs(
+        queue_path,
+        [_job(tmp_path / "track.mp3", "House")],
+    )[0]
+    claimed = audio_tag_post_commit._claim_job(
+        queue_path,
+        str(job["id"]),
+        0,
+        lease_seconds=300,
+    )
+    result = _success(claimed)
+
+    assert audio_tag_post_commit._complete_claim(
+        queue_path,
+        str(job["id"]),
+        "wrong-token",
+        status="completed",
+        error=None,
+        result=result,
+    ) is False
+    assert _queue_rows(queue_path)[0]["status"] == "processing"
+    assert audio_tag_post_commit._complete_claim(
+        queue_path,
+        str(job["id"]),
+        str(claimed["claim_token"]),
+        status="completed",
+        error=None,
+        result=result,
+    ) is True
+    assert _queue_rows(queue_path)[0]["status"] == "completed"
+
+
+def test_reused_pending_and_completed_jobs_keep_input_result_order(tmp_path):
+    queue_path = tmp_path / "retry.sqlite3"
+    completed_job = _job(tmp_path / "completed.mp3", "House", track_id=1)
+    pending_job = _job(tmp_path / "pending.mp3", "Disco", track_id=2)
+    submit_audio_tag_jobs(queue_path, [completed_job], writer=_success)
+    submit_audio_tag_jobs(
+        queue_path,
+        [pending_job],
+        writer=lambda _job: {
+            "ok": False,
+            "file_tags_updated": False,
+            "file_tags_warning": "still locked",
+            "written_fields": [],
+        },
+    )
+    writes = []
+
+    result = submit_audio_tag_jobs(
+        queue_path,
+        [pending_job, completed_job],
+        writer=lambda job: writes.append(Path(job["path"]).name) or _success(job),
+    )
+
+    assert [Path(item["path"]).name for item in result["results"]] == [
+        "pending.mp3",
+        "completed.mp3",
+    ]
+    assert [item["input_index"] for item in result["results"]] == [0, 1]
+    assert [item["status"] for item in result["results"]] == [
+        "completed",
+        "completed",
+    ]
+    assert writes == ["pending.mp3"]
+
+
+def test_duplicate_idempotency_inputs_return_two_results_but_write_once(tmp_path):
+    queue_path = tmp_path / "retry.sqlite3"
+    duplicate = _job(tmp_path / "track.mp3", "House")
+    writes = []
+
+    result = submit_audio_tag_jobs(
+        queue_path,
+        [duplicate, duplicate],
+        writer=lambda job: writes.append(job["id"]) or _success(job),
+    )
+
+    assert result["queued"] == 1
+    assert result["reused"] == 1
+    assert result["attempted"] == 1
+    assert len(result["results"]) == 2
+    assert [item["input_index"] for item in result["results"]] == [0, 1]
+    assert result["results"][0]["id"] == result["results"][1]["id"]
+    assert len(writes) == 1
+
+
+def test_file_warning_stays_attached_to_correct_input(tmp_path, monkeypatch):
+    queue_path = tmp_path / "retry.sqlite3"
+    monkeypatch.setattr(set_app, "AUDIO_TAG_RETRY_QUEUE_PATH", queue_path)
+    jobs = [
+        set_app._audio_tag_queue_job(
+            "bulk_update_genres",
+            tmp_path / "one.mp3",
+            track_id=1,
+            genre="House",
+        ),
+        set_app._audio_tag_queue_job(
+            "bulk_update_genres",
+            tmp_path / "two.mp3",
+            track_id=2,
+            genre="Disco",
+        ),
+    ]
+
+    def tags(path, **_kwargs):
+        warning = "two.mp3 is locked" if Path(path).name == "two.mp3" else None
+        return {
+            "ok": warning is None,
+            "file_tags_updated": warning is None,
+            "file_tags_warning": warning,
+            "written_fields": ["genre"] if warning is None else [],
+        }
+
+    monkeypatch.setattr(set_app, "_track_file_tag_result", tags)
+
+    outcome, file_results = set_app._submit_post_commit_audio_tags(jobs)
+
+    assert [Path(item["path"]).name for item in outcome["results"]] == [
+        "one.mp3",
+        "two.mp3",
+    ]
+    assert file_results[0]["file_tags_warning"] is None
+    assert file_results[1]["file_tags_warning"] == "two.mp3 is locked"
+
+
+def test_linux_paths_are_case_sensitive_for_idempotency(tmp_path):
+    queue_path = tmp_path / "linux.sqlite3"
+    jobs = enqueue_audio_tag_jobs(
+        queue_path,
+        [
+            _job(tmp_path / "Track.mp3", "House"),
+            _job(tmp_path / "track.mp3", "House"),
+        ],
+        platform_name="posix",
+    )
+
+    assert len(jobs) == 2
+    assert jobs[0]["id"] != jobs[1]["id"]
+    assert len(_queue_rows(queue_path)) == 2
+
+
+def test_windows_paths_are_case_insensitive_for_idempotency(tmp_path):
+    queue_path = tmp_path / "windows.sqlite3"
+    jobs = enqueue_audio_tag_jobs(
+        queue_path,
+        [
+            _job(r"C:\Music\Track.mp3", "House"),
+            _job(r"c:\music\track.mp3", "House"),
+        ],
+        platform_name="nt",
+    )
+
+    assert len(jobs) == 2
+    assert jobs[0]["id"] == jobs[1]["id"]
+    assert len(_queue_rows(queue_path)) == 1
+
+
+def test_queue_database_failure_reports_unqueued_not_pending(tmp_path, monkeypatch):
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_text("blocked", encoding="utf-8")
+    queue_path = blocked_parent / "retry.sqlite3"
+    monkeypatch.setattr(set_app, "AUDIO_TAG_RETRY_QUEUE_PATH", queue_path)
+    writes = []
+    monkeypatch.setattr(
+        set_app,
+        "_track_file_tag_result",
+        lambda *_args, **_kwargs: writes.append("write"),
+    )
+    jobs = [
+        set_app._audio_tag_queue_job(
+            "update_genre",
+            tmp_path / "track.mp3",
+            track_id=1,
+            genre="House",
+        )
+    ]
+
+    outcome, file_results = set_app._submit_post_commit_audio_tags(jobs)
+
+    assert outcome["ok"] is False
+    assert outcome["queued"] == 0
+    assert outcome["pending"] == 0
+    assert outcome["unqueued"] == 1
+    assert "queue" in outcome["queue_error"].casefold()
+    assert file_results[0]["file_tags_warning"] == outcome["queue_error"]
+    assert writes == []
