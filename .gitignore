@@ -4,6 +4,7 @@ tag_backups/
 debug/
 set_app/paths.json
 set_app/track_marks/
+set_app/runtime/
 set_app/index1.html
 set_app/set_app1.py
 **/__pycache__/
