@@ -2,7 +2,6 @@ import argparse
 import csv
 import os
 import re
-import shutil
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
+from audio_tag_backup import create_verified_audio_backup
 from engine_config import PATHS
 from engine_db_read import open_engine_db_read_only
 
@@ -321,26 +321,21 @@ def decide(fp: Path, meta: Optional[EngineMeta]) -> Decision:
 
 
 def ensure_backup(fp: Path, backup_root: Path, music_root: Path) -> Path:
-    try:
-        rel = fp.resolve().relative_to(music_root.resolve())
-    except Exception:
-        rel = Path(fp.name)
-    dst = backup_root / rel
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if not dst.exists():
-        shutil.copy2(fp, dst)
-    return dst
+    return create_verified_audio_backup(fp, backup_root, music_root)
 
 
-def write_mp3_tags(fp: Path, decision: Decision) -> None:
+def write_mp3_tags(
+    fp: Path,
+    decision: Decision,
+    backup_root: Path,
+    music_root: Path,
+) -> bool:
     from mutagen.id3 import ID3, ID3NoHeaderError, TCON, TXXX
 
     try:
         tags = ID3(str(fp))
     except ID3NoHeaderError:
         tags = ID3()
-    tags.delall("TCON")
-    tags.add(TCON(encoding=3, text=[decision.genre]))
     values = {
         "DJ_STYLE": decision.style,
         "DJ_GENRE_FAMILY": decision.family,
@@ -348,33 +343,72 @@ def write_mp3_tags(fp: Path, decision: Decision) -> None:
         "DJ_STEM_TYPE": decision.stem_type,
         "DJ_ENERGY": str(decision.energy),
     }
+    old_genre = ""
+    genre_frames = tags.getall("TCON")
+    if genre_frames and getattr(genre_frames[0], "text", None):
+        old_genre = str(genre_frames[0].text[0] or "")
+    current_values = {}
+    for frame in tags.getall("TXXX"):
+        desc = getattr(frame, "desc", "")
+        if desc in values:
+            current_values[desc] = str(
+                frame.text[0] if getattr(frame, "text", None) else ""
+            )
+    if old_genre == decision.genre and current_values == values:
+        return False
+
+    tags.delall("TCON")
+    tags.add(TCON(encoding=3, text=[decision.genre]))
     for desc, value in values.items():
         tags.delall("TXXX:" + desc)
         tags.add(TXXX(encoding=3, desc=desc, text=value))
+    ensure_backup(fp, backup_root, music_root)
     tags.save(str(fp), v2_version=3)
+    return True
 
 
-def write_flac_tags(fp: Path, decision: Decision) -> None:
+def write_flac_tags(
+    fp: Path,
+    decision: Decision,
+    backup_root: Path,
+    music_root: Path,
+) -> bool:
     from mutagen.flac import FLAC
 
     tags = FLAC(str(fp))
-    tags["GENRE"] = [decision.genre]
-    tags["DJ_STYLE"] = [decision.style]
-    tags["DJ_GENRE_FAMILY"] = [decision.family]
-    tags["DJ_SET_OK"] = ["1" if decision.set_ok else "0"]
-    tags["DJ_STEM_TYPE"] = [decision.stem_type]
-    tags["DJ_ENERGY"] = [str(decision.energy)]
+    values = {
+        "GENRE": decision.genre,
+        "DJ_STYLE": decision.style,
+        "DJ_GENRE_FAMILY": decision.family,
+        "DJ_SET_OK": "1" if decision.set_ok else "0",
+        "DJ_STEM_TYPE": decision.stem_type,
+        "DJ_ENERGY": str(decision.energy),
+    }
+    if all(
+        str((tags.get(key, [""])[0] or "")) == value
+        for key, value in values.items()
+    ):
+        return False
+    for key, value in values.items():
+        tags[key] = [value]
+    ensure_backup(fp, backup_root, music_root)
     tags.save()
+    return True
 
 
-def write_tags(fp: Path, decision: Decision) -> str:
+def write_tags(
+    fp: Path,
+    decision: Decision,
+    backup_root: Path = Path(DEFAULT_BACKUP_DIR),
+    music_root: Path = Path(DEFAULT_MUSIC_ROOT),
+) -> str:
     ext = fp.suffix.lower()
     if ext == ".mp3":
-        write_mp3_tags(fp, decision)
-        return "written"
+        changed = write_mp3_tags(fp, decision, backup_root, music_root)
+        return "written" if changed else "skip"
     if ext == ".flac":
-        write_flac_tags(fp, decision)
-        return "written"
+        changed = write_flac_tags(fp, decision, backup_root, music_root)
+        return "written" if changed else "skip"
     return "unsupported"
 
 
@@ -392,11 +426,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--backup-dir", default=DEFAULT_BACKUP_DIR)
     ap.add_argument("--apply", action="store_true")
     ap.add_argument(
-        "--no-backup",
-        action="store_true",
-        help="Do not copy source files before writing tags.",
-    )
-    ap.add_argument(
         "--min-confidence",
         choices=["low", "medium", "high"],
         default="low",
@@ -412,9 +441,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     run_slug = f"{slugify_path(target)}_{stamp}"
     report_path = report_root / f"new_genre_review_{run_slug}.csv"
     backup_root = Path(args.backup_dir) / f"new_genre_review_{run_slug}"
-    if args.apply and not args.no_backup:
-        backup_root.mkdir(parents=True, exist_ok=True)
-
     index = load_engine_index(args.db_path)
     unique_name_index = build_unique_name_index(index)
     files = list(audio_files(target))
@@ -456,9 +482,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         action = "skipped_confidence"
                         stats[action] = stats.get(action, 0) + 1
                     else:
-                        if not args.no_backup:
-                            ensure_backup(fp, backup_root, music_root)
-                        action = write_tags(fp, decision)
+                        action = write_tags(fp, decision, backup_root, music_root)
                         stats[action] = stats.get(action, 0) + 1
                 else:
                     stats["dry_run"] += 1
@@ -489,7 +513,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"Files: {len(files)}")
     print(f"Report: {report_path}")
     print(f"Apply: {bool(args.apply)}")
-    if args.apply and not args.no_backup:
+    if args.apply:
         print(f"Backup: {backup_root}")
     print("By confidence:")
     for k in sorted(confidence_stats):

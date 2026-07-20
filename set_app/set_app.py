@@ -48,6 +48,7 @@ INDEX_HTML = APP_DIR / "index.html"
 STATIC_DIR = APP_DIR / "static"
 TRACK_MARKS_DIR = APP_DIR / "track_marks"
 ENGINE_DB_BACKUP_DIR = APP_DIR / "backups" / "engine_db"
+AUDIO_TAG_BACKUP_DIR = PROJECT_DIR / "tag_backups"
 # Engine cue/loop raw positions are stored as frames at 44100 Hz based on diff diagnostics.
 ENGINE_CUE_TIME_SCALE = 44100.0
 ENGINE_MARK_TO_CUE_SLOT = {
@@ -2884,6 +2885,8 @@ def _track_file_tag_result(path, genre=None, bpm=None, key=None, rating=None):
         key=key_text,
         autoset_styles=genre,
         rating=rating_stars,
+        backup_dir=AUDIO_TAG_BACKUP_DIR,
+        music_root=MUSIC_ROOT,
     ).as_dict()
     return result
 
@@ -3962,6 +3965,7 @@ def refresh_tags(rel):
         "--key-format",
         "camelot",
         "--write-bitrate-tag",
+        "--backup-files",
         "--apply",
         str(target),
     ]
@@ -4177,7 +4181,6 @@ def refresh_genres(rel):
         "--backup-dir",
         str(PROJECT_DIR / "tag_backups"),
         "--apply",
-        "--no-backup",
         "--min-confidence",
         "medium",
     ]
