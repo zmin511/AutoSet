@@ -2,7 +2,6 @@ import argparse
 import csv
 import json
 import os
-import shutil
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from audio_tag_backup import AudioTagBackupError, create_verified_audio_backup
 from engine_config import PATHS
 from engine_db_read import open_engine_db_read_only
 
@@ -119,6 +119,8 @@ def write_audio_tags(
     autoset_styles: object = None,
     rating: object = None,
     dry_run: bool = False,
+    backup_dir: object = DEFAULT_BACKUP_DIR,
+    music_root: object = DEFAULT_MUSIC_ROOT,
 ) -> TagWriteResult:
     """Write AutoSet metadata to one audio file.
 
@@ -138,6 +140,9 @@ def write_audio_tags(
     popm_rating = _rating_to_popm(rating)
     written: List[str] = []
     skipped: List[str] = []
+
+    def backup_before_save() -> None:
+        create_verified_audio_backup(fp, Path(str(backup_dir)), Path(str(music_root)))
 
     try:
         if ext == ".mp3":
@@ -163,10 +168,17 @@ def write_audio_tags(
                     tags.add(COMM(encoding=3, lang="eng", desc="AutoSet", text=f"AutoSet Styles: {style_text}"))
                     written.append("autoset_styles")
             if popm_rating is not None:
-                tags.delall("POPM:autoset")
-                tags.add(POPM(email="autoset", rating=popm_rating, count=0))
-                written.append("rating")
+                old_popm = None
+                for frame in tags.getall("POPM"):
+                    if getattr(frame, "email", "") == "autoset":
+                        old_popm = int(getattr(frame, "rating", 0))
+                        break
+                if old_popm != popm_rating:
+                    tags.delall("POPM:autoset")
+                    tags.add(POPM(email="autoset", rating=popm_rating, count=0))
+                    written.append("rating")
             if written and not dry_run:
+                backup_before_save()
                 tags.save(str(fp), v2_version=3)
             return TagWriteResult(True, bool(written), None, written, skipped, str(fp))
 
@@ -191,6 +203,7 @@ def write_audio_tags(
                         audio["KEY"] = [value]
                     written.append(field)
             if written and not dry_run:
+                backup_before_save()
                 audio.save()
             return TagWriteResult(True, bool(written), None, written, skipped, str(fp))
 
@@ -237,6 +250,7 @@ def write_audio_tags(
             if rating is not None:
                 skipped.append("rating")
             if written and not dry_run:
+                backup_before_save()
                 audio.save()
             warning = "MP4 rating tag is not written" if "rating" in skipped else None
             return TagWriteResult(True, bool(written), warning, written, skipped, str(fp))
@@ -373,25 +387,17 @@ def _safe_mkdir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
-def _rel_under(root: Path, fp: Path) -> Optional[Path]:
-    try:
-        return fp.resolve().relative_to(root.resolve())
-    except Exception:
-        return None
+def _maybe_backup_file(backup_root: Path, music_root: Path, fp: Path) -> Path:
+    return create_verified_audio_backup(fp, backup_root, music_root)
 
 
-def _maybe_backup_file(backup_root: Path, music_root: Path, fp: Path) -> Optional[Path]:
-    rel = _rel_under(music_root, fp)
-    if rel is None:
-        return None
-    dst = backup_root / rel
-    _safe_mkdir(dst.parent)
-    if not dst.exists():
-        shutil.copy2(fp, dst)
-    return dst
-
-
-def _set_tags_mp3(fp: Path, bpm_text: Optional[str], key_text: Optional[str], apply: bool) -> Tuple[str, str, str]:
+def _set_tags_mp3(
+    fp: Path,
+    bpm_text: Optional[str],
+    key_text: Optional[str],
+    apply: bool,
+    before_save=None,
+) -> Tuple[str, str, str]:
     from mutagen.id3 import ID3, ID3NoHeaderError, TBPM, TKEY
 
     try:
@@ -415,6 +421,9 @@ def _set_tags_mp3(fp: Path, bpm_text: Optional[str], key_text: Optional[str], ap
             changed = True
 
     if changed and apply:
+        if before_save is None:
+            raise AudioTagBackupError(f"Audio backup is required before writing {fp}")
+        before_save()
         # v2.3 is the safest for Windows Explorer.
         tags.save(str(fp), v2_version=3)
         return old_bpm, old_key, "written"
@@ -424,7 +433,7 @@ def _set_tags_mp3(fp: Path, bpm_text: Optional[str], key_text: Optional[str], ap
 
 
 def _set_bitrate_tag_mp3(
-    fp: Path, bitrate_text: Optional[str], apply: bool
+    fp: Path, bitrate_text: Optional[str], apply: bool, before_save=None
 ) -> Tuple[str, str]:
     from mutagen.id3 import ID3, ID3NoHeaderError, TXXX
 
@@ -450,12 +459,21 @@ def _set_bitrate_tag_mp3(
     tags.delall("TXXX:" + desc)
     tags.add(TXXX(encoding=3, desc=desc, text=bitrate_text))
     if apply:
+        if before_save is None:
+            raise AudioTagBackupError(f"Audio backup is required before writing {fp}")
+        before_save()
         tags.save(str(fp), v2_version=3)
         return str(old), "written"
     return str(old), "dry_run"
 
 
-def _set_tags_flac(fp: Path, bpm_text: Optional[str], key_text: Optional[str], apply: bool) -> Tuple[str, str, str]:
+def _set_tags_flac(
+    fp: Path,
+    bpm_text: Optional[str],
+    key_text: Optional[str],
+    apply: bool,
+    before_save=None,
+) -> Tuple[str, str, str]:
     from mutagen.flac import FLAC
 
     a = FLAC(str(fp))
@@ -473,6 +491,9 @@ def _set_tags_flac(fp: Path, bpm_text: Optional[str], key_text: Optional[str], a
             changed = True
 
     if changed and apply:
+        if before_save is None:
+            raise AudioTagBackupError(f"Audio backup is required before writing {fp}")
+        before_save()
         a.save()
         return old_bpm, old_key, "written"
     if changed and not apply:
@@ -481,7 +502,7 @@ def _set_tags_flac(fp: Path, bpm_text: Optional[str], key_text: Optional[str], a
 
 
 def _set_bitrate_tag_flac(
-    fp: Path, bitrate_text: Optional[str], apply: bool
+    fp: Path, bitrate_text: Optional[str], apply: bool, before_save=None
 ) -> Tuple[str, str]:
     from mutagen.flac import FLAC
 
@@ -493,6 +514,9 @@ def _set_bitrate_tag_flac(
         return old, "skip"
     a["ENGINE_BITRATE"] = bitrate_text
     if apply:
+        if before_save is None:
+            raise AudioTagBackupError(f"Audio backup is required before writing {fp}")
+        before_save()
         a.save()
         return old, "written"
     return old, "dry_run"
@@ -516,23 +540,34 @@ def _tag_file(
     bitrate_text = str(tr.bitrate) if (write_bitrate_tag and tr.bitrate) else None
     ext = fp.suffix.lower()
 
-    if backup_files and apply:
-        _maybe_backup_file(backup_root, music_root, fp)
+    backup_path = None
+
+    def backup_once() -> Path:
+        nonlocal backup_path
+        if backup_path is None:
+            backup_path = _maybe_backup_file(backup_root, music_root, fp)
+        return backup_path
 
     if ext == ".mp3":
-        old_bpm, old_key, action1 = _set_tags_mp3(fp, bpm_text, key_text, apply)
+        old_bpm, old_key, action1 = _set_tags_mp3(
+            fp, bpm_text, key_text, apply, backup_once
+        )
         old_br, action2 = ("", "skip")
         if write_bitrate_tag:
-            old_br, action2 = _set_bitrate_tag_mp3(fp, bitrate_text, apply)
+            old_br, action2 = _set_bitrate_tag_mp3(
+                fp, bitrate_text, apply, backup_once
+            )
         action = "written" if ("written" in (action1, action2)) else ("dry_run" if ("dry_run" in (action1, action2)) else ("unsupported" if ("unsupported" in (action1, action2)) else "skip"))
         # Store bitrate old/new in the old_key/key_old slots would be wrong; we keep old/new as strings in report only.
         # Return via key_old/key_new fields? No: keep behavior stable and only report bpm/key; bitrate tag status is still counted via action.
         return old_bpm, bpm_text or "", old_key, key_text or "", action
     if ext == ".flac":
-        old_bpm, old_key, action1 = _set_tags_flac(fp, bpm_text, key_text, apply)
+        old_bpm, old_key, action1 = _set_tags_flac(
+            fp, bpm_text, key_text, apply, backup_once
+        )
         _, action2 = ("", "skip")
         if write_bitrate_tag:
-            _, action2 = _set_bitrate_tag_flac(fp, bitrate_text, apply)
+            _, action2 = _set_bitrate_tag_flac(fp, bitrate_text, apply, backup_once)
         action = "written" if ("written" in (action1, action2)) else ("dry_run" if ("dry_run" in (action1, action2)) else ("unsupported" if ("unsupported" in (action1, action2)) else "skip"))
         return old_bpm, bpm_text or "", old_key, key_text or "", action
     return "", bpm_text or "", "", key_text or "", "unsupported"
@@ -594,7 +629,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument(
         "--backup-files",
         action="store_true",
-        help="Перед записью тегов сделать копии файлов в backup-dir (только при --apply).",
+        help="Совместимость: при --apply резервные копии теперь обязательны всегда.",
     )
     p.add_argument(
         "targets",
@@ -608,7 +643,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     report_dir = Path(args.report_dir)
     backup_dir = Path(args.backup_dir)
     apply = bool(args.apply)
-    backup_files = bool(args.backup_files)
+    backup_files = bool(apply)
     key_format = str(args.key_format or "standard")
     write_bitrate_tag = bool(args.write_bitrate_tag)
 
@@ -621,6 +656,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             autoset_styles=args.autoset_styles,
             rating=args.rating,
             dry_run=bool(args.dry_run),
+            backup_dir=backup_dir,
+            music_root=music_root,
         )
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
         return 0 if result.ok else 1
@@ -638,9 +675,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     report_csv = run_dir / "report.csv"
 
     backup_root = backup_dir / f"engine_write_tags_{_timestamp_slug()}"
-    if backup_files and apply:
-        _safe_mkdir(backup_root)
-
     targets = [Path(t) for t in (args.targets or [str(music_root)])]
     with _open_db(db_path) as con:
         index = load_track_index(con)
@@ -734,7 +768,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"unmatched: {unmatched}")
     print(f"unsupported: {unsupported}")
     print(f"errors: {errors}")
-    if backup_files and apply:
+    if apply:
         print(f"backup: {backup_root}")
     return 0 if errors == 0 else 1
 
