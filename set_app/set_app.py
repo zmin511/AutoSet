@@ -99,7 +99,7 @@ APP_VERSION = _read_app_version()
 APP_REPOSITORY_URL = "https://github.com/zmin511/AutoSet"
 ACTIVE_LIBRARY_PROVIDER = "denon_engine"
 APP_STATE = {
-    "startup_refresh": "waiting",
+    "startup_refresh": "disabled; use manual refresh",
     "analysis": {
         "running": False,
         "mode": "",
@@ -4204,27 +4204,6 @@ def refresh_genres(rel):
     return {"ok": result.returncode == 0, "code": result.returncode, "output": result.stdout or ""}
 
 
-def startup_refresh_new():
-    target_rel = "New"
-    try:
-        target = safe_music_path(target_rel)
-        if not target.exists():
-            APP_STATE["startup_refresh"] = "New folder not found"
-            return
-        APP_STATE["startup_refresh"] = "refreshing New tags"
-        tag_result = refresh_tags(target_rel)
-        APP_STATE["startup_refresh"] = "refreshing New genres"
-        genre_result = refresh_genres(target_rel)
-        APP_STATE["startup_refresh"] = (
-            f"New auto-refresh done: tags={'ok' if tag_result['ok'] else 'error'}, "
-            f"genres={'ok' if genre_result['ok'] else 'error'}"
-        )
-    except Exception as exc:
-        APP_STATE["startup_refresh"] = f"New auto-refresh error: {exc!r}"
-
-
-
-
 def analysis_database_status():
     from analysis_db import DEFAULT_ANALYSIS_DB_PATH
 
@@ -4865,11 +4844,6 @@ def main():
         raise SystemExit("No free local port found in 8765..8779")
     url = f"http://127.0.0.1:{port}/"
     print(f"Set Builder UI: {url}")
-    threading.Thread(
-        target=startup_refresh_new,
-        daemon=True,
-    ).start()
-
     start_analysis_job("startup")
 
     threading.Timer(
