@@ -27,6 +27,7 @@ BUILDER = TOOLS_DIR / "engine_set_builder.py"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 from engine_write_tags import write_audio_tags  # noqa: E402
+from engine_db_read import open_engine_db_read_only  # noqa: E402
 from engine_db_write import EngineDBWriteError, safe_engine_db_write  # noqa: E402
 from engine_cue_loop_codec import (  # noqa: E402
     build_loops,
@@ -592,9 +593,7 @@ def suggest_online_style_details(track):
 
 
 def open_db():
-    con = sqlite3.connect(str(DB_PATH))
-    con.row_factory = sqlite3.Row
-    return con
+    return open_engine_db_read_only(DB_PATH)
 
 
 def _decode_engine_zlib_blob(blob):
@@ -2207,8 +2206,7 @@ def export_track_marks_to_engine(data):
         return {"ok": False, "reason": "empty_track_marks", "track_id": track_id}
 
     try:
-        with sqlite3.connect(str(DB_PATH), timeout=1.0) as con:
-            con.row_factory = sqlite3.Row
+        with open_engine_db_read_only(DB_PATH, timeout=1.0) as con:
             row = _engine_track_export_row(con, track_id)
             if not row:
                 return {"ok": False, "reason": "missing_track", "track_id": track_id}
@@ -2945,10 +2943,8 @@ def _engine_db_write_failure(exc):
 def update_genre(track_id, genre):
     genre = _normalize_genre_value(genre)
     track_id = int(track_id)
-    db_uri = f"{Path(DB_PATH).expanduser().resolve().as_uri()}?mode=ro"
     try:
-        with sqlite3.connect(db_uri, timeout=1.0, uri=True) as con:
-            con.row_factory = sqlite3.Row
+        with open_engine_db_read_only(DB_PATH, timeout=1.0) as con:
             row = con.execute(
                 "SELECT id, filename, length, bitrate, bpmAnalyzed, key, rating, genre, artist, title, path FROM Track WHERE id = ?",
                 (track_id,),
@@ -3147,10 +3143,8 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
     eligible = 0
     unchanged = 0
     skipped_confidence = 0
-    db_uri = f"{Path(DB_PATH).expanduser().resolve().as_uri()}?mode=ro"
     try:
-        with sqlite3.connect(db_uri, timeout=1.0, uri=True) as con:
-            con.row_factory = sqlite3.Row
+        with open_engine_db_read_only(DB_PATH, timeout=1.0) as con:
             by_path, unique_name = _load_track_maps_for_files_from_connection(con, files)
             for path in files:
                 track = track_for_file(path, by_path, unique_name)
@@ -3328,10 +3322,8 @@ def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
     targets = []
     missing = []
     potential_changes = 0
-    db_uri = f"{Path(DB_PATH).expanduser().resolve().as_uri()}?mode=ro"
     try:
-        with sqlite3.connect(db_uri, timeout=1.0, uri=True) as con:
-            con.row_factory = sqlite3.Row
+        with open_engine_db_read_only(DB_PATH, timeout=1.0) as con:
             by_path, unique_name = _load_track_maps_from_connection(con)
             for path in files:
                 track = track_for_file(path, by_path, unique_name)
@@ -3999,10 +3991,8 @@ def _write_energy_ratings_for_paths(paths, scope_label):
     skipped = 0
     unchanged = 0
     pending = []
-    db_uri = f"{Path(DB_PATH).expanduser().resolve().as_uri()}?mode=ro"
     try:
-        with sqlite3.connect(db_uri, timeout=1.0, uri=True) as con:
-            con.row_factory = sqlite3.Row
+        with open_engine_db_read_only(DB_PATH, timeout=1.0) as con:
             rows = con.execute(
                 """
                 SELECT

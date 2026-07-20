@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Sequence, Tuple
 
+from engine_db_read import open_engine_db_read_only
 from track_analysis import TrackProfile
 from transition_analysis import (
     TRANSITION_REJECTED,
@@ -126,9 +127,7 @@ RUS_STYLE_VALUES = {"rus", "russian", "рус", "ruspop", "rusrock"}
 
 
 def open_db(db_path: str) -> sqlite3.Connection:
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
-    return con
+    return open_engine_db_read_only(db_path)
 
 
 def _wave_energy_from_blob(blob) -> Optional[float]:

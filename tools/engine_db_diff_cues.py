@@ -33,6 +33,7 @@ from engine_cue_loop_codec import (
     parse_loops as codec_parse_loops,
     parse_quick_cues as codec_parse_quick_cues,
 )
+from engine_db_read import open_engine_db_read_only
 
 CANDIDATE_TERMS = ("cue", "loop", "marker", "performance", "beat")
 ALWAYS_TABLES = {"PerformanceData", "Track"}
@@ -47,9 +48,7 @@ def sqlite_ro(path: Path) -> sqlite3.Connection:
     resolved = path.expanduser().resolve()
     if not resolved.exists():
         raise FileNotFoundError(str(resolved))
-    con = sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    return con
+    return open_engine_db_read_only(resolved)
 
 
 def quote_ident(name: str) -> str:
