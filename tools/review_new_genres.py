@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 from engine_config import PATHS
+from engine_db_read import open_engine_db_read_only
 
 DEFAULT_DB_PATH = PATHS["db_path"]
 DEFAULT_MUSIC_ROOT = PATHS["music_root"]
@@ -51,9 +52,7 @@ def audio_files(root: Path) -> Iterable[Path]:
 
 
 def open_db(path: str) -> sqlite3.Connection:
-    con = sqlite3.connect(path)
-    con.row_factory = sqlite3.Row
-    return con
+    return open_engine_db_read_only(path)
 
 
 def load_engine_index(db_path: str) -> Dict[Tuple[str, int], EngineMeta]:

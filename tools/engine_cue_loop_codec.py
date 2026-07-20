@@ -34,6 +34,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 
+from engine_db_read import open_engine_db_read_only
+
 MAX_ENGINE_SLOTS = 32
 DEFAULT_CUE_SLOTS = 8
 DEFAULT_LOOP_SLOTS = 8
@@ -455,9 +457,7 @@ def sqlite_ro(path: Path) -> sqlite3.Connection:
     resolved = path.expanduser().resolve()
     if not resolved.exists():
         raise FileNotFoundError(str(resolved))
-    con = sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    return con
+    return open_engine_db_read_only(resolved)
 
 
 def load_track_payload(db_path: Path, track_id: int) -> dict[str, Any]:
