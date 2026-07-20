@@ -3995,64 +3995,129 @@ def _write_energy_ratings_for_paths(paths, scope_label):
     wanted = {norm_abs(p): p for p in paths}
     if not wanted:
         return {"ok": True, "updated": 0, "matched": 0, "skipped": 0, "output": f"No audio files in {scope_label}."}
-    now = _engine_now_str()
     matched = 0
-    updated = 0
     skipped = 0
     unchanged = 0
+    pending = []
+    db_uri = f"{Path(DB_PATH).expanduser().resolve().as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(db_uri, timeout=1.0, uri=True) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                """
+                SELECT
+                  Track.id,
+                  Track.path,
+                  Track.rating,
+                  PerformanceData.overviewWaveFormData AS overviewWaveFormData
+                FROM Track
+                LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
+                WHERE Track.isAvailable = 1
+                  AND Track.path IS NOT NULL
+                """
+            ).fetchall()
+            for row in rows:
+                path = resolve_track_path(row["path"])
+                if norm_abs(path) not in wanted:
+                    continue
+                matched += 1
+                _energy, stars = _energy_from_overview_blob(row["overviewWaveFormData"])
+                if not stars:
+                    skipped += 1
+                    continue
+                engine_rating = _stars_to_engine_rating(stars)
+                if int(row["rating"] or 0) == engine_rating:
+                    unchanged += 1
+                    continue
+                pending.append((int(row["id"]), path))
+    except sqlite3.Error as exc:
+        return _engine_db_preflight_failure(exc)
+
+    missing = max(0, len(wanted) - matched)
+    changes = []
+    if pending:
+        def write_energy_ratings_batch(con, _backup_path):
+            now = _engine_now_str()
+            callback_changes = []
+            callback_missing = []
+            callback_skipped = 0
+            callback_unchanged = 0
+            for track_id, path in pending:
+                row = con.execute(
+                    """
+                    SELECT
+                      Track.rating,
+                      Track.genre,
+                      Track.bpmAnalyzed,
+                      Track.key,
+                      PerformanceData.overviewWaveFormData AS overviewWaveFormData
+                    FROM Track
+                    LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
+                    WHERE Track.id = ?
+                    """,
+                    (track_id,),
+                ).fetchone()
+                if not row:
+                    callback_missing.append(path)
+                    continue
+                _energy, stars = _energy_from_overview_blob(row["overviewWaveFormData"])
+                if not stars:
+                    callback_skipped += 1
+                    continue
+                engine_rating = _stars_to_engine_rating(stars)
+                if int(row["rating"] or 0) == engine_rating:
+                    callback_unchanged += 1
+                    continue
+                con.execute(
+                    "UPDATE Track SET rating = ?, lastEditTime = ? WHERE id = ?",
+                    (int(engine_rating), now, track_id),
+                )
+                callback_changes.append(
+                    (path, row["genre"], row["bpmAnalyzed"], row["key"], stars)
+                )
+            return (
+                callback_changes,
+                callback_missing,
+                callback_skipped,
+                callback_unchanged,
+            )
+
+        try:
+            write_result, _backup_path = safe_engine_db_write(
+                DB_PATH,
+                ENGINE_DB_BACKUP_DIR,
+                "write_energy_ratings",
+                write_energy_ratings_batch,
+            )
+        except EngineDBWriteError as exc:
+            return _engine_db_write_failure(exc)
+        changes, callback_missing, callback_skipped, callback_unchanged = write_result
+        matched -= len(callback_missing)
+        missing += len(callback_missing)
+        skipped += callback_skipped
+        unchanged += callback_unchanged
+
+    updated = len(changes)
     file_written = 0
     file_failed = 0
     file_warnings = []
-    with open_db() as con:
-        rows = con.execute(
-            """
-            SELECT
-              Track.id,
-              Track.path,
-              Track.genre,
-              Track.bpmAnalyzed,
-              Track.key,
-              Track.rating,
-              PerformanceData.overviewWaveFormData AS overviewWaveFormData
-            FROM Track
-            LEFT JOIN PerformanceData ON PerformanceData.trackId = Track.id
-            WHERE Track.isAvailable = 1
-              AND Track.path IS NOT NULL
-            """
-        ).fetchall()
-        for row in rows:
-            path = resolve_track_path(row["path"])
-            if norm_abs(path) not in wanted:
-                continue
-            matched += 1
-            _energy, rating = _energy_from_overview_blob(row["overviewWaveFormData"])
-            if not rating:
-                skipped += 1
-                continue
-            engine_rating = _stars_to_engine_rating(rating)
-            if int(row["rating"] or 0) == engine_rating:
-                unchanged += 1
-                continue
-            con.execute(
-                "UPDATE Track SET rating = ?, lastEditTime = ? WHERE id = ?",
-                (int(engine_rating), now, int(row["id"])),
-            )
-            updated += 1
+    for path, genre, bpm, key, stars in changes:
+        try:
             file_result = _track_file_tag_result(
                 path,
-                genre=row["genre"],
-                bpm=row["bpmAnalyzed"],
-                key=row["key"],
-                rating=rating,
+                genre=genre,
+                bpm=bpm,
+                key=key,
+                rating=stars,
             )
-            if file_result.get("file_tags_warning"):
-                file_failed += 1
-                file_warnings.append(f"{path}: {file_result.get('file_tags_warning')}")
-            else:
-                file_written += 1
-        con.commit()
-
-    missing = max(0, len(wanted) - matched)
+            warning = file_result.get("file_tags_warning")
+        except Exception as exc:
+            warning = str(exc)
+        if warning:
+            file_failed += 1
+            file_warnings.append(f"{path}: {warning}")
+        else:
+            file_written += 1
     output = (
         f"Energy stars updated for {scope_label}.\n"
         f"Audio files: {len(wanted)}\n"
@@ -4728,9 +4793,11 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed_path == "/api/refresh-tags":
                 self.send_json(refresh_tags(data.get("path", "")))
             elif parsed_path == "/api/write-energy-ratings":
-                self.send_json(write_energy_ratings(data.get("path", "")))
+                result = write_energy_ratings(data.get("path", ""))
+                self.send_json(result, status=500 if result.get("reason") else 200)
             elif parsed_path == "/api/write-all-energy-ratings":
-                self.send_json(write_all_energy_ratings())
+                result = write_all_energy_ratings()
+                self.send_json(result, status=500 if result.get("reason") else 200)
             elif parsed_path == "/api/bulk-genre":
                 result = bulk_update_genres(
                     data.get("path", ""),
