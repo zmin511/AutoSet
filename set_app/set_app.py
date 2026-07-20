@@ -2538,7 +2538,7 @@ def _engine_path_candidates(path):
     return candidates
 
 
-def load_track_maps_for_files(paths):
+def _load_track_maps_for_files_from_connection(con, paths):
     paths = [Path(path) for path in paths]
     if not paths:
         return {}, {}
@@ -2574,48 +2574,52 @@ def load_track_maps_for_files(paths):
     """
 
     seen_ids = set()
-    with open_db() as con:
-        for chunk in _chunks(sorted(set(wanted_paths)), 400):
-            placeholders = ",".join("?" for _ in chunk)
-            sql = sql_base.format(predicate=f"Track.path IN ({placeholders})")
-            for row in con.execute(sql, chunk):
-                if int(row["id"]) in seen_ids:
-                    continue
-                seen_ids.add(int(row["id"]))
-                payload = dict(row)
-                payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
-                payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
-                track = row_to_track(payload)
-                if track["path"] and is_hidden_or_system_path(track["path"]):
-                    continue
-                if track["path"]:
-                    by_path[norm_abs(track["path"])] = track
-                by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
+    for chunk in _chunks(sorted(set(wanted_paths)), 400):
+        placeholders = ",".join("?" for _ in chunk)
+        sql = sql_base.format(predicate=f"Track.path IN ({placeholders})")
+        for row in con.execute(sql, chunk):
+            if int(row["id"]) in seen_ids:
+                continue
+            seen_ids.add(int(row["id"]))
+            payload = dict(row)
+            payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
+            payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
+            track = row_to_track(payload)
+            if track["path"] and is_hidden_or_system_path(track["path"]):
+                continue
+            if track["path"]:
+                by_path[norm_abs(track["path"])] = track
+            by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
 
-        missing_names = [
-            path.name
-            for path in paths
-            if norm_abs(path) not in by_path
-        ]
-        for chunk in _chunks(sorted(set(missing_names)), 400):
-            placeholders = ",".join("?" for _ in chunk)
-            sql = sql_base.format(predicate=f"Track.filename IN ({placeholders})")
-            for row in con.execute(sql, chunk):
-                if int(row["id"]) in seen_ids:
-                    continue
-                seen_ids.add(int(row["id"]))
-                payload = dict(row)
-                payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
-                payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
-                track = row_to_track(payload)
-                if track["path"] and is_hidden_or_system_path(track["path"]):
-                    continue
-                if track["path"]:
-                    by_path[norm_abs(track["path"])] = track
-                by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
+    missing_names = [
+        path.name
+        for path in paths
+        if norm_abs(path) not in by_path
+    ]
+    for chunk in _chunks(sorted(set(missing_names)), 400):
+        placeholders = ",".join("?" for _ in chunk)
+        sql = sql_base.format(predicate=f"Track.filename IN ({placeholders})")
+        for row in con.execute(sql, chunk):
+            if int(row["id"]) in seen_ids:
+                continue
+            seen_ids.add(int(row["id"]))
+            payload = dict(row)
+            payload["has_cue"] = _has_any_quick_cue_blob(payload.get("quickCues"), payload.get("length") or 0)
+            payload["has_loop"] = _loops_blob_has_any_loop(payload.get("loops"))
+            track = row_to_track(payload)
+            if track["path"] and is_hidden_or_system_path(track["path"]):
+                continue
+            if track["path"]:
+                by_path[norm_abs(track["path"])] = track
+            by_name.setdefault((track["filename"] or "").casefold(), []).append(track)
 
     unique_name = {name: rows[0] for name, rows in by_name.items() if name and len(rows) == 1}
     return by_path, unique_name
+
+
+def load_track_maps_for_files(paths):
+    with open_db() as con:
+        return _load_track_maps_for_files_from_connection(con, paths)
 
 
 def read_file_tags(path):
@@ -3137,77 +3141,142 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
         selected = {str(item).lower() for item in selected_files if item}
         files = [path for path in files if str(path).lower() in selected]
     total_files = len(files)
-    by_path, unique_name = load_track_maps_for_files(files)
-    now = _engine_now_str()
     suggestions = []
     missing = []
+    decisions = []
     eligible = 0
-    updated = 0
     unchanged = 0
     skipped_confidence = 0
+    db_uri = f"{Path(DB_PATH).expanduser().resolve().as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(db_uri, timeout=1.0, uri=True) as con:
+            con.row_factory = sqlite3.Row
+            by_path, unique_name = _load_track_maps_for_files_from_connection(con, files)
+            for path in files:
+                track = track_for_file(path, by_path, unique_name)
+                if not track.get("id"):
+                    missing.append(str(path))
+                    continue
+                if source == "local":
+                    decision = suggest_style_details(track, path)
+                    decision["source"] = "AutoSet local"
+                else:
+                    decision = suggest_online_style_details(track) or {
+                        "additions": [],
+                        "new_genre": track.get("genre") or "",
+                        "confidence": "low",
+                        "reason": "online sources did not return a known AutoSet style",
+                        "source": "Online",
+                    }
+                if not decision["additions"]:
+                    unchanged += 1
+                    continue
+                eligible += 1
+                allowed = (
+                    DETAIL_CONFIDENCE_ORDER[decision["confidence"]]
+                    >= DETAIL_CONFIDENCE_ORDER[min_confidence]
+                )
+                action = "preview"
+                if not allowed:
+                    skipped_confidence += 1
+                    action = "skipped_confidence"
+                suggestion = {
+                    "track_id": int(track["id"]),
+                    "file": str(path),
+                    "label": track.get("label") or track.get("filename") or path.name,
+                    "old_genre": track.get("genre") or "",
+                    "additions": list(decision["additions"]),
+                    "new_genre": decision["new_genre"],
+                    "confidence": decision["confidence"],
+                    "reason": decision["reason"],
+                    "source": decision.get("source") or ("AutoSet local" if source == "local" else "Online"),
+                    "action": action,
+                }
+                suggestions.append(suggestion)
+                if allowed:
+                    decisions.append((path, suggestion))
+    except sqlite3.Error as exc:
+        return _engine_db_preflight_failure(exc)
+
+    updated = 0
     file_written = 0
     file_failed = 0
     file_warnings = []
 
-    with open_db() as con:
-        for path in files:
-            track = track_for_file(path, by_path, unique_name)
-            if not track.get("id"):
-                missing.append(str(path))
+    def write_detail_styles(con, _backup_path):
+        now = _engine_now_str()
+        changes = []
+        callback_missing = []
+        callback_unchanged = 0
+        for path, suggestion in decisions:
+            row = con.execute(
+                "SELECT genre, bpmAnalyzed, key, rating FROM Track WHERE id = ?",
+                (int(suggestion["track_id"]),),
+            ).fetchone()
+            if not row:
+                suggestion["old_genre"] = ""
+                suggestion["new_genre"] = ""
+                suggestion["action"] = "missing"
+                callback_missing.append(str(path))
                 continue
-            if source == "local":
-                decision = suggest_style_details(track, path)
-                decision["source"] = "AutoSet local"
-            else:
-                decision = suggest_online_style_details(track) or {
-                    "additions": [],
-                    "new_genre": track.get("genre") or "",
-                    "confidence": "low",
-                    "reason": "online sources did not return a known AutoSet style",
-                    "source": "Online",
-                }
-            if not decision["additions"]:
-                unchanged += 1
+            current = row["genre"] or ""
+            normalized_current = join_genre_tags(split_genre_tags(current))
+            new_genre = join_genre_tags(
+                split_genre_tags(current) + suggestion["additions"]
+            )
+            suggestion["old_genre"] = current
+            suggestion["new_genre"] = new_genre
+            if new_genre == normalized_current:
+                suggestion["action"] = "unchanged"
+                callback_unchanged += 1
                 continue
-            eligible += 1
-            allowed = DETAIL_CONFIDENCE_ORDER[decision["confidence"]] >= DETAIL_CONFIDENCE_ORDER[min_confidence]
-            action = "preview"
-            if not allowed:
-                skipped_confidence += 1
-                action = "skipped_confidence"
-            elif apply:
-                con.execute(
-                    "UPDATE Track SET genre = ?, lastEditTime = ? WHERE id = ?",
-                    (decision["new_genre"], now, int(track["id"])),
+            con.execute(
+                "UPDATE Track SET genre = ?, lastEditTime = ? WHERE id = ?",
+                (new_genre, now, int(suggestion["track_id"])),
+            )
+            suggestion["action"] = "updated"
+            changes.append(
+                (
+                    path,
+                    new_genre,
+                    None if row["bpmAnalyzed"] is None else round(float(row["bpmAnalyzed"]), 1),
+                    engine_key_to_camelot(None if row["key"] is None else int(row["key"])),
+                    int(row["rating"] or 0),
                 )
-                updated += 1
-                action = "updated"
+            )
+        return changes, callback_unchanged, callback_missing
+
+    if apply and decisions:
+        try:
+            write_result, _backup_path = safe_engine_db_write(
+                DB_PATH,
+                ENGINE_DB_BACKUP_DIR,
+                "detail_folder_styles",
+                write_detail_styles,
+            )
+        except EngineDBWriteError as exc:
+            return _engine_db_write_failure(exc)
+        changes, callback_unchanged, callback_missing = write_result
+        updated = len(changes)
+        unchanged += callback_unchanged
+        missing.extend(callback_missing)
+        for path, new_genre, bpm, key, rating in changes:
+            try:
                 file_result = _track_file_tag_result(
                     path,
-                    genre=decision["new_genre"],
-                    bpm=track.get("bpm"),
-                    key=track.get("camelot"),
-                    rating=track.get("rating_raw", 0),
+                    genre=new_genre,
+                    bpm=bpm,
+                    key=key,
+                    rating=rating,
                 )
-                if file_result.get("file_tags_warning"):
-                    file_failed += 1
-                    file_warnings.append(f"{path}: {file_result.get('file_tags_warning')}")
-                else:
-                    file_written += 1
-            suggestions.append({
-                "track_id": int(track["id"]),
-                "file": str(path),
-                "label": track.get("label") or track.get("filename") or path.name,
-                "old_genre": track.get("genre") or "",
-                "additions": decision["additions"],
-                "new_genre": decision["new_genre"],
-                "confidence": decision["confidence"],
-                "reason": decision["reason"],
-                "source": decision.get("source") or ("AutoSet local" if source == "local" else "Online"),
-                "action": action,
-            })
-        if apply:
-            con.commit()
+                warning = file_result.get("file_tags_warning")
+            except Exception as exc:
+                warning = str(exc)
+            if warning:
+                file_failed += 1
+                file_warnings.append(f"{path}: {warning}")
+            else:
+                file_written += 1
 
     scope = "current folder and subfolders" if recursive else "current folder"
     lines = [
@@ -4676,14 +4745,18 @@ class Handler(BaseHTTPRequestHandler):
                     status=500 if result.get("reason") else 200,
                 )
             elif parsed_path == "/api/detail-styles":
-                self.send_json(detail_folder_styles(
+                result = detail_folder_styles(
                     data.get("path", ""),
                     bool(data.get("recursive", False)),
                     bool(data.get("apply", False)),
                     data.get("min_confidence", "medium"),
                     data.get("files") or None,
                     data.get("source", "online"),
-                ))
+                )
+                self.send_json(
+                    result,
+                    status=500 if result.get("reason") else 200,
+                )
             else:
                 result = update_genre(data["track_id"], data["genre"])
                 self.send_json(result, status=200 if result.get("ok") else 500)
