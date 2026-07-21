@@ -706,9 +706,7 @@ def test_stale_owner_cannot_complete_after_expired_job_is_reclaimed(tmp_path):
     ) is True
 
 
-def test_legacy_queue_migration_preserves_jobs_and_rebuilds_path_identity(
-    tmp_path, monkeypatch
-):
+def test_legacy_queue_migration_preserves_jobs_and_rebuilds_path_identity(tmp_path):
     queue_path = tmp_path / "legacy.sqlite3"
     track_path = tmp_path / "Music" / "Track.mp3"
     payload_json = json.dumps(_job(track_path, "House")["payload"])
@@ -753,13 +751,14 @@ def test_legacy_queue_migration_preserves_jobs_and_rebuilds_path_identity(
                 ),
             )
 
-    monkeypatch.setattr(audio_tag_post_commit.os, "name", "posix")
+    expected_path, expected_path_key = audio_tag_post_commit._normalize_path(track_path)
     status = audio_tag_queue_status(queue_path)
     rows = _queue_rows(queue_path)
 
     assert status["pending"] == status["completed"] == 1
     assert [row["id"] for row in rows] == ["pending-id", "completed-id"]
-    assert all(row["path_key"] == str(track_path) for row in rows)
+    assert all(row["normalized_path"] == expected_path for row in rows)
+    assert all(row["path_key"] == expected_path_key for row in rows)
     with sqlite3.connect(queue_path) as connection:
         indexes = {
             row[0]
