@@ -92,7 +92,7 @@ SQL_MUTATION_ALLOWLIST = {
         "retry-queue schema indexes",
     ),
     ("tools/audio_tag_post_commit.py", "_migrate_or_create_schema"): (
-        5,
+        7,
         "retry-queue transaction and schema migration",
     ),
     ("tools/audio_tag_post_commit.py", "enqueue_audio_tag_jobs"): (
@@ -216,7 +216,10 @@ STARTUP_FORBIDDEN_CALLS = {
 }
 
 _MUTATING_SQL = re.compile(
-    r"^(?:INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|REPLACE|BEGIN|VACUUM|ATTACH|DETACH)\b",
+    r"^(?:INSERT|UPDATE|DELETE|REPLACE|BEGIN|VACUUM|ATTACH|DETACH|"
+    r"CREATE\s+(?:TABLE|INDEX|TRIGGER|VIEW)|"
+    r"DROP\s+(?:TABLE|INDEX|TRIGGER|VIEW)|"
+    r"ALTER\s+TABLE)\b",
     re.IGNORECASE,
 )
 
@@ -252,6 +255,7 @@ class _SourceAnalysis:
             for child in ast.iter_child_nodes(node):
                 self.parents[child] = node
         self.imports = self._imports()
+        self.bindings = self._bindings()
         self.functions = {
             node.name: node
             for node in self.tree.body
@@ -266,8 +270,41 @@ class _SourceAnalysis:
                     aliases[name.asname or name.name.split(".")[0]] = name.name
             elif isinstance(node, ast.ImportFrom):
                 for name in node.names:
-                    aliases[name.asname or name.name] = name.name
+                    qualified = f"{node.module}.{name.name}" if node.module else name.name
+                    aliases[name.asname or name.name] = qualified
         return aliases
+
+    def _bindings(self) -> dict[tuple[str, str], list[tuple[int, ast.AST]]]:
+        bindings: dict[tuple[str, str], list[tuple[int, ast.AST]]] = {}
+        for node in ast.walk(self.tree):
+            value: ast.AST | None = None
+            targets: list[ast.AST] = []
+            if isinstance(node, ast.Assign):
+                value, targets = node.value, node.targets
+            elif isinstance(node, ast.AnnAssign):
+                value, targets = node.value, [node.target]
+            elif isinstance(node, ast.NamedExpr):
+                value, targets = node.value, [node.target]
+            if value is None:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    bindings.setdefault((self.symbol(node), target.id), []).append(
+                        (node.lineno, value)
+                    )
+        return bindings
+
+    def _binding(self, name: str, context: ast.AST) -> ast.AST | None:
+        """Return the latest simple assignment visible before *context*."""
+        line = getattr(context, "lineno", 10**9)
+        symbol = self.symbol(context)
+        candidates = [
+            item
+            for scope in (symbol, "<module>")
+            for item in self.bindings.get((scope, name), [])
+            if item[0] < line
+        ]
+        return max(candidates, default=(0, None), key=lambda item: item[0])[1]
 
     def symbol(self, node: ast.AST) -> str:
         scopes: list[str] = []
@@ -278,16 +315,28 @@ class _SourceAnalysis:
                 scopes.append(current.name)
         return ".".join(reversed(scopes)) or "<module>"
 
-    def expression_name(self, node: ast.AST) -> str:
+    def expression_name(
+        self,
+        node: ast.AST,
+        context: ast.AST | None = None,
+        seen: frozenset[str] = frozenset(),
+    ) -> str:
+        context = context or node
         if isinstance(node, ast.Name):
-            return self.imports.get(node.id, node.id)
+            if node.id in self.imports:
+                return self.imports[node.id]
+            if node.id not in seen:
+                binding = self._binding(node.id, context)
+                if binding is not None:
+                    return self.expression_name(binding, context, seen | {node.id})
+            return node.id
         if isinstance(node, ast.Attribute):
-            base = self.expression_name(node.value)
+            base = self.expression_name(node.value, context, seen)
             return f"{base}.{node.attr}" if base else node.attr
         return ast.unparse(node)
 
     def call_name(self, node: ast.Call) -> str:
-        return self.expression_name(node.func)
+        return self.expression_name(node.func, node)
 
     def calls(self) -> list[ast.Call]:
         return [node for node in ast.walk(self.tree) if isinstance(node, ast.Call)]
@@ -316,17 +365,70 @@ def _is_read_only_connect(node: ast.Call) -> bool:
     return "mode=ro" in rendered.replace(" ", "").casefold()
 
 
-def _literal_sql(node: ast.AST) -> str | None:
+def _is_memory_connect(node: ast.Call) -> bool:
+    return bool(
+        node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == ":memory:"
+    )
+
+
+def _static_string(
+    analysis: _SourceAnalysis,
+    node: ast.AST,
+    context: ast.AST,
+    seen: frozenset[str] = frozenset(),
+) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return " ".join(node.value.split())
+        return node.value
+    if isinstance(node, ast.Name) and node.id not in seen:
+        binding = analysis._binding(node.id, context)
+        if binding is not None:
+            return _static_string(analysis, binding, context, seen | {node.id})
     if isinstance(node, ast.JoinedStr):
-        text = "".join(
-            value.value
+        return "".join(
+            value.value if isinstance(value, ast.Constant) and isinstance(value.value, str) else "?"
             for value in node.values
-            if isinstance(value, ast.Constant) and isinstance(value.value, str)
         )
-        return " ".join(text.split())
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+        left = _static_string(analysis, node.left, context, seen)
+        right = _static_string(analysis, node.right, context, seen)
+        if isinstance(node.op, ast.Add) and left is not None and right is not None:
+            return left + right
+        if isinstance(node.op, ast.Mod) and left is not None:
+            return left
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "format"
+    ):
+        return _static_string(analysis, node.func.value, context, seen)
     return None
+
+
+def _literal_sql(analysis: _SourceAnalysis, node: ast.AST, context: ast.AST) -> str | None:
+    value = _static_string(analysis, node, context)
+    return " ".join(value.split()) if value is not None else None
+
+
+def _receiver_name(full_name: str) -> str:
+    return full_name.rsplit(".", 1)[0] if "." in full_name else ""
+
+
+def _looks_like_db_receiver(full_name: str) -> bool:
+    receiver = _receiver_name(full_name).rsplit(".", 1)[-1].casefold()
+    return receiver in {"con", "conn", "connection", "cursor", "cur", "db"} or any(
+        marker in full_name.casefold()
+        for marker in ("sqlite3.connect(", "_connect(", "open_engine_db_")
+    )
+
+
+def _looks_like_audio_receiver(full_name: str) -> bool:
+    receiver = _receiver_name(full_name).rsplit(".", 1)[-1].casefold()
+    return receiver in {"a", "audio", "tag", "tags", "metadata"} or any(
+        marker in full_name.casefold()
+        for marker in ("mutagen.", "id3(", "flac(", "mp4(")
+    )
 
 
 def _violation(
@@ -354,6 +456,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
     mutation_counts: Counter[tuple[str, str]] = Counter()
     save_counts: Counter[tuple[str, str]] = Counter()
     first_save: dict[tuple[str, str], ast.Call] = {}
+    save_calls: dict[tuple[str, str], list[ast.Call]] = {}
 
     for call in analysis.calls():
         full_name = analysis.call_name(call)
@@ -361,7 +464,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
         symbol = analysis.symbol(call)
         key = (analysis.item.path, symbol)
 
-        if full_name == "sqlite3.connect":
+        if full_name == "sqlite3.connect" and not _is_memory_connect(call):
             connect_counts[key] += 1
             allowed = SQLITE_CONNECT_ALLOWLIST.get(key)
             if allowed is None or connect_counts[key] > allowed[0]:
@@ -393,7 +496,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                 )
             )
 
-        if name == "commit":
+        if name == "commit" and _looks_like_db_receiver(full_name):
             commit_counts[key] += 1
             allowed = COMMIT_ALLOWLIST.get(key)
             if allowed is None or commit_counts[key] > allowed[0]:
@@ -408,9 +511,24 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                     )
                 )
 
-        if name in {"execute", "executemany"} and call.args:
-            sql = _literal_sql(call.args[0])
-            if sql and _MUTATING_SQL.match(sql):
+        if (
+            name in {"execute", "executemany"}
+            and call.args
+            and _looks_like_db_receiver(full_name)
+        ):
+            sql = _literal_sql(analysis, call.args[0], call)
+            if sql is None:
+                violations.append(
+                    _violation(
+                        "unapproved-dynamic-sql",
+                        analysis,
+                        call,
+                        ast.unparse(call),
+                        "SQL cannot be resolved statically, so a hidden mutation cannot be excluded",
+                        "a static SQL expression or an explicitly reviewed persistence helper",
+                    )
+                )
+            elif _MUTATING_SQL.match(sql):
                 mutation_counts[key] += 1
                 allowed = SQL_MUTATION_ALLOWLIST.get(key)
                 if allowed is None or mutation_counts[key] > allowed[0]:
@@ -425,9 +543,10 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                         )
                     )
 
-        if name == "save":
+        if name == "save" and _looks_like_audio_receiver(full_name):
             save_counts[key] += 1
             first_save.setdefault(key, call)
+            save_calls.setdefault(key, []).append(call)
             allowed = AUDIO_SAVE_ALLOWLIST.get(key)
             if allowed is None or save_counts[key] > allowed[0]:
                 violations.append(
@@ -459,24 +578,19 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
         required_call = AUDIO_BACKUP_CALLS.get(key)
         if required_call is None:
             continue
-        function = analysis.functions.get(key[1])
-        backup_count = (
-            sum(
-                _last_name(analysis.call_name(call)) == required_call
-                for call in ast.walk(function)
-                if isinstance(call, ast.Call)
-            )
-            if function is not None
-            else 0
-        )
-        if backup_count < save_count:
+        invalid = [
+            call
+            for call in save_calls[key]
+            if not _verified_backup_dominates(analysis, call, key[1], required_call)
+        ]
+        for call in invalid:
             violations.append(
                 _violation(
                     "audio-backup-call-required",
                     analysis,
-                    first_save[key],
-                    f"{key[1]}: {save_count} save call(s), {backup_count} backup call(s)",
-                    "an approved audio writer no longer backs up every save path",
+                    call,
+                    ast.unparse(call),
+                    "no verified backup call dominates this save on the same control-flow path",
                     f"{required_call}() before each metadata save",
                 )
             )
@@ -484,12 +598,154 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
     return violations
 
 
-def _function_call_names(analysis: _SourceAnalysis, node: ast.AST) -> set[str]:
-    return {
-        _last_name(analysis.call_name(call))
-        for call in ast.walk(node)
-        if isinstance(call, ast.Call)
+def _definition(analysis: _SourceAnalysis, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    return next(
+        (
+            node
+            for node in ast.walk(analysis.tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+        ),
+        None,
+    )
+
+
+def _is_verified_backup_callable(
+    analysis: _SourceAnalysis, function_name: str, required_call: str, save: ast.Call
+) -> bool:
+    definition = _definition(analysis, required_call)
+    if definition is not None:
+        return any(
+            isinstance(node, ast.Call)
+            and _last_name(analysis.call_name(node)) == "create_verified_audio_backup"
+            and analysis.symbol(node).endswith(required_call)
+            for node in ast.walk(definition)
+        )
+
+    function = _definition(analysis, function_name)
+    if function is None:
+        return False
+    parameters = {
+        arg.arg
+        for arg in (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs)
     }
+    if required_call not in parameters:
+        return False
+    return any(
+        isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == required_call
+        and any(isinstance(op, ast.Is) for op in node.test.ops)
+        and any(isinstance(value, ast.Constant) and value.value is None for value in node.test.comparators)
+        and any(isinstance(child, ast.Raise) for child in ast.walk(node))
+        and node.lineno < save.lineno
+        for node in ast.walk(function)
+    )
+
+
+def _direct_call_in_statement(
+    analysis: _SourceAnalysis, statement: ast.stmt, required_call: str
+) -> bool:
+    return (
+        isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and _last_name(analysis.call_name(statement.value)) == required_call
+    )
+
+
+def _preceding_direct_call(
+    analysis: _SourceAnalysis, node: ast.AST, required_call: str
+) -> bool:
+    current = node
+    while current in analysis.parents:
+        parent = analysis.parents[current]
+        if isinstance(current, ast.stmt):
+            for _field, value in ast.iter_fields(parent):
+                if isinstance(value, list) and current in value:
+                    index = value.index(current)
+                    if any(
+                        _direct_call_in_statement(analysis, statement, required_call)
+                        for statement in value[:index]
+                    ):
+                        return True
+                    break
+        current = parent
+    return False
+
+
+def _verified_backup_dominates(
+    analysis: _SourceAnalysis, save: ast.Call, function_name: str, required_call: str
+) -> bool:
+    return _is_verified_backup_callable(analysis, function_name, required_call, save) and _preceding_direct_call(
+        analysis, save, required_call
+    )
+
+
+def _direct_function_calls(analysis: _SourceAnalysis, function: str) -> list[ast.Call]:
+    node = analysis.functions.get(function)
+    if node is None:
+        return []
+    return [
+        call
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call) and analysis.symbol(call) == function
+    ]
+
+
+def _block_memberships(
+    analysis: _SourceAnalysis, node: ast.AST
+) -> list[tuple[ast.AST, list[ast.stmt], ast.stmt]]:
+    memberships = []
+    current = node
+    while current in analysis.parents:
+        parent = analysis.parents[current]
+        if isinstance(current, ast.stmt):
+            for _field, value in ast.iter_fields(parent):
+                if isinstance(value, list) and current in value:
+                    memberships.append((parent, value, current))
+                    break
+        current = parent
+    return memberships
+
+
+def _queue_is_guaranteed_after(
+    analysis: _SourceAnalysis, safe: ast.Call, queue: ast.Call
+) -> bool:
+    queue_memberships = _block_memberships(analysis, queue)
+    for safe_parent, safe_block, safe_statement in _block_memberships(analysis, safe):
+        for queue_parent, queue_block, queue_statement in queue_memberships:
+            if safe_parent is not queue_parent or safe_block is not queue_block:
+                continue
+            if safe_block.index(safe_statement) >= safe_block.index(queue_statement):
+                continue
+            return not isinstance(
+                queue_statement,
+                (
+                    ast.If,
+                    ast.For,
+                    ast.AsyncFor,
+                    ast.While,
+                    ast.Try,
+                    ast.With,
+                    ast.AsyncWith,
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef,
+                ),
+            )
+    return False
+
+
+def _statically_unreachable(analysis: _SourceAnalysis, node: ast.AST) -> bool:
+    current = node
+    while current in analysis.parents:
+        current = analysis.parents[current]
+        if (
+            isinstance(current, ast.If)
+            and isinstance(current.test, ast.Constant)
+            and not current.test.value
+        ):
+            return True
+    return False
 
 
 def _check_post_commit(analysis: _SourceAnalysis) -> list[Violation]:
@@ -498,14 +754,36 @@ def _check_post_commit(analysis: _SourceAnalysis) -> list[Violation]:
     violations = []
     for function, required_call in POST_COMMIT_QUEUE_CALLS.items():
         node = analysis.functions.get(function)
-        if node is None or required_call not in _function_call_names(analysis, node):
+        calls = _direct_function_calls(analysis, function)
+        queue_calls = [
+            call
+            for call in calls
+            if _last_name(analysis.call_name(call)) == required_call
+            and not _statically_unreachable(analysis, call)
+        ]
+        safe_calls = [
+            call
+            for call in calls
+            if _last_name(analysis.call_name(call)) == "safe_engine_db_write"
+        ]
+        ordered = bool(queue_calls) and (
+            function == "_submit_post_commit_audio_tags"
+            or (
+                safe_calls
+                and all(
+                    any(_queue_is_guaranteed_after(analysis, safe, queue) for queue in queue_calls)
+                    for safe in safe_calls
+                )
+            )
+        )
+        if node is None or not ordered:
             violations.append(
                 _violation(
                     "post-commit-queue-required",
                     analysis,
                     node or analysis.tree,
                     function,
-                    f"required call {required_call} is missing",
+                    f"reachable {required_call} must occur after safe_engine_db_write returns",
                     "submit_audio_tag_jobs() and the durable SQLite retry queue",
                 )
             )
@@ -573,13 +851,77 @@ def _check_startup(analysis: _SourceAnalysis) -> list[Violation]:
     return violations
 
 
+def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
+    by_path = {analysis.item.path: analysis for analysis in analyses}
+    expected_paths = {
+        path
+        for policy in (
+            SQLITE_CONNECT_ALLOWLIST,
+            SQL_MUTATION_ALLOWLIST,
+            COMMIT_ALLOWLIST,
+            AUDIO_SAVE_ALLOWLIST,
+        )
+        for path, _symbol in policy
+    }
+    if not expected_paths.issubset(by_path):
+        return []
+
+    observed = {
+        "sqlite-connect": Counter(),
+        "mutating-sql": Counter(),
+        "commit": Counter(),
+        "audio-save": Counter(),
+    }
+    for analysis in analyses:
+        for call in analysis.calls():
+            full_name = analysis.call_name(call)
+            name = _last_name(full_name)
+            key = (analysis.item.path, analysis.symbol(call))
+            if full_name == "sqlite3.connect" and not _is_memory_connect(call):
+                observed["sqlite-connect"][key] += 1
+            if name == "commit" and _looks_like_db_receiver(full_name):
+                observed["commit"][key] += 1
+            if name in {"execute", "executemany"} and call.args and _looks_like_db_receiver(full_name):
+                sql = _literal_sql(analysis, call.args[0], call)
+                if sql and _MUTATING_SQL.match(sql):
+                    observed["mutating-sql"][key] += 1
+            if name == "save" and _looks_like_audio_receiver(full_name):
+                observed["audio-save"][key] += 1
+
+    violations: list[Violation] = []
+    policies = (
+        ("sqlite-connect", SQLITE_CONNECT_ALLOWLIST),
+        ("mutating-sql", SQL_MUTATION_ALLOWLIST),
+        ("commit", COMMIT_ALLOWLIST),
+        ("audio-save", AUDIO_SAVE_ALLOWLIST),
+    )
+    for category, policy in policies:
+        for key, (expected, _reason) in policy.items():
+            actual = observed[category][key]
+            if actual == expected:
+                continue
+            analysis = by_path[key[0]]
+            violations.append(
+                _violation(
+                    "allowlist-exact-count-mismatch",
+                    analysis,
+                    analysis.functions.get(key[1].split(".", 1)[0], analysis.tree),
+                    f"{category} in {key[1]}",
+                    f"policy expects exactly {expected} reviewed call(s), found {actual}",
+                    "an explicit architecture review and exact allowlist update",
+                )
+            )
+    return violations
+
+
 def analyze_sources(items: list[SourceFile]) -> list[Violation]:
     violations = []
-    for item in items:
-        analysis = _SourceAnalysis(item)
+    analyses = [_SourceAnalysis(item) for item in items]
+    for analysis in analyses:
         violations.extend(_check_calls(analysis))
         violations.extend(_check_post_commit(analysis))
         violations.extend(_check_startup(analysis))
+    violations.extend(_check_exact_allowlists(analyses))
     return sorted(violations, key=lambda item: (item.path, item.line, item.rule))
 
 

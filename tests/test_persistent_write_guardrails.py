@@ -109,7 +109,11 @@ def test_unsafe_fixture_is_detected(tmp_path, source, rule):
         ),
         (
             "tools/engine_write_tags.py",
-            "def write_audio_tags(tags):\n    backup_before_save()\n    tags.save()\n",
+            "def backup_before_save():\n"
+            "    create_verified_audio_backup()\n"
+            "def write_audio_tags(tags):\n"
+            "    backup_before_save()\n"
+            "    tags.save()\n",
         ),
     ],
 )
@@ -136,3 +140,139 @@ def test_violation_message_has_actionable_location_and_remediation():
     assert "tags.save()" in message
     assert "audio-save-without-approved-backup-writer" in message
     assert "Use write_audio_tags()" in message
+
+
+@pytest.mark.parametrize(
+    ("source", "rule"),
+    [
+        (
+            "from sqlite3 import connect\ndef unsafe(path):\n    return connect(path)\n",
+            "engine-db-direct-write",
+        ),
+        (
+            "import sqlite3\ndef unsafe(path):\n"
+            "    opener = sqlite3.connect\n    return opener(path)\n",
+            "engine-db-direct-write",
+        ),
+        (
+            "from engine_write_tags import write_audio_tags\ndef unsafe(path):\n"
+            "    writer = write_audio_tags\n    return writer(path)\n",
+            "audio-writer-bypass",
+        ),
+        (
+            "def unsafe(tags):\n    persist = tags.save\n    persist()\n",
+            "audio-save-without-approved-backup-writer",
+        ),
+        (
+            "def unsafe(connection):\n    run = connection.execute\n"
+            "    sql = \"DELETE FROM Track\"\n    run(sql)\n",
+            "unapproved-persistent-sql",
+        ),
+        (
+            "def unsafe(connection):\n"
+            "    sql = \"UP\" + \"DATE Track SET genre = 'House'\"\n"
+            "    connection.execute(sql)\n",
+            "unapproved-persistent-sql",
+        ),
+        (
+            "def unsafe(connection):\n"
+            "    sql = \"UPDATE Track SET genre = '{}'\".format('House')\n"
+            "    connection.execute(sql)\n",
+            "unapproved-persistent-sql",
+        ),
+        (
+            "def unsafe(connection):\n"
+            "    sql = build_sql_at_runtime()\n"
+            "    connection.execute(sql)\n",
+            "unapproved-dynamic-sql",
+        ),
+    ],
+)
+def test_callable_alias_and_dynamic_sql_bypasses_are_detected(source, rule):
+    assert rule in _rules(source, "tools/adversarial.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "def backup_before_save():\n"
+            "    create_verified_audio_backup()\n"
+            "def write_audio_tags(tags):\n"
+            "    tags.save()\n"
+            "    backup_before_save()\n"
+        ),
+        (
+            "def backup_before_save():\n"
+            "    create_verified_audio_backup()\n"
+            "def write_audio_tags(tags, do_backup):\n"
+            "    if do_backup:\n"
+            "        backup_before_save()\n"
+            "    else:\n"
+            "        tags.save()\n"
+        ),
+        (
+            "def write_audio_tags(tags):\n"
+            "    def backup_before_save():\n"
+            "        pass\n"
+            "    backup_before_save()\n"
+            "    tags.save()\n"
+        ),
+    ],
+)
+def test_backup_must_be_verified_and_dominate_each_save(source):
+    assert "audio-backup-call-required" in _rules(
+        source, "tools/engine_write_tags.py"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "def update_genre():\n"
+            "    safe_engine_db_write()\n"
+            "    def never_called():\n"
+            "        _submit_post_commit_audio_tags([])\n"
+        ),
+        (
+            "def update_genre():\n"
+            "    _submit_post_commit_audio_tags([])\n"
+            "    safe_engine_db_write()\n"
+        ),
+        (
+            "def update_genre():\n"
+            "    safe_engine_db_write()\n"
+            "    if False:\n"
+            "        _submit_post_commit_audio_tags([])\n"
+        ),
+    ],
+)
+def test_post_commit_queue_must_be_reachable_and_after_safe_write(source):
+    assert "post-commit-queue-required" in _rules(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def render(document):\n    document.save()\n",
+        "def finish(repository):\n    repository.commit()\n",
+        "def report(processor):\n    processor.execute('CREATE REPORT')\n",
+        "import sqlite3\ndef temporary():\n    return sqlite3.connect(':memory:')\n",
+    ],
+)
+def test_unrelated_common_method_names_are_not_persistent_write_violations(source):
+    assert not analyze_sources([SourceFile("tools/report.py", source)])
+
+
+def test_exact_allowlist_detects_disappearing_approved_call():
+    sources = production_sources(REPO_ROOT)
+    changed = []
+    for item in sources:
+        source = item.source
+        if item.path == "tools/analysis_db.py":
+            source = source.replace("connection.commit()", "connection.rollback()", 1)
+        changed.append(SourceFile(item.path, source))
+    assert "allowlist-exact-count-mismatch" in {
+        violation.rule for violation in analyze_sources(changed)
+    }
