@@ -276,3 +276,137 @@ def test_exact_allowlist_detects_disappearing_approved_call():
     assert "allowlist-exact-count-mismatch" in {
         violation.rule for violation in analyze_sources(changed)
     }
+
+
+@pytest.mark.parametrize(
+    ("source", "rule"),
+    [
+        (
+            "from sqlite3 import Connection\n"
+            "def unsafe(path):\n    return Connection(path)\n",
+            "engine-db-direct-write",
+        ),
+        (
+            "import sqlite3\ndef unsafe(path):\n"
+            "    return getattr(sqlite3, 'connect')(path)\n",
+            "engine-db-direct-write",
+        ),
+        (
+            "def unsafe(path):\n    return __import__('sqlite3').connect(path)\n",
+            "engine-db-direct-write",
+        ),
+        (
+            "def unsafe(cx):\n    cx.execute('DELETE FROM Track')\n",
+            "unapproved-persistent-sql",
+        ),
+        (
+            "from mutagen import File\ndef unsafe(path):\n"
+            "    track_file = File(path)\n    track_file.save()\n",
+            "audio-save-without-approved-backup-writer",
+        ),
+    ],
+)
+def test_equivalent_persistence_apis_and_opaque_receiver_names_are_detected(
+    source, rule
+):
+    assert rule in _rules(source, "tools/adversarial.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def unsafe(connection):\n"
+        "    connection.executescript('DELETE FROM Track;')\n",
+        "def unsafe(connection):\n"
+        "    connection.execute('-- generated\\nDELETE FROM Track')\n",
+        "def unsafe(connection):\n"
+        "    connection.execute('WITH ids AS (SELECT 1) DELETE FROM Track')\n",
+        "def unsafe(connection):\n"
+        "    connection.execute('PRAGMA user_version = 2')\n",
+    ],
+)
+def test_additional_sql_mutations_are_detected(source):
+    assert "unapproved-persistent-sql" in _rules(source, "tools/adversarial.py")
+
+
+def test_unreachable_verified_backup_does_not_authorize_save():
+    source = (
+        "def backup_before_save():\n"
+        "    if False:\n        create_verified_audio_backup()\n"
+        "def write_audio_tags(tags):\n"
+        "    backup_before_save()\n    tags.save()\n"
+    )
+    assert "audio-backup-call-required" in _rules(
+        source, "tools/engine_write_tags.py"
+    )
+
+
+def test_conditionally_verified_backup_helper_does_not_authorize_save():
+    source = (
+        "def backup_before_save(required):\n"
+        "    if required:\n        create_verified_audio_backup()\n"
+        "def write_audio_tags(tags):\n"
+        "    backup_before_save(False)\n    tags.save()\n"
+    )
+    assert "audio-backup-call-required" in _rules(
+        source, "tools/engine_write_tags.py"
+    )
+
+
+def test_noop_callback_does_not_authorize_callback_writer_save():
+    source = (
+        "def _set_tags_mp3(tags, before_save=None):\n"
+        "    if before_save is None:\n        raise RuntimeError\n"
+        "    before_save()\n    tags.save()\n"
+        "def main(tags):\n"
+        "    _set_tags_mp3(tags, before_save=lambda: None)\n"
+    )
+    assert "audio-backup-callback-required" in _rules(
+        source, "tools/engine_write_tags.py"
+    )
+
+
+def test_caught_safe_write_failure_cannot_reach_post_commit_queue():
+    source = (
+        "def update_genre():\n"
+        "    try:\n        safe_engine_db_write()\n"
+        "    except Exception:\n        pass\n"
+        "    _submit_post_commit_audio_tags([])\n"
+    )
+    assert "post-commit-queue-required" in _rules(source)
+
+
+def test_exact_allowlist_detects_changed_sql_operation():
+    changed = []
+    for item in production_sources(REPO_ROOT):
+        source = item.source
+        if item.path == "set_app/set_app.py":
+            source = source.replace(
+                "UPDATE Track SET lastEditTime = ? WHERE id = ?",
+                "DELETE FROM Track WHERE id = ?",
+                1,
+            )
+        changed.append(SourceFile(item.path, source))
+    assert "allowlist-operation-mismatch" in {
+        violation.rule for violation in analyze_sources(changed)
+    }
+
+
+def test_exact_allowlist_detects_disappearing_safe_write_call():
+    changed = []
+    for item in production_sources(REPO_ROOT):
+        source = item.source
+        if item.path == "set_app/set_app.py":
+            source = source.replace("safe_engine_db_write(", "removed_safe_write(", 1)
+        changed.append(SourceFile(item.path, source))
+    assert "allowlist-safe-write-mismatch" in {
+        violation.rule for violation in analyze_sources(changed)
+    }
+
+
+def test_function_parameter_shadowing_import_is_not_a_sqlite_call():
+    source = (
+        "from sqlite3 import connect\n"
+        "def report(connect):\n    return connect('not sqlite')\n"
+    )
+    assert not analyze_sources([SourceFile("tools/report.py", source)])

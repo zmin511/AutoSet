@@ -42,12 +42,27 @@ SQLITE_CONNECT_ALLOWLIST = {
 }
 
 SAFE_ENGINE_WRITE_CALLS = {
-    ("set_app/set_app.py", "export_track_marks_to_engine"),
-    ("set_app/set_app.py", "update_genre"),
-    ("set_app/set_app.py", "detail_folder_styles"),
-    ("set_app/set_app.py", "bulk_update_genres"),
-    ("set_app/set_app.py", "create_engine_playlist_from_tracks"),
-    ("set_app/set_app.py", "_write_energy_ratings_for_paths"),
+    ("set_app/set_app.py", "export_track_marks_to_engine"): (
+        "export_track_marks_to_engine",
+        "write_export",
+    ),
+    ("set_app/set_app.py", "update_genre"): ("update_track_genre", "write_genre"),
+    ("set_app/set_app.py", "detail_folder_styles"): (
+        "detail_folder_styles",
+        "write_detail_styles",
+    ),
+    ("set_app/set_app.py", "bulk_update_genres"): (
+        "bulk_update_genres",
+        "write_bulk_genres",
+    ),
+    ("set_app/set_app.py", "create_engine_playlist_from_tracks"): (
+        "create_engine_playlist",
+        "write_playlist",
+    ),
+    ("set_app/set_app.py", "_write_energy_ratings_for_paths"): (
+        "write_energy_ratings",
+        "write_energy_ratings_batch",
+    ),
 }
 
 SQL_MUTATION_ALLOWLIST = {
@@ -83,6 +98,14 @@ SQL_MUTATION_ALLOWLIST = {
         1,
         "write to AutoSet's separate analysis.db",
     ),
+    ("tools/analysis_db.py", "initialize_schema"): (
+        1,
+        "analysis.db schema creation",
+    ),
+    ("tools/analysis_db.py", "open_analysis_db"): (
+        1,
+        "analysis.db WAL configuration",
+    ),
     ("tools/analysis_db.py", "delete_profile_by_path"): (
         1,
         "delete from AutoSet's separate analysis.db",
@@ -90,6 +113,10 @@ SQL_MUTATION_ALLOWLIST = {
     ("tools/audio_tag_post_commit.py", "_create_indexes"): (
         3,
         "retry-queue schema indexes",
+    ),
+    ("tools/audio_tag_post_commit.py", "_connect"): (
+        1,
+        "retry-queue WAL configuration",
     ),
     ("tools/audio_tag_post_commit.py", "_migrate_or_create_schema"): (
         7,
@@ -111,6 +138,69 @@ SQL_MUTATION_ALLOWLIST = {
         1,
         "transaction start inside the approved Engine DB safe writer",
     ),
+}
+
+SQL_OPERATION_ALLOWLIST = {
+    ("set_app/set_app.py", "_insert_playlist"): (
+        "INSERT INTO Playlist",
+        "UPDATE Playlist",
+    ),
+    ("set_app/set_app.py", "export_track_marks_to_engine.write_export"): (
+        "UPDATE PerformanceData",
+        "UPDATE Track",
+    ),
+    ("set_app/set_app.py", "update_genre.write_genre"): ("UPDATE Track",),
+    ("set_app/set_app.py", "detail_folder_styles.write_detail_styles"): (
+        "UPDATE Track",
+    ),
+    ("set_app/set_app.py", "bulk_update_genres.write_bulk_genres"): (
+        "UPDATE Track",
+    ),
+    ("set_app/set_app.py", "create_engine_playlist_from_tracks.write_playlist"): (
+        "UPDATE Playlist",
+        "UPDATE Playlist",
+        "INSERT INTO PlaylistEntity",
+        "UPDATE PlaylistEntity",
+    ),
+    (
+        "set_app/set_app.py",
+        "_write_energy_ratings_for_paths.write_energy_ratings_batch",
+    ): ("UPDATE Track",),
+    ("tools/analysis_db.py", "initialize_schema"): ("CREATE TABLE track_analysis",),
+    ("tools/analysis_db.py", "open_analysis_db"): ("PRAGMA journal_mode",),
+    ("tools/analysis_db.py", "upsert_profile"): ("INSERT INTO track_analysis",),
+    ("tools/analysis_db.py", "delete_profile_by_path"): (
+        "DELETE FROM track_analysis",
+    ),
+    ("tools/audio_tag_post_commit.py", "_connect"): ("PRAGMA journal_mode",),
+    ("tools/audio_tag_post_commit.py", "_create_indexes"): (
+        "CREATE INDEX audio_tag_jobs_status_sequence",
+        "CREATE INDEX audio_tag_jobs_path_sequence",
+        "CREATE INDEX audio_tag_jobs_lease",
+    ),
+    ("tools/audio_tag_post_commit.py", "_migrate_or_create_schema"): (
+        "BEGIN IMMEDIATE",
+        "CREATE TABLE audio_tag_jobs",
+        "ALTER TABLE audio_tag_jobs",
+        "CREATE TABLE audio_tag_jobs",
+        "INSERT INTO audio_tag_jobs",
+        "DROP TABLE audio_tag_jobs_legacy",
+        "UPDATE audio_tag_jobs",
+    ),
+    ("tools/audio_tag_post_commit.py", "enqueue_audio_tag_jobs"): (
+        "BEGIN IMMEDIATE",
+        "UPDATE audio_tag_jobs",
+        "INSERT INTO audio_tag_jobs",
+    ),
+    ("tools/audio_tag_post_commit.py", "_claim_job"): (
+        "BEGIN IMMEDIATE",
+        "UPDATE audio_tag_jobs",
+        "UPDATE audio_tag_jobs",
+    ),
+    ("tools/audio_tag_post_commit.py", "_complete_claim"): (
+        "UPDATE audio_tag_jobs",
+    ),
+    ("tools/engine_db_write.py", "safe_engine_db_write"): ("BEGIN IMMEDIATE",),
 }
 
 COMMIT_ALLOWLIST = {
@@ -205,6 +295,13 @@ POST_COMMIT_QUEUE_CALLS = {
     "_submit_post_commit_audio_tags": "submit_audio_tag_jobs",
 }
 
+AUDIO_CALLBACK_WRITERS = {
+    "_set_tags_mp3": 4,
+    "_set_bitrate_tag_mp3": 3,
+    "_set_tags_flac": 4,
+    "_set_bitrate_tag_flac": 3,
+}
+
 STARTUP_FORBIDDEN_CALLS = {
     "process_pending_audio_tag_jobs",
     "refresh_genres",
@@ -215,11 +312,17 @@ STARTUP_FORBIDDEN_CALLS = {
     "write_tags",
 }
 
-_MUTATING_SQL = re.compile(
-    r"^(?:INSERT|UPDATE|DELETE|REPLACE|BEGIN|VACUUM|ATTACH|DETACH|"
-    r"CREATE\s+(?:TABLE|INDEX|TRIGGER|VIEW)|"
-    r"DROP\s+(?:TABLE|INDEX|TRIGGER|VIEW)|"
-    r"ALTER\s+TABLE)\b",
+_SQL_COMMENT = re.compile(r"/\*.*?\*/|--[^\n]*(?:\n|$)", re.DOTALL)
+_SQL_WRITE = re.compile(
+    r"\b(INSERT\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM|"
+    r"CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER|VIEW)|"
+    r"DROP\s+(?:TABLE|INDEX|TRIGGER|VIEW)|ALTER\s+TABLE|"
+    r"BEGIN(?:\s+IMMEDIATE|\s+EXCLUSIVE)?|VACUUM|ATTACH|DETACH)\b",
+    re.IGNORECASE,
+)
+_PERSISTENT_PRAGMA = re.compile(
+    r"^PRAGMA\s+(?:[\w]+\.)?(user_version|application_id|journal_mode|"
+    r"auto_vacuum|page_size)\s*=",
     re.IGNORECASE,
 )
 
@@ -306,6 +409,24 @@ class _SourceAnalysis:
         ]
         return max(candidates, default=(0, None), key=lambda item: item[0])[1]
 
+    def _parameter_shadows_import(self, name: str, context: ast.AST) -> bool:
+        current = context
+        while current in self.parents:
+            current = self.parents[current]
+            if not isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            arguments = (
+                *current.args.posonlyargs,
+                *current.args.args,
+                *current.args.kwonlyargs,
+            )
+            return name in {argument.arg for argument in arguments} or (
+                current.args.vararg is not None and current.args.vararg.arg == name
+            ) or (
+                current.args.kwarg is not None and current.args.kwarg.arg == name
+            )
+        return False
+
     def symbol(self, node: ast.AST) -> str:
         scopes: list[str] = []
         current = node
@@ -323,16 +444,30 @@ class _SourceAnalysis:
     ) -> str:
         context = context or node
         if isinstance(node, ast.Name):
-            if node.id in self.imports:
-                return self.imports[node.id]
             if node.id not in seen:
                 binding = self._binding(node.id, context)
                 if binding is not None:
                     return self.expression_name(binding, context, seen | {node.id})
+            if node.id in self.imports and not self._parameter_shadows_import(
+                node.id, context
+            ):
+                return self.imports[node.id]
             return node.id
         if isinstance(node, ast.Attribute):
             base = self.expression_name(node.value, context, seen)
             return f"{base}.{node.attr}" if base else node.attr
+        if isinstance(node, ast.Call):
+            called = self.expression_name(node.func, context, seen)
+            if called == "getattr" and len(node.args) >= 2:
+                attribute = _static_constant_string(node.args[1])
+                if attribute is not None:
+                    base = self.expression_name(node.args[0], context, seen)
+                    return f"{base}.{attribute}"
+            if called == "__import__" and node.args:
+                module = _static_constant_string(node.args[0])
+                if module is not None:
+                    return module
+            return f"{called}()"
         return ast.unparse(node)
 
     def call_name(self, node: ast.Call) -> str:
@@ -357,6 +492,12 @@ def production_sources(repo_root: Path) -> list[SourceFile]:
 
 def _last_name(name: str) -> str:
     return name.rsplit(".", 1)[-1]
+
+
+def _static_constant_string(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
 
 
 def _is_read_only_connect(node: ast.Call) -> bool:
@@ -407,8 +548,31 @@ def _static_string(
 
 
 def _literal_sql(analysis: _SourceAnalysis, node: ast.AST, context: ast.AST) -> str | None:
-    value = _static_string(analysis, node, context)
-    return " ".join(value.split()) if value is not None else None
+    return _static_string(analysis, node, context)
+
+
+def _normalized_sql(sql: str) -> str:
+    return " ".join(_SQL_COMMENT.sub(" ", sql).split())
+
+
+def _sql_write_signature(sql: str) -> str | None:
+    normalized = _normalized_sql(sql)
+    pragma = _PERSISTENT_PRAGMA.match(normalized)
+    if pragma:
+        return f"PRAGMA {pragma.group(1).casefold()}"
+    match = _SQL_WRITE.search(normalized)
+    if match is None:
+        return None
+    operation = " ".join(match.group(1).upper().split())
+    tail = normalized[match.end() :].lstrip()
+    target = re.match(
+        r"(?:IF\s+NOT\s+EXISTS\s+|IF\s+EXISTS\s+)?[\"`\[]?([\w.]+)",
+        tail,
+        re.IGNORECASE,
+    )
+    if operation.startswith("BEGIN") or operation in {"VACUUM", "ATTACH", "DETACH"}:
+        return operation
+    return f"{operation} {target.group(1) if target else '<dynamic>'}"
 
 
 def _receiver_name(full_name: str) -> str:
@@ -429,6 +593,26 @@ def _looks_like_audio_receiver(full_name: str) -> bool:
         marker in full_name.casefold()
         for marker in ("mutagen.", "id3(", "flac(", "mp4(")
     )
+
+
+def _module_imports_mutagen(analysis: _SourceAnalysis) -> bool:
+    return any(name == "mutagen" or name.startswith("mutagen.") for name in analysis.imports.values())
+
+
+def _safe_write_signature(
+    analysis: _SourceAnalysis, call: ast.Call
+) -> tuple[str | None, str | None]:
+    operation = (
+        _static_string(analysis, call.args[2], call)
+        if len(call.args) >= 3
+        else None
+    )
+    callback = (
+        _last_name(analysis.expression_name(call.args[3], call))
+        if len(call.args) >= 4
+        else None
+    )
+    return operation, callback
 
 
 def _violation(
@@ -464,7 +648,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
         symbol = analysis.symbol(call)
         key = (analysis.item.path, symbol)
 
-        if full_name == "sqlite3.connect" and not _is_memory_connect(call):
+        if full_name in {"sqlite3.connect", "sqlite3.Connection"} and not _is_memory_connect(call):
             connect_counts[key] += 1
             allowed = SQLITE_CONNECT_ALLOWLIST.get(key)
             if allowed is None or connect_counts[key] > allowed[0]:
@@ -484,17 +668,20 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                     )
                 )
 
-        if name == "safe_engine_db_write" and key not in SAFE_ENGINE_WRITE_CALLS:
-            violations.append(
-                _violation(
-                    "engine-db-new-write-entrypoint",
-                    analysis,
-                    call,
-                    ast.unparse(call),
-                    "the Engine DB write entrypoint is not in the minimal allowlist",
-                    "an architecture review and an exact SAFE_ENGINE_WRITE_CALLS entry",
+        if name == "safe_engine_db_write":
+            expected = SAFE_ENGINE_WRITE_CALLS.get(key)
+            actual = _safe_write_signature(analysis, call)
+            if expected != actual:
+                violations.append(
+                    _violation(
+                        "engine-db-new-write-entrypoint",
+                        analysis,
+                        call,
+                        ast.unparse(call),
+                        f"safe-write operation/callback {actual!r} does not match reviewed {expected!r}",
+                        "an architecture review and an exact SAFE_ENGINE_WRITE_CALLS entry",
+                    )
                 )
-            )
 
         if name == "commit" and _looks_like_db_receiver(full_name):
             commit_counts[key] += 1
@@ -511,11 +698,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                     )
                 )
 
-        if (
-            name in {"execute", "executemany"}
-            and call.args
-            and _looks_like_db_receiver(full_name)
-        ):
+        if name in {"execute", "executemany", "executescript"} and call.args:
             sql = _literal_sql(analysis, call.args[0], call)
             if sql is None:
                 violations.append(
@@ -528,7 +711,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                         "a static SQL expression or an explicitly reviewed persistence helper",
                     )
                 )
-            elif _MUTATING_SQL.match(sql):
+            elif _sql_write_signature(sql) is not None:
                 mutation_counts[key] += 1
                 allowed = SQL_MUTATION_ALLOWLIST.get(key)
                 if allowed is None or mutation_counts[key] > allowed[0]:
@@ -543,7 +726,9 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                         )
                     )
 
-        if name == "save" and _looks_like_audio_receiver(full_name):
+        if name == "save" and (
+            _looks_like_audio_receiver(full_name) or _module_imports_mutagen(analysis)
+        ):
             save_counts[key] += 1
             first_save.setdefault(key, call)
             save_calls.setdefault(key, []).append(call)
@@ -595,6 +780,40 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                 )
             )
 
+    for call in analysis.calls():
+        writer = _last_name(analysis.call_name(call))
+        callback_position = AUDIO_CALLBACK_WRITERS.get(writer)
+        if callback_position is None:
+            continue
+        callback = next(
+            (
+                keyword.value
+                for keyword in call.keywords
+                if keyword.arg == "before_save"
+            ),
+            call.args[callback_position]
+            if len(call.args) > callback_position
+            else None,
+        )
+        callback_name = (
+            _last_name(analysis.expression_name(callback, call))
+            if callback is not None
+            else ""
+        )
+        if callback is None or not _callable_provides_verified_backup(
+            analysis, callback_name
+        ):
+            violations.append(
+                _violation(
+                    "audio-backup-callback-required",
+                    analysis,
+                    call,
+                    ast.unparse(call),
+                    "audio writer callback is absent or cannot reach verified backup creation",
+                    "a callback that unconditionally reaches create_verified_audio_backup()",
+                )
+            )
+
     return violations
 
 
@@ -609,17 +828,98 @@ def _definition(analysis: _SourceAnalysis, name: str) -> ast.FunctionDef | ast.A
     )
 
 
+def _definition_symbol(
+    analysis: _SourceAnalysis, definition: ast.FunctionDef | ast.AsyncFunctionDef
+) -> str:
+    parent = analysis.symbol(definition)
+    return definition.name if parent == "<module>" else f"{parent}.{definition.name}"
+
+
+def _callable_provides_verified_backup(
+    analysis: _SourceAnalysis, name: str, seen: frozenset[str] = frozenset()
+) -> bool:
+    if not name or name in seen:
+        return False
+    definition = _definition(analysis, name)
+    if definition is None:
+        return name == "create_verified_audio_backup"
+    symbol = _definition_symbol(analysis, definition)
+    direct_statements = tuple(
+        statement
+        for statement in definition.body
+        if not isinstance(
+            statement,
+            (
+                ast.If,
+                ast.For,
+                ast.AsyncFor,
+                ast.While,
+                ast.Try,
+                ast.With,
+                ast.AsyncWith,
+                ast.Match,
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        )
+    )
+    for statement in direct_statements:
+        for node in ast.walk(statement):
+            if not isinstance(node, ast.Call) or analysis.symbol(node) != symbol:
+                continue
+            called = _last_name(analysis.call_name(node))
+            if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
+                analysis, called, seen | {name}
+            ):
+                return True
+    for statement in definition.body:
+        if not _is_cached_verified_backup_branch(statement):
+            continue
+        calls = [node for node in ast.walk(statement) if isinstance(node, ast.Call)]
+        if not calls:
+            continue
+        called = _last_name(analysis.call_name(calls[0]))
+        if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
+            analysis, called, seen | {name}
+        ):
+            return True
+    return False
+
+
+def _is_cached_verified_backup_branch(statement: ast.stmt) -> bool:
+    if not isinstance(statement, ast.If) or statement.orelse:
+        return False
+    test = statement.test
+    if not (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Is)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value is None
+    ):
+        return False
+    cache_name = test.left.id
+    return any(
+        isinstance(node, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == cache_name
+            for target in (
+                node.targets if isinstance(node, ast.Assign) else [node.target]
+            )
+        )
+        and isinstance(node.value, ast.Call)
+        for node in statement.body
+    )
+
+
 def _is_verified_backup_callable(
     analysis: _SourceAnalysis, function_name: str, required_call: str, save: ast.Call
 ) -> bool:
     definition = _definition(analysis, required_call)
     if definition is not None:
-        return any(
-            isinstance(node, ast.Call)
-            and _last_name(analysis.call_name(node)) == "create_verified_audio_backup"
-            and analysis.symbol(node).endswith(required_call)
-            for node in ast.walk(definition)
-        )
+        return _callable_provides_verified_backup(analysis, required_call)
 
     function = _definition(analysis, function_name)
     if function is None:
@@ -718,6 +1018,8 @@ def _queue_is_guaranteed_after(
                 continue
             if safe_block.index(safe_statement) >= safe_block.index(queue_statement):
                 continue
+            if _caught_safe_write_failure_can_reach_queue(analysis, safe, queue):
+                continue
             return not isinstance(
                 queue_statement,
                 (
@@ -732,6 +1034,34 @@ def _queue_is_guaranteed_after(
                     ast.AsyncFunctionDef,
                 ),
             )
+    return False
+
+
+def _is_descendant(analysis: _SourceAnalysis, node: ast.AST, ancestor: ast.AST) -> bool:
+    current = node
+    while current in analysis.parents:
+        current = analysis.parents[current]
+        if current is ancestor:
+            return True
+    return False
+
+
+def _handler_cannot_fall_through(handler: ast.ExceptHandler) -> bool:
+    return bool(handler.body) and isinstance(handler.body[-1], (ast.Raise, ast.Return))
+
+
+def _caught_safe_write_failure_can_reach_queue(
+    analysis: _SourceAnalysis, safe: ast.Call, queue: ast.Call
+) -> bool:
+    current = safe
+    while current in analysis.parents:
+        current = analysis.parents[current]
+        if not isinstance(current, ast.Try) or _is_descendant(analysis, queue, current):
+            continue
+        if current.handlers and any(
+            not _handler_cannot_fall_through(handler) for handler in current.handlers
+        ):
+            return True
     return False
 
 
@@ -860,6 +1190,7 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
             SQL_MUTATION_ALLOWLIST,
             COMMIT_ALLOWLIST,
             AUDIO_SAVE_ALLOWLIST,
+            SAFE_ENGINE_WRITE_CALLS,
         )
         for path, _symbol in policy
     }
@@ -871,22 +1202,30 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
         "mutating-sql": Counter(),
         "commit": Counter(),
         "audio-save": Counter(),
+        "safe-engine-write": Counter(),
     }
+    observed_sql_operations: dict[tuple[str, str], Counter[str]] = {}
     for analysis in analyses:
         for call in analysis.calls():
             full_name = analysis.call_name(call)
             name = _last_name(full_name)
             key = (analysis.item.path, analysis.symbol(call))
-            if full_name == "sqlite3.connect" and not _is_memory_connect(call):
+            if full_name in {"sqlite3.connect", "sqlite3.Connection"} and not _is_memory_connect(call):
                 observed["sqlite-connect"][key] += 1
             if name == "commit" and _looks_like_db_receiver(full_name):
                 observed["commit"][key] += 1
-            if name in {"execute", "executemany"} and call.args and _looks_like_db_receiver(full_name):
+            if name in {"execute", "executemany", "executescript"} and call.args:
                 sql = _literal_sql(analysis, call.args[0], call)
-                if sql and _MUTATING_SQL.match(sql):
+                signature = _sql_write_signature(sql) if sql is not None else None
+                if signature is not None:
                     observed["mutating-sql"][key] += 1
-            if name == "save" and _looks_like_audio_receiver(full_name):
+                    observed_sql_operations.setdefault(key, Counter())[signature] += 1
+            if name == "save" and (
+                _looks_like_audio_receiver(full_name) or _module_imports_mutagen(analysis)
+            ):
                 observed["audio-save"][key] += 1
+            if name == "safe_engine_db_write":
+                observed["safe-engine-write"][key] += 1
 
     violations: list[Violation] = []
     policies = (
@@ -911,6 +1250,37 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
                     "an explicit architecture review and exact allowlist update",
                 )
             )
+    for key, expected_operations in SQL_OPERATION_ALLOWLIST.items():
+        actual = observed_sql_operations.get(key, Counter())
+        expected = Counter(expected_operations)
+        if actual == expected:
+            continue
+        analysis = by_path[key[0]]
+        violations.append(
+            _violation(
+                "allowlist-operation-mismatch",
+                analysis,
+                analysis.functions.get(key[1].split(".", 1)[0], analysis.tree),
+                f"mutating SQL in {key[1]}",
+                f"expected reviewed operations {dict(expected)!r}, found {dict(actual)!r}",
+                "an explicit architecture review and exact SQL operation update",
+            )
+        )
+    for key in SAFE_ENGINE_WRITE_CALLS:
+        actual = observed["safe-engine-write"][key]
+        if actual == 1:
+            continue
+        analysis = by_path[key[0]]
+        violations.append(
+            _violation(
+                "allowlist-safe-write-mismatch",
+                analysis,
+                analysis.functions.get(key[1], analysis.tree),
+                f"safe_engine_db_write in {key[1]}",
+                f"policy expects exactly one reviewed safe-write call, found {actual}",
+                "the reviewed safe_engine_db_write operation/callback pair",
+            )
+        )
     return violations
 
 
