@@ -199,6 +199,18 @@ def _migrate_or_create_schema(connection: sqlite3.Connection) -> None:
                 FROM audio_tag_jobs_legacy
                 """
             )
+            for row in connection.execute(
+                "SELECT sequence, normalized_path FROM audio_tag_jobs"
+            ).fetchall():
+                normalized_path, path_key = _normalize_path(row["normalized_path"])
+                connection.execute(
+                    """
+                    UPDATE audio_tag_jobs
+                    SET normalized_path = ?, path_key = ?
+                    WHERE sequence = ?
+                    """,
+                    (normalized_path, path_key, row["sequence"]),
+                )
             connection.execute("DROP TABLE audio_tag_jobs_legacy")
         _create_indexes(connection)
         connection.commit()
@@ -713,6 +725,20 @@ def submit_audio_tag_jobs(
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
     platform_name: str | None = None,
 ) -> dict[str, object]:
+    jobs = list(jobs)
+    if not jobs:
+        return {
+            "ok": True,
+            "attempted": 0,
+            "completed": 0,
+            "pending": 0,
+            "processing": 0,
+            "results": [],
+            "retry_queue_path": str(Path(str(queue_path))),
+            "queued": 0,
+            "reused": 0,
+            "jobs": [],
+        }
     queued_jobs = enqueue_audio_tag_jobs(
         queue_path,
         jobs,
@@ -752,6 +778,8 @@ def submit_audio_tag_jobs(
     processed["queued"] = sum(bool(job["enqueued"]) for job in queued_jobs)
     processed["reused"] = len(queued_jobs) - processed["queued"]
     processed["jobs"] = queued_jobs
+    if len(processed["results"]) != len(jobs):
+        raise RuntimeError("Audio tag queue returned an incomplete result list")
     return processed
 
 

@@ -609,3 +609,176 @@ def test_queue_database_failure_reports_unqueued_not_pending(tmp_path, monkeypat
     assert "queue" in outcome["queue_error"].casefold()
     assert file_results[0]["file_tags_warning"] == outcome["queue_error"]
     assert writes == []
+
+
+def test_queue_transaction_failure_rolls_back_and_never_calls_writer(
+    tmp_path, monkeypatch
+):
+    queue_path = tmp_path / "retry.sqlite3"
+    monkeypatch.setattr(set_app, "AUDIO_TAG_RETRY_QUEUE_PATH", queue_path)
+    real_connect = audio_tag_post_commit._connect
+    writes = []
+
+    class FailingTransaction:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def execute(self, sql, parameters=()):
+            if "INSERT INTO audio_tag_jobs" in sql:
+                raise sqlite3.OperationalError("synthetic transaction failure")
+            return self.connection.execute(sql, parameters)
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+    monkeypatch.setattr(
+        audio_tag_post_commit,
+        "_connect",
+        lambda path: FailingTransaction(real_connect(path)),
+    )
+    monkeypatch.setattr(
+        set_app,
+        "_track_file_tag_result",
+        lambda *_args, **_kwargs: writes.append("write"),
+    )
+
+    outcome, file_results = set_app._submit_post_commit_audio_tags(
+        [
+            set_app._audio_tag_queue_job(
+                "update_genre",
+                tmp_path / "track.mp3",
+                track_id=1,
+                genre="House",
+            )
+        ]
+    )
+
+    assert outcome["queued"] == outcome["completed"] == outcome["pending"] == 0
+    assert outcome["unqueued"] == 1
+    assert "synthetic transaction failure" in outcome["queue_error"]
+    assert file_results[0]["file_tags_warning"] == outcome["queue_error"]
+    assert writes == []
+    with sqlite3.connect(queue_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audio_tag_jobs").fetchone()[0] == 0
+
+
+def test_stale_owner_cannot_complete_after_expired_job_is_reclaimed(tmp_path):
+    queue_path = tmp_path / "retry.sqlite3"
+    job = enqueue_audio_tag_jobs(
+        queue_path,
+        [_job(tmp_path / "track.mp3", "House")],
+    )[0]
+    first = audio_tag_post_commit._claim_job(
+        queue_path,
+        str(job["id"]),
+        0,
+        lease_seconds=300,
+    )
+    with sqlite3.connect(queue_path) as connection:
+        connection.execute(
+            "UPDATE audio_tag_jobs SET lease_expires_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00.000000+00:00", job["id"]),
+        )
+    second = audio_tag_post_commit._claim_job(
+        queue_path,
+        str(job["id"]),
+        1,
+        lease_seconds=300,
+    )
+
+    assert first["claim_token"] != second["claim_token"]
+    assert audio_tag_post_commit._complete_claim(
+        queue_path,
+        str(job["id"]),
+        str(first["claim_token"]),
+        status="completed",
+        error=None,
+        result=_success(first),
+    ) is False
+    assert _queue_rows(queue_path)[0]["claim_token"] == second["claim_token"]
+    assert audio_tag_post_commit._complete_claim(
+        queue_path,
+        str(job["id"]),
+        str(second["claim_token"]),
+        status="completed",
+        error=None,
+        result=_success(second),
+    ) is True
+
+
+def test_legacy_queue_migration_preserves_jobs_and_rebuilds_path_identity(
+    tmp_path, monkeypatch
+):
+    queue_path = tmp_path / "legacy.sqlite3"
+    track_path = tmp_path / "Music" / "Track.mp3"
+    payload_json = json.dumps(_job(track_path, "House")["payload"])
+    with sqlite3.connect(queue_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE audio_tag_jobs (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT NOT NULL UNIQUE,
+                operation_type TEXT NOT NULL,
+                track_id INTEGER,
+                normalized_path TEXT NOT NULL,
+                path_key TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('pending', 'completed', 'superseded')
+                ),
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                idempotency_key TEXT NOT NULL
+            )
+            """
+        )
+        for job_id, status in (("pending-id", "pending"), ("completed-id", "completed")):
+            connection.execute(
+                """
+                INSERT INTO audio_tag_jobs (
+                    id, operation_type, track_id, normalized_path, path_key,
+                    payload_json, status, created_at, updated_at, idempotency_key
+                ) VALUES (?, 'test', 1, ?, ?, ?, ?, 'created', 'updated', ?)
+                """,
+                (
+                    job_id,
+                    str(track_path),
+                    str(track_path).casefold(),
+                    payload_json,
+                    status,
+                    f"key-{job_id}",
+                ),
+            )
+
+    monkeypatch.setattr(audio_tag_post_commit.os, "name", "posix")
+    status = audio_tag_queue_status(queue_path)
+    rows = _queue_rows(queue_path)
+
+    assert status["pending"] == status["completed"] == 1
+    assert [row["id"] for row in rows] == ["pending-id", "completed-id"]
+    assert all(row["path_key"] == str(track_path) for row in rows)
+    with sqlite3.connect(queue_path) as connection:
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+    assert indexes >= {
+        "audio_tag_jobs_status_sequence",
+        "audio_tag_jobs_path_sequence",
+        "audio_tag_jobs_lease",
+    }
+
+
+def test_empty_submit_does_not_process_or_create_queue(tmp_path):
+    queue_path = tmp_path / "runtime" / "retry.sqlite3"
+
+    outcome = submit_audio_tag_jobs(queue_path, [], writer=_success)
+
+    assert outcome["results"] == []
+    assert outcome["attempted"] == outcome["queued"] == outcome["pending"] == 0
+    assert not queue_path.exists()

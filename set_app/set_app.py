@@ -3368,7 +3368,7 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
             )
             for track_id, path, new_genre, bpm, key, rating in changes
         )
-        for change, file_result in zip(changes, file_results):
+        for change, file_result in zip(changes, file_results, strict=True):
             path = change[1]
             warning = file_result.get("file_tags_warning")
             if warning:
@@ -3525,7 +3525,7 @@ def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
             )
             for track_id, path, new_genre, bpm, key, rating in changes
         )
-        for change, file_result in zip(changes, file_results):
+        for change, file_result in zip(changes, file_results, strict=True):
             path = change[1]
             warning = file_result.get("file_tags_warning")
             if warning:
@@ -4228,7 +4228,7 @@ def _write_energy_ratings_for_paths(paths, scope_label):
         )
         for track_id, path, genre, bpm, key, stars in changes
     )
-    for change, file_result in zip(changes, file_results):
+    for change, file_result in zip(changes, file_results, strict=True):
         path = change[1]
         warning = file_result.get("file_tags_warning")
         if warning:
