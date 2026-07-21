@@ -27,6 +27,11 @@ BUILDER = TOOLS_DIR / "engine_set_builder.py"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 from engine_write_tags import write_audio_tags  # noqa: E402
+from audio_tag_post_commit import (  # noqa: E402
+    audio_tag_queue_status,
+    process_pending_audio_tag_jobs,
+    submit_audio_tag_jobs,
+)
 from engine_db_read import open_engine_db_read_only  # noqa: E402
 from engine_db_write import EngineDBWriteError, safe_engine_db_write  # noqa: E402
 from engine_cue_loop_codec import (  # noqa: E402
@@ -49,6 +54,7 @@ STATIC_DIR = APP_DIR / "static"
 TRACK_MARKS_DIR = APP_DIR / "track_marks"
 ENGINE_DB_BACKUP_DIR = APP_DIR / "backups" / "engine_db"
 AUDIO_TAG_BACKUP_DIR = PROJECT_DIR / "tag_backups"
+AUDIO_TAG_RETRY_QUEUE_PATH = APP_DIR / "runtime" / "audio_tag_retry.sqlite3"
 # Engine cue/loop raw positions are stored as frames at 44100 Hz based on diff diagnostics.
 ENGINE_CUE_TIME_SCALE = 44100.0
 ENGINE_MARK_TO_CUE_SLOT = {
@@ -2891,6 +2897,93 @@ def _track_file_tag_result(path, genre=None, bpm=None, key=None, rating=None):
     return result
 
 
+def _audio_tag_queue_job(
+    operation_type,
+    path,
+    *,
+    track_id=None,
+    genre=None,
+    bpm=None,
+    key=None,
+    rating=None,
+):
+    return {
+        "operation_type": operation_type,
+        "track_id": track_id,
+        "path": str(path),
+        "payload": {
+            "genre": genre,
+            "bpm": bpm,
+            "key": key,
+            "styles": genre,
+            "rating": rating,
+        },
+    }
+
+
+def _write_queued_audio_tags(job):
+    payload = dict(job.get("payload") or {})
+    path = str(job["path"])
+    if job.get("operation_type") != "write_energy_ratings":
+        path = Path(path)
+    return _track_file_tag_result(
+        path,
+        genre=payload.get("genre"),
+        bpm=payload.get("bpm"),
+        key=payload.get("key"),
+        rating=payload.get("rating"),
+    )
+
+
+def _submit_post_commit_audio_tags(jobs):
+    jobs = list(jobs)
+    if not jobs:
+        return {"ok": True, "queued": 0, "completed": 0, "pending": 0}, []
+    try:
+        outcome = submit_audio_tag_jobs(
+            AUDIO_TAG_RETRY_QUEUE_PATH,
+            jobs,
+            writer=_write_queued_audio_tags,
+        )
+    except Exception as exc:
+        warning = f"Audio tag retry queue could not be updated: {exc}"
+        failed = [
+            {
+                "ok": False,
+                "file_tags_updated": False,
+                "file_tags_warning": warning,
+                "written_fields": [],
+            }
+            for _job in jobs
+        ]
+        return {
+            "ok": False,
+            "queued": 0,
+            "completed": 0,
+            "pending": 0,
+            "unqueued": len(jobs),
+            "queue_error": warning,
+            "retry_queue_path": str(AUDIO_TAG_RETRY_QUEUE_PATH),
+        }, failed
+
+    file_results = [
+        item["result"]
+        for item in outcome.get("results", [])
+    ]
+    return outcome, file_results
+
+
+def audio_tag_retry_queue_status():
+    return audio_tag_queue_status(AUDIO_TAG_RETRY_QUEUE_PATH)
+
+
+def retry_pending_audio_tags():
+    return process_pending_audio_tag_jobs(
+        AUDIO_TAG_RETRY_QUEUE_PATH,
+        writer=_write_queued_audio_tags,
+    )
+
+
 def _file_tag_summary(result):
     result = result or {}
     warning = result.get("file_tags_warning")
@@ -2985,13 +3078,18 @@ def update_genre(track_id, genre):
 
     track = row_to_track(row)
     path = safe_media_path(track["rel"] or track["path"])
-    file_result = _track_file_tag_result(
-        path,
-        genre=genre,
-        bpm=row["bpmAnalyzed"],
-        key=row["key"],
-        rating=_row_value(row, "rating", 0),
-    )
+    _queue_result, file_results = _submit_post_commit_audio_tags([
+        _audio_tag_queue_job(
+            "update_genre",
+            path,
+            track_id=track_id,
+            genre=genre,
+            bpm=row["bpmAnalyzed"],
+            key=row["key"],
+            rating=_row_value(row, "rating", 0),
+        )
+    ])
+    file_result = file_results[0]
     track["genre"] = genre
     summary = _file_tag_summary(file_result)
     return {
@@ -3234,6 +3332,7 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
             suggestion["action"] = "updated"
             changes.append(
                 (
+                    int(suggestion["track_id"]),
                     path,
                     new_genre,
                     None if row["bpmAnalyzed"] is None else round(float(row["bpmAnalyzed"]), 1),
@@ -3257,18 +3356,21 @@ def detail_folder_styles(rel, recursive=False, apply=False, min_confidence="medi
         updated = len(changes)
         unchanged += callback_unchanged
         missing.extend(callback_missing)
-        for path, new_genre, bpm, key, rating in changes:
-            try:
-                file_result = _track_file_tag_result(
-                    path,
-                    genre=new_genre,
-                    bpm=bpm,
-                    key=key,
-                    rating=rating,
-                )
-                warning = file_result.get("file_tags_warning")
-            except Exception as exc:
-                warning = str(exc)
+        _queue_result, file_results = _submit_post_commit_audio_tags(
+            _audio_tag_queue_job(
+                "detail_folder_styles",
+                path,
+                track_id=track_id,
+                genre=new_genre,
+                bpm=bpm,
+                key=key,
+                rating=rating,
+            )
+            for track_id, path, new_genre, bpm, key, rating in changes
+        )
+        for change, file_result in zip(changes, file_results, strict=True):
+            path = change[1]
+            warning = file_result.get("file_tags_warning")
             if warning:
                 file_failed += 1
                 file_warnings.append(f"{path}: {warning}")
@@ -3386,7 +3488,16 @@ def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
                 "UPDATE Track SET genre = ?, lastEditTime = ? WHERE id = ?",
                 (new_genre, now, int(track_id)),
             )
-            changes.append((path, new_genre, row["bpmAnalyzed"], row["key"], row["rating"]))
+            changes.append(
+                (
+                    int(track_id),
+                    path,
+                    new_genre,
+                    row["bpmAnalyzed"],
+                    row["key"],
+                    row["rating"],
+                )
+            )
         return changes, callback_unchanged, callback_missing
 
     if potential_changes:
@@ -3402,18 +3513,21 @@ def bulk_update_genres(rel, recursive, action, tag="", find="", replace=""):
         changes, unchanged, callback_missing = write_result
         missing.extend(callback_missing)
         updated = len(changes)
-        for path, new_genre, bpm, key, rating in changes:
-            try:
-                file_result = _track_file_tag_result(
-                    path,
-                    genre=new_genre,
-                    bpm=bpm,
-                    key=key,
-                    rating=rating,
-                )
-                warning = file_result.get("file_tags_warning")
-            except Exception as exc:
-                warning = str(exc)
+        _queue_result, file_results = _submit_post_commit_audio_tags(
+            _audio_tag_queue_job(
+                "bulk_update_genres",
+                path,
+                track_id=track_id,
+                genre=new_genre,
+                bpm=bpm,
+                key=key,
+                rating=rating,
+            )
+            for track_id, path, new_genre, bpm, key, rating in changes
+        )
+        for change, file_result in zip(changes, file_results, strict=True):
+            path = change[1]
+            warning = file_result.get("file_tags_warning")
             if warning:
                 file_failed += 1
                 file_warnings.append(f"{path}: {warning}")
@@ -4067,7 +4181,14 @@ def _write_energy_ratings_for_paths(paths, scope_label):
                     (int(engine_rating), now, track_id),
                 )
                 callback_changes.append(
-                    (path, row["genre"], row["bpmAnalyzed"], row["key"], stars)
+                    (
+                        int(track_id),
+                        path,
+                        row["genre"],
+                        row["bpmAnalyzed"],
+                        row["key"],
+                        stars,
+                    )
                 )
             return (
                 callback_changes,
@@ -4095,18 +4216,21 @@ def _write_energy_ratings_for_paths(paths, scope_label):
     file_written = 0
     file_failed = 0
     file_warnings = []
-    for path, genre, bpm, key, stars in changes:
-        try:
-            file_result = _track_file_tag_result(
-                path,
-                genre=genre,
-                bpm=bpm,
-                key=key,
-                rating=stars,
-            )
-            warning = file_result.get("file_tags_warning")
-        except Exception as exc:
-            warning = str(exc)
+    _queue_result, file_results = _submit_post_commit_audio_tags(
+        _audio_tag_queue_job(
+            "write_energy_ratings",
+            path,
+            track_id=track_id,
+            genre=genre,
+            bpm=bpm,
+            key=key,
+            rating=stars,
+        )
+        for track_id, path, genre, bpm, key, stars in changes
+    )
+    for change, file_result in zip(changes, file_results, strict=True):
+        path = change[1]
+        warning = file_result.get("file_tags_warning")
         if warning:
             file_failed += 1
             file_warnings.append(f"{path}: {warning}")
@@ -4595,6 +4719,12 @@ class Handler(BaseHTTPRequestHandler):
                 "startup_refresh": APP_STATE.get("startup_refresh", ""),
             })
             return
+        if parsed.path == "/api/audio-tag-retry-queue":
+            try:
+                self.send_json(audio_tag_retry_queue_status())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": repr(exc)}, status=500)
+            return
         if parsed.path == "/api/analysis-status":
             try:
                 self.send_json(analysis_database_status())
@@ -4726,7 +4856,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path).path
-        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/config", "/api/track_marks", "/api/export_track_marks_to_engine", "/api/suggest_track_marks", "/api/batch_suggest_track_marks", "/api/analysis-update", "/api/analysis-rebuild"}:
+        if parsed_path not in {"/api/build", "/api/engine-playlist", "/api/refresh-tags", "/api/write-energy-ratings", "/api/write-all-energy-ratings", "/api/update-genre", "/api/bulk-genre", "/api/detail-styles", "/api/audio-tag-retry", "/api/config", "/api/track_marks", "/api/export_track_marks_to_engine", "/api/suggest_track_marks", "/api/batch_suggest_track_marks", "/api/analysis-update", "/api/analysis-rebuild"}:
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -4749,6 +4879,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(
                     start_analysis_job("rebuild")
                 )
+            elif parsed_path == "/api/audio-tag-retry":
+                self.send_json(retry_pending_audio_tags())
             elif parsed_path == "/api/track_marks":
                 self.send_json(write_track_marks(data))
             elif parsed_path == "/api/export_track_marks_to_engine":
