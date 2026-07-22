@@ -391,11 +391,59 @@ POST_COMMIT_QUEUE_ORIGINS = {
     "submit_audio_tag_jobs": "audio_tag_post_commit.submit_audio_tag_jobs",
 }
 
+# Dynamic reflection is fail-closed because it can manufacture any of the
+# persistence callables below without leaving a resolvable attribute in the
+# AST.  This one helper is reviewed data access and never invokes the result.
+DYNAMIC_GETATTR_ALLOWLIST = {
+    ("tools/track_analysis.py", "_value_from_source"): (
+        1,
+        "generic attribute-or-mapping read helper",
+    ),
+}
+
+REFLECTIVE_ATTRIBUTE_ALLOWLIST = {
+    ("tools/engine_set_builder.py", "load_tracks", "__dict__"): (
+        1,
+        "copy reviewed Track dataclass fields into a replacement Track",
+    ),
+}
+
+REFLECTIVE_ATTRIBUTES = {"__dict__", "__mro__", "__subclasses__"}
+
+FORBIDDEN_REFLECTION_CALLS = {
+    "__import__",
+    "__getattribute__",
+    "attrgetter",
+    "compile",
+    "eval",
+    "exec",
+    "globals",
+    "import_module",
+    "locals",
+    "methodcaller",
+    "vars",
+}
+
 AUDIO_CALLBACK_WRITERS = {
     "_set_tags_mp3": 4,
     "_set_bitrate_tag_mp3": 3,
     "_set_tags_flac": 4,
     "_set_bitrate_tag_flac": 3,
+}
+
+DANGEROUS_CALLABLE_NAMES = {
+    "Connection",
+    "commit",
+    "connect",
+    "execute",
+    "executemany",
+    "executescript",
+    "safe_engine_db_write",
+    "save",
+    "submit_audio_tag_jobs",
+    "write_audio_tags",
+    "write_tags",
+    *AUDIO_CALLBACK_WRITERS,
 }
 
 STARTUP_FORBIDDEN_CALLS = {
@@ -467,23 +515,61 @@ class _SourceAnalysis:
                 self.parents[child] = node
         self.imports = self._imports()
         self.bindings = self._bindings()
+        self.annotation_nodes = self._annotation_nodes()
         self.functions = {
             node.name: node
             for node in self.tree.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
 
-    def _imports(self) -> dict[str, str]:
-        aliases: dict[str, str] = {}
+    def _imports(self) -> dict[tuple[str, str], list[tuple[int, str]]]:
+        """Collect imports per lexical scope instead of flattening the file."""
+        aliases: dict[tuple[str, str], list[tuple[int, str]]] = {}
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Import):
                 for name in node.names:
-                    aliases[name.asname or name.name.split(".")[0]] = name.name
+                    local_name = name.asname or name.name.split(".")[0]
+                    aliases.setdefault((self.symbol(node), local_name), []).append(
+                        (node.lineno, name.name)
+                    )
             elif isinstance(node, ast.ImportFrom):
                 for name in node.names:
                     qualified = f"{node.module}.{name.name}" if node.module else name.name
-                    aliases[name.asname or name.name] = qualified
+                    aliases.setdefault(
+                        (self.symbol(node), name.asname or name.name), []
+                    ).append((node.lineno, qualified))
         return aliases
+
+    def _import_name(self, name: str, context: ast.AST) -> str | None:
+        line = getattr(context, "lineno", 10**9)
+        symbol = self.symbol(context)
+        scopes = []
+        if symbol != "<module>":
+            parts = symbol.split(".")
+            scopes.extend(".".join(parts[:size]) for size in range(len(parts), 0, -1))
+        scopes.append("<module>")
+        for scope in scopes:
+            candidates = self.imports.get((scope, name), [])
+            if scope != "<module>" or symbol == "<module>":
+                candidates = [item for item in candidates if item[0] <= line]
+            if candidates:
+                return max(candidates, key=lambda item: item[0])[1]
+        return None
+
+    def _annotation_nodes(self) -> set[ast.AST]:
+        annotations: set[ast.AST] = set()
+        for node in ast.walk(self.tree):
+            roots: list[ast.AST | None] = []
+            if isinstance(node, ast.arg):
+                roots.append(node.annotation)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                roots.append(node.returns)
+            elif isinstance(node, ast.AnnAssign):
+                roots.append(node.annotation)
+            for root in roots:
+                if root is not None:
+                    annotations.update(ast.walk(root))
+        return annotations
 
     @staticmethod
     def _target_bindings(target: ast.AST, value: ast.AST) -> list[tuple[str, ast.AST]]:
@@ -641,10 +727,9 @@ class _SourceAnalysis:
                     isinstance(default, ast.Constant) and default.value is None
                 ):
                     return self.expression_name(default, context, seen | {node.id})
-            if node.id in self.imports and not self._parameter_shadows_import(
-                node.id, context
-            ):
-                return self.imports[node.id]
+            imported = self._import_name(node.id, context)
+            if imported is not None and not self._parameter_shadows_import(node.id, context):
+                return imported
             return node.id
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             owner = self.symbol(node)
@@ -694,10 +779,9 @@ class _SourceAnalysis:
                     isinstance(default, ast.Constant) and default.value is None
                 ):
                     return self.expression_names(default, context, seen | {node.id})
-            if node.id in self.imports and not self._parameter_shadows_import(
-                node.id, context
-            ):
-                return {self.imports[node.id]}
+            imported = self._import_name(node.id, context)
+            if imported is not None and not self._parameter_shadows_import(node.id, context):
+                return {imported}
             return {node.id}
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             owner = self.symbol(node)
@@ -972,7 +1056,11 @@ def _looks_like_audio_receiver(full_name: str) -> bool:
 
 
 def _module_imports_mutagen(analysis: _SourceAnalysis) -> bool:
-    return any(name == "mutagen" or name.startswith("mutagen.") for name in analysis.imports.values())
+    return any(
+        name == "mutagen" or name.startswith("mutagen.")
+        for candidates in analysis.imports.values()
+        for _line, name in candidates
+    )
 
 
 def _safe_write_signature(
@@ -1007,6 +1095,145 @@ def _violation(
         detail,
         safe_mechanism,
     )
+
+
+def _is_direct_call_target(analysis: _SourceAnalysis, node: ast.AST) -> bool:
+    parent = analysis.parents.get(node)
+    return isinstance(parent, ast.Call) and parent.func is node
+
+
+def _check_capability_policy(analysis: _SourceAnalysis) -> list[Violation]:
+    """Reject persistence callables as values and unreviewed reflection.
+
+    Direct calls continue through the exact call/SQL/backup allowlists.  Taking
+    a dangerous callable as a value is denied before adapters such as partial,
+    map, containers, decorators, or user-defined dispatchers can hide the call.
+    """
+    violations: list[Violation] = []
+    reflective_counts: Counter[tuple[str, str, str]] = Counter()
+
+    for node in ast.walk(analysis.tree):
+        if isinstance(node, ast.ImportFrom) and any(
+            alias.name == "*" for alias in node.names
+        ):
+            violations.append(
+                _violation(
+                    "unreviewed-wildcard-import",
+                    analysis,
+                    node,
+                    ast.unparse(node),
+                    "wildcard imports hide the origin of persistence callables",
+                    "explicit imported names",
+                )
+            )
+
+        if isinstance(node, ast.Attribute) and node.attr in REFLECTIVE_ATTRIBUTES:
+            key = (analysis.item.path, analysis.symbol(node), node.attr)
+            reflective_counts[key] += 1
+            allowed = REFLECTIVE_ATTRIBUTE_ALLOWLIST.get(key)
+            if allowed is None or reflective_counts[key] > allowed[0]:
+                violations.append(
+                    _violation(
+                        "unreviewed-reflective-attribute",
+                        analysis,
+                        node,
+                        ast.unparse(node),
+                        f"reflective attribute {node.attr!r} can expose hidden callables",
+                        "an exact REFLECTIVE_ATTRIBUTE_ALLOWLIST entry after review",
+                    )
+                )
+
+        if (
+            isinstance(node, (ast.Name, ast.Attribute))
+            and isinstance(getattr(node, "ctx", None), ast.Load)
+            and node not in analysis.annotation_nodes
+            and not _is_direct_call_target(analysis, node)
+        ):
+            names = analysis.expression_names(node, node)
+            dangerous = sorted(
+                name for name in names if _last_name(name) in DANGEROUS_CALLABLE_NAMES
+            )
+            if dangerous:
+                violations.append(
+                    _violation(
+                        "persistent-callable-transfer",
+                        analysis,
+                        node,
+                        ast.unparse(node),
+                        f"dangerous callable is used as a value: {dangerous!r}",
+                        "a direct reviewed call covered by the exact persistence allowlists",
+                    )
+                )
+
+        if not isinstance(node, ast.Call):
+            continue
+        called_names = analysis.call_names(node)
+        called_last = {_last_name(name) for name in called_names}
+        if "getattr" in called_last:
+            attribute = (
+                _static_string(analysis, node.args[1], node)
+                if len(node.args) >= 2
+                else None
+            )
+            if attribute in DANGEROUS_CALLABLE_NAMES:
+                violations.append(
+                    _violation(
+                        "dynamic-persistence-capability",
+                        analysis,
+                        node,
+                        ast.unparse(node),
+                        f"getattr obtains persistence capability {attribute!r}",
+                        "a direct reviewed persistence call",
+                    )
+                )
+            elif attribute is None:
+                key = (analysis.item.path, analysis.symbol(node))
+                if key not in DYNAMIC_GETATTR_ALLOWLIST:
+                    violations.append(
+                        _violation(
+                            "unreviewed-dynamic-getattr",
+                            analysis,
+                            node,
+                            ast.unparse(node),
+                            "dynamic attribute lookup could manufacture a hidden persistence callable",
+                            "a static attribute name or an exact DYNAMIC_GETATTR_ALLOWLIST entry",
+                        )
+                    )
+
+        forbidden = sorted(
+            name
+            for name in called_names
+            if name in FORBIDDEN_REFLECTION_CALLS
+            or name in {
+                "builtins.__import__",
+                "builtins.compile",
+                "builtins.eval",
+                "builtins.exec",
+                "builtins.globals",
+                "builtins.locals",
+                "builtins.vars",
+                "importlib.import_module",
+                "inspect.getattr_static",
+                "inspect.getmembers",
+                "inspect.getmembers_static",
+                "operator.attrgetter",
+                "operator.methodcaller",
+            }
+            or _last_name(name) == "__getattribute__"
+        )
+        if forbidden:
+            violations.append(
+                _violation(
+                    "unreviewed-reflective-call",
+                    analysis,
+                    node,
+                    ast.unparse(node),
+                    f"reflection/callable factory is fail-closed: {forbidden!r}",
+                    "direct imports and direct reviewed persistence calls",
+                )
+            )
+
+    return violations
 
 
 def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
@@ -1668,9 +1895,11 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
             COMMIT_ALLOWLIST,
             AUDIO_SAVE_ALLOWLIST,
             SAFE_ENGINE_WRITE_CALLS,
+            DYNAMIC_GETATTR_ALLOWLIST,
         )
         for path, _symbol in policy
     }
+    expected_paths.update(path for path, _symbol, _attribute in REFLECTIVE_ATTRIBUTE_ALLOWLIST)
     if not expected_paths.issubset(by_path):
         return []
 
@@ -1680,10 +1909,19 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
         "commit": Counter(),
         "audio-save": Counter(),
         "safe-engine-write": Counter(),
+        "dynamic-getattr": Counter(),
+        "reflective-attribute": Counter(),
     }
     observed_sql_operations: dict[tuple[str, str], Counter[str]] = {}
     observed_sql_fingerprints: dict[tuple[str, str], Counter[str]] = {}
     for analysis in analyses:
+        for node in ast.walk(analysis.tree):
+            if isinstance(node, ast.Attribute) and node.attr in REFLECTIVE_ATTRIBUTES:
+                observed["reflective-attribute"][(
+                    analysis.item.path,
+                    analysis.symbol(node),
+                    node.attr,
+                )] += 1
         for call in analysis.calls():
             names = {_last_name(name) for name in analysis.call_names(call)}
             key = (analysis.item.path, analysis.symbol(call))
@@ -1710,6 +1948,9 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
                 analysis, call
             ):
                 observed["safe-engine-write"][key] += 1
+            if "getattr" in names and len(call.args) >= 2:
+                if _static_string(analysis, call.args[1], call) is None:
+                    observed["dynamic-getattr"][key] += 1
 
     violations: list[Violation] = []
     policies = (
@@ -1717,6 +1958,8 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
         ("mutating-sql", SQL_MUTATION_ALLOWLIST),
         ("commit", COMMIT_ALLOWLIST),
         ("audio-save", AUDIO_SAVE_ALLOWLIST),
+        ("dynamic-getattr", DYNAMIC_GETATTR_ALLOWLIST),
+        ("reflective-attribute", REFLECTIVE_ATTRIBUTE_ALLOWLIST),
     )
     for category, policy in policies:
         for key, (expected, _reason) in policy.items():
@@ -1788,6 +2031,7 @@ def analyze_sources(items: list[SourceFile]) -> list[Violation]:
     violations = []
     analyses = [_SourceAnalysis(item) for item in items]
     for analysis in analyses:
+        violations.extend(_check_capability_policy(analysis))
         violations.extend(_check_calls(analysis))
         violations.extend(_check_post_commit(analysis))
         violations.extend(_check_startup(analysis))

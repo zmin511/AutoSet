@@ -724,3 +724,110 @@ def test_aliased_internal_audio_writer_requires_verified_backup_callback():
     assert "audio-backup-callback-required" in _rules(
         source, "tools/adversarial.py"
     )
+
+
+def test_imports_are_resolved_in_their_lexical_scope():
+    source = (
+        "import sqlite3\n"
+        "def unsafe(path):\n"
+        "    return sqlite3.connect(path)\n"
+        "def unrelated():\n"
+        "    import json as sqlite3\n"
+        "    return sqlite3.dumps({})\n"
+    )
+    assert "engine-db-direct-write" in _rules(source, "tools/adversarial.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "import sqlite3\n"
+            "def unsafe(path):\n"
+            "    return getattr(sqlite3, ''.join(('con', 'nect')))(path)\n"
+        ),
+        (
+            "import sqlite3\n"
+            "def unsafe(path):\n"
+            "    return vars(sqlite3).get('connect')(path)\n"
+        ),
+        (
+            "import operator, sqlite3\n"
+            "def unsafe(path):\n"
+            "    return operator.attrgetter('connect')(sqlite3)(path)\n"
+        ),
+        (
+            "def unsafe(connection, name):\n"
+            "    return getattr(connection, name)('DELETE FROM Track')\n"
+        ),
+        (
+            "def unsafe(connection):\n"
+            "    return object.__getattribute__(connection, 'execute')"
+            "('DELETE FROM Track')\n"
+        ),
+        (
+            "def unsafe(connection):\n"
+            "    return type(connection).__dict__['execute']"
+            "(connection, 'DELETE FROM Track')\n"
+        ),
+        (
+            "import sqlite3\n"
+            "def unsafe(path):\n"
+            "    opener = sqlite3.__dict__.get('connect')\n"
+            "    return opener(path)\n"
+        ),
+    ],
+)
+def test_reflective_callable_construction_is_fail_closed(source):
+    rules = _rules(source, "tools/adversarial.py")
+    assert rules & {
+        "dynamic-persistence-capability",
+        "unreviewed-dynamic-getattr",
+        "unreviewed-reflective-call",
+        "unreviewed-reflective-attribute",
+    }
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "from functools import partial\n"
+            "def unsafe(connection):\n"
+            "    partial(connection.execute, 'DELETE FROM Track')()\n"
+        ),
+        (
+            "def unsafe(connection):\n"
+            "    list(map(connection.execute, ['DELETE FROM Track']))\n"
+        ),
+        (
+            "from functools import partial\n"
+            "def unsafe(tags):\n"
+            "    partial(tags.save)()\n"
+        ),
+        (
+            "def unsafe(tags):\n"
+            "    list(map(lambda callback: callback(), [tags.save]))\n"
+        ),
+        (
+            "import sqlite3\n"
+            "callbacks = [sqlite3.connect]\n"
+        ),
+        (
+            "def unsafe(connection, tags):\n"
+            "    callbacks = [connection.execute, tags.save]\n"
+            "    return callbacks\n"
+        ),
+    ],
+)
+def test_persistence_callables_cannot_be_transferred_as_values(source):
+    assert "persistent-callable-transfer" in _rules(
+        source, "tools/adversarial.py"
+    )
+
+
+def test_wildcard_import_cannot_hide_sqlite_opener_origin():
+    source = "from sqlite3 import *\ndef unsafe(path):\n    return connect(path)\n"
+    assert "unreviewed-wildcard-import" in _rules(
+        source, "tools/adversarial.py"
+    )
