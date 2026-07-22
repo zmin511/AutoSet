@@ -111,21 +111,25 @@ tools/review_new_genres.py  нормализация жанров, семейс�
   разрешено только обновление отдельной `analysis.db`.
 
 `tests/test_persistent_write_guardrails.py` проверяет эти границы через AST.
-Разрешение символов учитывает `import`/`from import`, затенение параметрами,
-цепочки простых callable-присваиваний, `getattr()`, `__import__()`, `__call__`,
-`functools.partial()` и `vars()`. Прямым SQLite opener считаются как
+Разрешение символов учитывает `import`/`from import`, лексические области,
+затенение параметрами и определениями функций, callable в значениях параметров
+по умолчанию, цепочки простых присваиваний, `getattr()`, `__import__()`,
+`__call__`, `functools.partial()` и `vars()`. Прямым SQLite opener считаются как
 `sqlite3.connect`, так и `sqlite3.Connection`; safe-write признаётся только при
 разрешении имени к импортированному `engine_db_write.safe_engine_db_write`.
 SQL восстанавливается из констант, переменных, f-string, конкатенации и
 `.format()`; проверяются `execute`, `executemany`, `executescript`, DML после
-комментариев и CTE, `CREATE VIRTUAL TABLE`, а также присваивающие PRAGMA.
+комментариев и CTE, `CREATE VIRTUAL TABLE`, `operator.methodcaller`, а также все
+PRAGMA, кроме точного списка доказуемо read-only форм.
 Непрозрачный SQL в
 SQLite-подобном вызове отклоняется, поскольку отсутствие мутации доказать
 нельзя.
 
-Для audio `save()` проверяется происхождение mutagen-объекта, достижимый
-проверенный backup до каждого сохранения и происхождение callback, переданного
-во внутренние writers. Backup после возможного раннего выхода, внутри
+Любой Python-вызов `.save()` в production-коде по умолчанию считается
+потенциальной записью аудиометаданных и допускается только в точечно
+утверждённом writer. Для него проверяется достижимый проверенный backup до
+каждого сохранения и происхождение callback, переданного во внутренние writers.
+Backup после возможного раннего выхода, внутри
 невызванной функции/lambda или callback без `create_verified_audio_backup()`
 не принимается. Post-commit
 queue-вызов должен выполняться после возврата из точного утверждённого

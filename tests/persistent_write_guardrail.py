@@ -411,10 +411,23 @@ _SQL_WRITE = re.compile(
     r"BEGIN(?:\s+IMMEDIATE|\s+EXCLUSIVE)?|VACUUM|ATTACH|DETACH)\b",
     re.IGNORECASE,
 )
-_PERSISTENT_PRAGMA = re.compile(
-    r"^PRAGMA\s+(?:[\w]+\.)?([\w]+)\s*=",
-    re.IGNORECASE,
+_PRAGMA = re.compile(
+    r"^PRAGMA\s+(?:[\w]+\.)?([\w]+)(.*)$",
+    re.IGNORECASE | re.DOTALL,
 )
+_READ_ONLY_PRAGMA_CALLS = {
+    "foreign_key_check",
+    "foreign_key_list",
+    "index_info",
+    "index_list",
+    "index_xinfo",
+    "integrity_check",
+    "quick_check",
+    "table_info",
+    "table_list",
+    "table_xinfo",
+}
+_READ_ONLY_PRAGMA_VALUES = {"foreign_keys"}
 
 
 @dataclass(frozen=True)
@@ -478,6 +491,8 @@ class _SourceAnalysis:
                 value, targets = node.value, [node.target]
             elif isinstance(node, ast.NamedExpr):
                 value, targets = node.value, [node.target]
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                value, targets = node, [ast.Name(id=node.name)]
             if value is None:
                 continue
             for target in targets:
@@ -491,13 +506,50 @@ class _SourceAnalysis:
         """Return the latest simple assignment visible before *context*."""
         line = getattr(context, "lineno", 10**9)
         symbol = self.symbol(context)
-        candidates = [
-            item
-            for scope in (symbol, "<module>")
-            for item in self.bindings.get((scope, name), [])
-            if item[0] < line
-        ]
-        return max(candidates, default=(0, None), key=lambda item: item[0])[1]
+        scopes = []
+        if symbol != "<module>":
+            parts = symbol.split(".")
+            scopes.extend(".".join(parts[:size]) for size in range(len(parts), 0, -1))
+        scopes.append("<module>")
+        for scope in scopes:
+            candidates = self.bindings.get((scope, name), [])
+            if scope != "<module>" or symbol == "<module>":
+                candidates = [item for item in candidates if item[0] < line]
+            if candidates:
+                return max(candidates, key=lambda item: item[0])[1]
+        return None
+
+    def _parameter_default(self, name: str, context: ast.AST) -> ast.AST | None:
+        current = context
+        while current in self.parents:
+            current = self.parents[current]
+            if not isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            positional = [*current.args.posonlyargs, *current.args.args]
+            defaulted_positional = (
+                positional[-len(current.args.defaults) :]
+                if current.args.defaults
+                else []
+            )
+            positional_defaults = {
+                argument.arg: default
+                for argument, default in zip(
+                    defaulted_positional,
+                    current.args.defaults,
+                    strict=True,
+                )
+            }
+            keyword_defaults = {
+                argument.arg: default
+                for argument, default in zip(
+                    current.args.kwonlyargs,
+                    current.args.kw_defaults,
+                    strict=True,
+                )
+                if default is not None
+            }
+            return positional_defaults.get(name) or keyword_defaults.get(name)
+        return None
 
     def _parameter_shadows_import(self, name: str, context: ast.AST) -> bool:
         current = context
@@ -538,11 +590,19 @@ class _SourceAnalysis:
                 binding = self._binding(node.id, context)
                 if binding is not None:
                     return self.expression_name(binding, context, seen | {node.id})
+                default = self._parameter_default(node.id, context)
+                if default is not None and not (
+                    isinstance(default, ast.Constant) and default.value is None
+                ):
+                    return self.expression_name(default, context, seen | {node.id})
             if node.id in self.imports and not self._parameter_shadows_import(
                 node.id, context
             ):
                 return self.imports[node.id]
             return node.id
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            owner = self.symbol(node)
+            return f"{owner}.{node.name}" if owner != "<module>" else node.name
         if isinstance(node, ast.Attribute):
             base = self.expression_name(node.value, context, seen)
             return f"{base}.{node.attr}" if base else node.attr
@@ -647,9 +707,17 @@ def _normalized_sql(sql: str) -> str:
 
 def _sql_write_signature(sql: str) -> str | None:
     normalized = _normalized_sql(sql)
-    pragma = _PERSISTENT_PRAGMA.match(normalized)
+    pragma = _PRAGMA.match(normalized)
     if pragma:
-        return f"PRAGMA {pragma.group(1).casefold()}"
+        name = pragma.group(1).casefold()
+        suffix = pragma.group(2).strip()
+        read_only = (
+            name in _READ_ONLY_PRAGMA_VALUES and not suffix
+        ) or (
+            name in _READ_ONLY_PRAGMA_CALLS
+            and (not suffix or (suffix.startswith("(") and suffix.endswith(")")))
+        )
+        return None if read_only else f"PRAGMA {name}"
     match = _SQL_WRITE.search(normalized)
     if match is None:
         return None
@@ -702,6 +770,29 @@ def _is_sqlite_opener_call(analysis: _SourceAnalysis, call: ast.Call) -> bool:
 
 def _is_approved_safe_write_call(analysis: _SourceAnalysis, call: ast.Call) -> bool:
     return analysis.call_name(call) == "engine_db_write.safe_engine_db_write"
+
+
+def _sql_invocation(
+    analysis: _SourceAnalysis, call: ast.Call
+) -> tuple[str, ast.AST] | None:
+    """Return the SQL method and expression for direct and methodcaller calls."""
+    name = _last_name(analysis.call_name(call))
+    if name in {"execute", "executemany", "executescript"} and call.args:
+        return name, call.args[0]
+    if isinstance(call.func, ast.Call):
+        factory = analysis.expression_name(call.func.func, call)
+        method = (
+            _static_constant_string(call.func.args[0])
+            if call.func.args
+            else None
+        )
+        if factory == "operator.methodcaller" and method in {
+            "execute",
+            "executemany",
+            "executescript",
+        } and len(call.func.args) >= 2:
+            return method, call.func.args[1]
+    return None
 
 
 def _receiver_name(full_name: str) -> str:
@@ -838,8 +929,10 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                     )
                 )
 
-        if name in {"execute", "executemany", "executescript"} and call.args:
-            sql = _literal_sql(analysis, call.args[0], call)
+        sql_invocation = _sql_invocation(analysis, call)
+        if sql_invocation is not None:
+            sql_method, sql_node = sql_invocation
+            sql = _literal_sql(analysis, sql_node, call)
             if sql is None:
                 violations.append(
                     _violation(
@@ -860,15 +953,13 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                             "unapproved-persistent-sql",
                             analysis,
                             call,
-                            f"{name}({sql[:80]!r})",
+                        f"{sql_method}({sql[:80]!r})",
                             "mutating SQL is outside an exact reviewed persistence symbol",
                             "a safe Engine callback or documented analysis/queue storage function",
                         )
                     )
 
-        if name == "save" and (
-            _looks_like_audio_receiver(full_name) or _module_imports_mutagen(analysis)
-        ):
+        if name == "save":
             save_counts[key] += 1
             first_save.setdefault(key, call)
             save_calls.setdefault(key, []).append(call)
@@ -941,7 +1032,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
             else ""
         )
         if callback is None or not _callable_provides_verified_backup(
-            analysis, callback_name
+            analysis, callback_name, context=call
         ):
             violations.append(
                 _violation(
@@ -957,7 +1048,13 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
     return violations
 
 
-def _definition(analysis: _SourceAnalysis, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+def _definition(
+    analysis: _SourceAnalysis, name: str, context: ast.AST | None = None
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    if context is not None:
+        binding = analysis._binding(name, context)
+        if isinstance(binding, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return binding
     return next(
         (
             node
@@ -976,11 +1073,14 @@ def _definition_symbol(
 
 
 def _callable_provides_verified_backup(
-    analysis: _SourceAnalysis, name: str, seen: frozenset[str] = frozenset()
+    analysis: _SourceAnalysis,
+    name: str,
+    seen: frozenset[str] = frozenset(),
+    context: ast.AST | None = None,
 ) -> bool:
     if not name or name in seen:
         return False
-    definition = _definition(analysis, name)
+    definition = _definition(analysis, name, context)
     if definition is None:
         return name == "create_verified_audio_backup"
     for statement in definition.body:
@@ -992,7 +1092,7 @@ def _callable_provides_verified_backup(
         if call is not None:
             called = _last_name(analysis.call_name(call))
             if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
-                analysis, called, seen | {name}
+                analysis, called, seen | {name}, call
             ):
                 return True
         if isinstance(statement, (ast.Return, ast.Raise)):
@@ -1007,7 +1107,7 @@ def _callable_provides_verified_backup(
             if calls:
                 called = _last_name(analysis.call_name(calls[0]))
                 if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
-                    analysis, called, seen | {name}
+                    analysis, called, seen | {name}, calls[0]
                 ):
                     return True
             return False
@@ -1059,9 +1159,11 @@ def _is_cached_verified_backup_branch(statement: ast.stmt) -> bool:
 def _is_verified_backup_callable(
     analysis: _SourceAnalysis, function_name: str, required_call: str, save: ast.Call
 ) -> bool:
-    definition = _definition(analysis, required_call)
+    definition = _definition(analysis, required_call, save)
     if definition is not None:
-        return _callable_provides_verified_backup(analysis, required_call)
+        return _callable_provides_verified_backup(
+            analysis, required_call, context=save
+        )
 
     function = _definition(analysis, function_name)
     if function is None:
@@ -1427,8 +1529,10 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
                 observed["sqlite-connect"][key] += 1
             if name == "commit" and _looks_like_db_receiver(full_name):
                 observed["commit"][key] += 1
-            if name in {"execute", "executemany", "executescript"} and call.args:
-                sql = _literal_sql(analysis, call.args[0], call)
+            sql_invocation = _sql_invocation(analysis, call)
+            if sql_invocation is not None:
+                _sql_method, sql_node = sql_invocation
+                sql = _literal_sql(analysis, sql_node, call)
                 signature = _sql_write_signature(sql) if sql is not None else None
                 if signature is not None:
                     observed["mutating-sql"][key] += 1
@@ -1436,9 +1540,7 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
                     observed_sql_fingerprints.setdefault(key, Counter())[
                         _sql_fingerprint(sql)
                     ] += 1
-            if name == "save" and (
-                _looks_like_audio_receiver(full_name) or _module_imports_mutagen(analysis)
-            ):
+            if name == "save":
                 observed["audio-save"][key] += 1
             if name == "safe_engine_db_write" and _is_approved_safe_write_call(analysis, call):
                 observed["safe-engine-write"][key] += 1

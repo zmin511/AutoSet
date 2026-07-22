@@ -255,7 +255,6 @@ def test_post_commit_queue_must_be_reachable_and_after_safe_write(source):
 @pytest.mark.parametrize(
     "source",
     [
-        "def render(document):\n    document.save()\n",
         "def finish(repository):\n    repository.commit()\n",
         "def report(processor):\n    processor.execute('CREATE REPORT')\n",
         "import sqlite3\ndef temporary():\n    return sqlite3.connect(':memory:')\n",
@@ -503,3 +502,72 @@ def test_exact_allowlist_detects_changed_sql_with_same_operation_and_table():
     assert "allowlist-sql-fingerprint-mismatch" in {
         violation.rule for violation in analyze_sources(changed)
     }
+
+
+def test_imported_safe_write_shadowed_by_function_is_rejected():
+    source = (
+        "from engine_db_write import safe_engine_db_write\n"
+        "def safe_engine_db_write(*args, **kwargs):\n    return None, None\n"
+        "def update_genre():\n"
+        "    safe_engine_db_write(None, None, 'update_track_genre', write_genre)\n"
+        "    _submit_post_commit_audio_tags([])\n"
+    )
+    assert "engine-db-safe-write-origin" in _rules(source)
+
+
+def test_nested_backup_name_resolves_in_lexical_scope():
+    source = (
+        "def backup_before_save():\n    create_verified_audio_backup()\n"
+        "def write_audio_tags(tags):\n"
+        "    def backup_before_save():\n        pass\n"
+        "    backup_before_save()\n"
+        "    tags.save()\n"
+    )
+    assert "audio-backup-call-required" in _rules(
+        source, "tools/engine_write_tags.py"
+    )
+
+
+def test_sqlite_opener_in_parameter_default_is_detected():
+    source = (
+        "import sqlite3\n"
+        "def unsafe(path, opener=sqlite3.connect):\n    return opener(path)\n"
+    )
+    assert "engine-db-direct-write" in _rules(source, "tools/adversarial.py")
+
+
+def test_operator_methodcaller_sql_mutation_is_detected():
+    source = (
+        "from operator import methodcaller\n"
+        "def unsafe(connection):\n"
+        "    methodcaller('execute', 'DELETE FROM Track')(connection)\n"
+    )
+    assert "unapproved-persistent-sql" in _rules(source, "tools/adversarial.py")
+
+
+def test_function_style_writable_pragma_is_detected():
+    source = (
+        "def unsafe(connection):\n"
+        "    connection.execute('PRAGMA user_version(999)')\n"
+    )
+    assert "unapproved-persistent-sql" in _rules(source, "tools/adversarial.py")
+
+
+def test_unknown_save_receiver_is_denied_by_default():
+    source = "def unsafe(track_file):\n    track_file.save()\n"
+    assert "audio-save-without-approved-backup-writer" in _rules(
+        source, "tools/helper.py"
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "PRAGMA table_info(Track)",
+        "PRAGMA integrity_check",
+        "PRAGMA foreign_keys",
+    ],
+)
+def test_reviewed_read_only_pragma_forms_are_not_mutations(sql):
+    source = f"def inspect(connection):\n    connection.execute({sql!r})\n"
+    assert "unapproved-persistent-sql" not in _rules(source, "tools/report.py")
