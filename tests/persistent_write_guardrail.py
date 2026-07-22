@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -103,8 +104,8 @@ SQL_MUTATION_ALLOWLIST = {
         "analysis.db schema creation",
     ),
     ("tools/analysis_db.py", "open_analysis_db"): (
-        1,
-        "analysis.db WAL configuration",
+        3,
+        "analysis.db connection PRAGMA configuration",
     ),
     ("tools/analysis_db.py", "delete_profile_by_path"): (
         1,
@@ -115,8 +116,8 @@ SQL_MUTATION_ALLOWLIST = {
         "retry-queue schema indexes",
     ),
     ("tools/audio_tag_post_commit.py", "_connect"): (
-        1,
-        "retry-queue WAL configuration",
+        2,
+        "retry-queue connection PRAGMA configuration",
     ),
     ("tools/audio_tag_post_commit.py", "_migrate_or_create_schema"): (
         7,
@@ -135,8 +136,8 @@ SQL_MUTATION_ALLOWLIST = {
         "retry-queue owner-token completion",
     ),
     ("tools/engine_db_write.py", "safe_engine_db_write"): (
-        1,
-        "transaction start inside the approved Engine DB safe writer",
+        2,
+        "transaction start and connection PRAGMA inside the approved Engine DB safe writer",
     ),
 }
 
@@ -167,12 +168,19 @@ SQL_OPERATION_ALLOWLIST = {
         "_write_energy_ratings_for_paths.write_energy_ratings_batch",
     ): ("UPDATE Track",),
     ("tools/analysis_db.py", "initialize_schema"): ("CREATE TABLE track_analysis",),
-    ("tools/analysis_db.py", "open_analysis_db"): ("PRAGMA journal_mode",),
+    ("tools/analysis_db.py", "open_analysis_db"): (
+        "PRAGMA foreign_keys",
+        "PRAGMA journal_mode",
+        "PRAGMA synchronous",
+    ),
     ("tools/analysis_db.py", "upsert_profile"): ("INSERT INTO track_analysis",),
     ("tools/analysis_db.py", "delete_profile_by_path"): (
         "DELETE FROM track_analysis",
     ),
-    ("tools/audio_tag_post_commit.py", "_connect"): ("PRAGMA journal_mode",),
+    ("tools/audio_tag_post_commit.py", "_connect"): (
+        "PRAGMA busy_timeout",
+        "PRAGMA journal_mode",
+    ),
     ("tools/audio_tag_post_commit.py", "_create_indexes"): (
         "CREATE INDEX audio_tag_jobs_status_sequence",
         "CREATE INDEX audio_tag_jobs_path_sequence",
@@ -200,7 +208,90 @@ SQL_OPERATION_ALLOWLIST = {
     ("tools/audio_tag_post_commit.py", "_complete_claim"): (
         "UPDATE audio_tag_jobs",
     ),
-    ("tools/engine_db_write.py", "safe_engine_db_write"): ("BEGIN IMMEDIATE",),
+    ("tools/engine_db_write.py", "safe_engine_db_write"): (
+        "BEGIN IMMEDIATE",
+        "PRAGMA foreign_keys",
+    ),
+}
+
+# Full normalized SQL hashes. Unlike operation/table labels, these make any
+# change to columns, predicates, values, schema, or PRAGMA settings explicit.
+SQL_FINGERPRINT_ALLOWLIST = {
+    ("set_app/set_app.py", "_insert_playlist"): (
+        "ab5e0ce2052eefe8ded83809b2e5e02bd6b4191d27d6fa0c90ecfa5444b2aff5",
+        "128e8ea5b491f164eb81c24a59c910d0ca1d475af01398319a882cb25db87cdd",
+    ),
+    ("set_app/set_app.py", "export_track_marks_to_engine.write_export"): (
+        "6cdd8d2bcbd32c4096e02beb447d25056f161624fe807254512d545521881815",
+        "13ef027a6d1f19f9074c07dc5fd99f44006f3e231161ca9863e433708cbb20c4",
+    ),
+    ("set_app/set_app.py", "update_genre.write_genre"): (
+        "b5ccde251e89c7cb22896dd58b17b132dbfad1295d7e0a37c4f4ce823c15153d",
+    ),
+    ("set_app/set_app.py", "detail_folder_styles.write_detail_styles"): (
+        "b5ccde251e89c7cb22896dd58b17b132dbfad1295d7e0a37c4f4ce823c15153d",
+    ),
+    ("set_app/set_app.py", "bulk_update_genres.write_bulk_genres"): (
+        "b5ccde251e89c7cb22896dd58b17b132dbfad1295d7e0a37c4f4ce823c15153d",
+    ),
+    ("set_app/set_app.py", "create_engine_playlist_from_tracks.write_playlist"): (
+        "eb49fd897e1fdb47b1debd7fb8603d3884aa2b6e6cf60bd934679c51d63debad",
+        "eb49fd897e1fdb47b1debd7fb8603d3884aa2b6e6cf60bd934679c51d63debad",
+        "e2b00482210ca8bd36f95d3f5830c6417ad146bc2b0464785735c8e723d5c229",
+        "9b9133c2dd5c55ee7ae48652b4fc110996dc4942e34cd12fc95552fca9b5fb8a",
+    ),
+    ("set_app/set_app.py", "_write_energy_ratings_for_paths.write_energy_ratings_batch"): (
+        "5725424fdd2362aadc885e9ab32218ca47dae8855edcd405ecd912a54438f4f9",
+    ),
+    ("tools/analysis_db.py", "open_analysis_db"): (
+        "c409d1b0a511a84003321cca8ff14a9736f2e0a7d77b7599746a7f75abe2f2d7",
+        "ef39341448ed68658e79774243ef135c26c86fc17c02f3e8ab00a7f87452fef3",
+        "4a70a4415f4c4baa2b72b24a85b6b1d7aa91d5796002fa3c160c506c57a9fe5a",
+    ),
+    ("tools/analysis_db.py", "initialize_schema"): (
+        "0c46b82cfb26ca1058227a7535840a9545cb1b11977f987628ff6d897901b274",
+    ),
+    ("tools/analysis_db.py", "upsert_profile"): (
+        "89cfac74ae7087c302286dc9574eb205d00ec0998d945bd1af31cdaca18506ce",
+    ),
+    ("tools/analysis_db.py", "delete_profile_by_path"): (
+        "1d12635c3467dba0ad7633f516d646f46560c2ef12a515ab47e7599557d1caeb",
+    ),
+    ("tools/audio_tag_post_commit.py", "_create_indexes"): (
+        "ec17020112f01185fcac176a039293786fcf854ec5942729c61f3336079ebe15",
+        "64141da4a190d1e8ba89e0165086466df04af28d0faee20418e5ec536292ffd8",
+        "77d777de74cec697b14281efe233f26ca5cda581ef367813d509407e886858a8",
+    ),
+    ("tools/audio_tag_post_commit.py", "_connect"): (
+        "b20f11154696f10b1dbcd4ae1f086afcf1bc45d9f1c31d34ba99ee92701168d3",
+        "ef39341448ed68658e79774243ef135c26c86fc17c02f3e8ab00a7f87452fef3",
+    ),
+    ("tools/audio_tag_post_commit.py", "_migrate_or_create_schema"): (
+        "930a7770399087898ae6ac96ce5375048117486e06b21da4523d2c3c75113c32",
+        "c8133b83ab96fa145137e145825079ad6bb84eb71738c565260c36bef7a65af2",
+        "46f38c1e7c407287998cd15633b6606f880e9c317712b0aa37be7f16ef1c286b",
+        "c8133b83ab96fa145137e145825079ad6bb84eb71738c565260c36bef7a65af2",
+        "df4c94a295434393d36049ef3e09ebd44e00fd016613b36e1243c95cd2b00488",
+        "cf7db8160a25e93a7ab0c0b228c5931819f16b4afbe69b762c9507c50846b580",
+        "d1182c5d2ac43069a91cb19a44b54e847b48fb26d06c20f7c4428ef4cdb70718",
+    ),
+    ("tools/audio_tag_post_commit.py", "enqueue_audio_tag_jobs"): (
+        "930a7770399087898ae6ac96ce5375048117486e06b21da4523d2c3c75113c32",
+        "69cc3c26e7d55b5c7e192d76bf1864acdc97b8a4adfa4c499ac54ce6a6a256ea",
+        "a58314015433c99f6edc65ccab11565fceec14cf25022d8709eda8f03e8dd828",
+    ),
+    ("tools/audio_tag_post_commit.py", "_claim_job"): (
+        "930a7770399087898ae6ac96ce5375048117486e06b21da4523d2c3c75113c32",
+        "ddf5d04d5cac9d89865a3ce0d98e2359ad0634b30a7554a63402d50644ec3ff9",
+        "81f2add379d543ae7c6a5205e40227572ae9ec77c82c3d63068e493bcb6628d8",
+    ),
+    ("tools/audio_tag_post_commit.py", "_complete_claim"): (
+        "e3b8e53219b2d427f2df38d82f3c34730cbd0ef3da046deccfd3da137fc86b93",
+    ),
+    ("tools/engine_db_write.py", "safe_engine_db_write"): (
+        "930a7770399087898ae6ac96ce5375048117486e06b21da4523d2c3c75113c32",
+        "daf8fd5a565a41345077c9736fe3faee7c42744a31fc509b694bacb9d0ff4b02",
+    ),
 }
 
 COMMIT_ALLOWLIST = {
@@ -315,14 +406,13 @@ STARTUP_FORBIDDEN_CALLS = {
 _SQL_COMMENT = re.compile(r"/\*.*?\*/|--[^\n]*(?:\n|$)", re.DOTALL)
 _SQL_WRITE = re.compile(
     r"\b(INSERT\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM|"
-    r"CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER|VIEW)|"
+    r"CREATE\s+(?:(?:UNIQUE|VIRTUAL|TEMP|TEMPORARY)\s+)*(?:TABLE|INDEX|TRIGGER|VIEW)|"
     r"DROP\s+(?:TABLE|INDEX|TRIGGER|VIEW)|ALTER\s+TABLE|"
     r"BEGIN(?:\s+IMMEDIATE|\s+EXCLUSIVE)?|VACUUM|ATTACH|DETACH)\b",
     re.IGNORECASE,
 )
 _PERSISTENT_PRAGMA = re.compile(
-    r"^PRAGMA\s+(?:[\w]+\.)?(user_version|application_id|journal_mode|"
-    r"auto_vacuum|page_size)\s*=",
+    r"^PRAGMA\s+(?:[\w]+\.)?([\w]+)\s*=",
     re.IGNORECASE,
 )
 
@@ -575,6 +665,45 @@ def _sql_write_signature(sql: str) -> str | None:
     return f"{operation} {target.group(1) if target else '<dynamic>'}"
 
 
+def _sql_fingerprint(sql: str) -> str:
+    return hashlib.sha256(_normalized_sql(sql).encode("utf-8")).hexdigest()
+
+
+def _is_sqlite_opener_expression(
+    analysis: _SourceAnalysis,
+    node: ast.AST,
+    context: ast.AST,
+) -> bool:
+    """Recognize equivalent ways of invoking sqlite3's writable openers."""
+    resolved = analysis.expression_name(node, context)
+    if resolved in {"sqlite3.connect", "sqlite3.Connection"}:
+        return True
+    if isinstance(node, ast.Attribute) and node.attr == "__call__":
+        return _is_sqlite_opener_expression(analysis, node.value, context)
+    if isinstance(node, ast.Call):
+        called = analysis.expression_name(node.func, context)
+        if _last_name(called) == "partial" and node.args:
+            return _is_sqlite_opener_expression(analysis, node.args[0], context)
+    if (
+        isinstance(node, ast.Subscript)
+        and _static_constant_string(node.slice) in {"connect", "Connection"}
+        and isinstance(node.value, ast.Call)
+        and _last_name(analysis.expression_name(node.value.func, context)) == "vars"
+        and node.value.args
+        and analysis.expression_name(node.value.args[0], context) == "sqlite3"
+    ):
+        return True
+    return False
+
+
+def _is_sqlite_opener_call(analysis: _SourceAnalysis, call: ast.Call) -> bool:
+    return _is_sqlite_opener_expression(analysis, call.func, call)
+
+
+def _is_approved_safe_write_call(analysis: _SourceAnalysis, call: ast.Call) -> bool:
+    return analysis.call_name(call) == "engine_db_write.safe_engine_db_write"
+
+
 def _receiver_name(full_name: str) -> str:
     return full_name.rsplit(".", 1)[0] if "." in full_name else ""
 
@@ -648,7 +777,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
         symbol = analysis.symbol(call)
         key = (analysis.item.path, symbol)
 
-        if full_name in {"sqlite3.connect", "sqlite3.Connection"} and not _is_memory_connect(call):
+        if _is_sqlite_opener_call(analysis, call) and not _is_memory_connect(call):
             connect_counts[key] += 1
             allowed = SQLITE_CONNECT_ALLOWLIST.get(key)
             if allowed is None or connect_counts[key] > allowed[0]:
@@ -669,6 +798,17 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                 )
 
         if name == "safe_engine_db_write":
+            if not _is_approved_safe_write_call(analysis, call):
+                violations.append(
+                    _violation(
+                        "engine-db-safe-write-origin",
+                        analysis,
+                        call,
+                        ast.unparse(call),
+                        "safe-write name does not resolve to engine_db_write.safe_engine_db_write",
+                        "the reviewed engine_db_write.safe_engine_db_write import",
+                    )
+                )
             expected = SAFE_ENGINE_WRITE_CALLS.get(key)
             actual = _safe_write_signature(analysis, call)
             if expected != actual:
@@ -843,11 +983,35 @@ def _callable_provides_verified_backup(
     definition = _definition(analysis, name)
     if definition is None:
         return name == "create_verified_audio_backup"
-    symbol = _definition_symbol(analysis, definition)
-    direct_statements = tuple(
-        statement
-        for statement in definition.body
-        if not isinstance(
+    for statement in definition.body:
+        call = None
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+            call = statement.value
+        elif isinstance(statement, ast.Return) and isinstance(statement.value, ast.Call):
+            call = statement.value
+        if call is not None:
+            called = _last_name(analysis.call_name(call))
+            if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
+                analysis, called, seen | {name}
+            ):
+                return True
+        if isinstance(statement, (ast.Return, ast.Raise)):
+            return False
+        if _is_cached_verified_backup_branch(statement):
+            calls = [
+                node.value
+                for node in statement.body
+                if isinstance(node, (ast.Assign, ast.AnnAssign))
+                and isinstance(node.value, ast.Call)
+            ]
+            if calls:
+                called = _last_name(analysis.call_name(calls[0]))
+                if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
+                    analysis, called, seen | {name}
+                ):
+                    return True
+            return False
+        if isinstance(
             statement,
             (
                 ast.If,
@@ -858,31 +1022,9 @@ def _callable_provides_verified_backup(
                 ast.With,
                 ast.AsyncWith,
                 ast.Match,
-                ast.FunctionDef,
-                ast.AsyncFunctionDef,
             ),
-        )
-    )
-    for statement in direct_statements:
-        for node in ast.walk(statement):
-            if not isinstance(node, ast.Call) or analysis.symbol(node) != symbol:
-                continue
-            called = _last_name(analysis.call_name(node))
-            if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
-                analysis, called, seen | {name}
-            ):
-                return True
-    for statement in definition.body:
-        if not _is_cached_verified_backup_branch(statement):
-            continue
-        calls = [node for node in ast.walk(statement) if isinstance(node, ast.Call)]
-        if not calls:
-            continue
-        called = _last_name(analysis.call_name(calls[0]))
-        if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
-            analysis, called, seen | {name}
         ):
-            return True
+            return False
     return False
 
 
@@ -1018,6 +1160,11 @@ def _queue_is_guaranteed_after(
                 continue
             if safe_block.index(safe_statement) >= safe_block.index(queue_statement):
                 continue
+            if isinstance(
+                safe_statement,
+                (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Match),
+            ):
+                continue
             if _caught_safe_write_failure_can_reach_queue(analysis, safe, queue):
                 continue
             return not isinstance(
@@ -1078,6 +1225,68 @@ def _statically_unreachable(analysis: _SourceAnalysis, node: ast.AST) -> bool:
     return False
 
 
+def _approved_empty_queue_after_conditional_write(
+    analysis: _SourceAnalysis,
+    function: str,
+    safe_calls: list[ast.Call],
+    queue_calls: list[ast.Call],
+) -> bool:
+    """Allow the reviewed energy batch: no pending rows means an empty queue."""
+    if function != "_write_energy_ratings_for_paths" or len(safe_calls) != 1:
+        return False
+    node = analysis.functions.get(function)
+    if node is None or not all(_is_approved_safe_write_call(analysis, call) for call in safe_calls):
+        return False
+    safe = safe_calls[0]
+    guarded_if = next(
+        (
+            parent
+            for parent in _ancestors(analysis, safe)
+            if isinstance(parent, ast.If)
+            and isinstance(parent.test, ast.Name)
+            and parent.test.id == "pending"
+        ),
+        None,
+    )
+    if guarded_if is None or guarded_if not in node.body:
+        return False
+    guard_index = node.body.index(guarded_if)
+    empty_changes = any(
+        isinstance(statement, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "changes" for target in statement.targets)
+        and isinstance(statement.value, (ast.List, ast.Tuple))
+        and not statement.value.elts
+        for statement in node.body[:guard_index]
+    )
+    assigns_changes_after_safe = any(
+        isinstance(child, (ast.Assign, ast.AnnAssign))
+        and any(
+            any(
+                isinstance(part, ast.Name) and part.id == "changes"
+                for part in ast.walk(target)
+            )
+            for target in (child.targets if isinstance(child, ast.Assign) else [child.target])
+        )
+        and child.lineno > safe.lineno
+        for child in ast.walk(guarded_if)
+    )
+    queues_only_changes = bool(queue_calls) and all(
+        any(isinstance(child, ast.Name) and child.id == "changes" for child in ast.walk(queue))
+        and queue.lineno > guarded_if.end_lineno
+        for queue in queue_calls
+    )
+    return empty_changes and assigns_changes_after_safe and queues_only_changes
+
+
+def _ancestors(analysis: _SourceAnalysis, node: ast.AST) -> list[ast.AST]:
+    result = []
+    current = node
+    while current in analysis.parents:
+        current = analysis.parents[current]
+        result.append(current)
+    return result
+
+
 def _check_post_commit(analysis: _SourceAnalysis) -> list[Violation]:
     if analysis.item.path != "set_app/set_app.py":
         return []
@@ -1104,6 +1313,9 @@ def _check_post_commit(analysis: _SourceAnalysis) -> list[Violation]:
                     any(_queue_is_guaranteed_after(analysis, safe, queue) for queue in queue_calls)
                     for safe in safe_calls
                 )
+            )
+            or _approved_empty_queue_after_conditional_write(
+                analysis, function, safe_calls, queue_calls
             )
         )
         if node is None or not ordered:
@@ -1205,12 +1417,13 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
         "safe-engine-write": Counter(),
     }
     observed_sql_operations: dict[tuple[str, str], Counter[str]] = {}
+    observed_sql_fingerprints: dict[tuple[str, str], Counter[str]] = {}
     for analysis in analyses:
         for call in analysis.calls():
             full_name = analysis.call_name(call)
             name = _last_name(full_name)
             key = (analysis.item.path, analysis.symbol(call))
-            if full_name in {"sqlite3.connect", "sqlite3.Connection"} and not _is_memory_connect(call):
+            if _is_sqlite_opener_call(analysis, call) and not _is_memory_connect(call):
                 observed["sqlite-connect"][key] += 1
             if name == "commit" and _looks_like_db_receiver(full_name):
                 observed["commit"][key] += 1
@@ -1220,11 +1433,14 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
                 if signature is not None:
                     observed["mutating-sql"][key] += 1
                     observed_sql_operations.setdefault(key, Counter())[signature] += 1
+                    observed_sql_fingerprints.setdefault(key, Counter())[
+                        _sql_fingerprint(sql)
+                    ] += 1
             if name == "save" and (
                 _looks_like_audio_receiver(full_name) or _module_imports_mutagen(analysis)
             ):
                 observed["audio-save"][key] += 1
-            if name == "safe_engine_db_write":
+            if name == "safe_engine_db_write" and _is_approved_safe_write_call(analysis, call):
                 observed["safe-engine-write"][key] += 1
 
     violations: list[Violation] = []
@@ -1264,6 +1480,22 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
                 f"mutating SQL in {key[1]}",
                 f"expected reviewed operations {dict(expected)!r}, found {dict(actual)!r}",
                 "an explicit architecture review and exact SQL operation update",
+            )
+        )
+    for key, expected_fingerprints in SQL_FINGERPRINT_ALLOWLIST.items():
+        actual = observed_sql_fingerprints.get(key, Counter())
+        expected = Counter(expected_fingerprints)
+        if actual == expected:
+            continue
+        analysis = by_path[key[0]]
+        violations.append(
+            _violation(
+                "allowlist-sql-fingerprint-mismatch",
+                analysis,
+                analysis.functions.get(key[1].split(".", 1)[0], analysis.tree),
+                f"mutating SQL in {key[1]}",
+                "full normalized SQL differs from the reviewed fingerprints",
+                "an explicit architecture review and exact SQL fingerprint update",
             )
         )
     for key in SAFE_ENGINE_WRITE_CALLS:

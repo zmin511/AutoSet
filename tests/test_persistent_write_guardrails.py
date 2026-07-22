@@ -410,3 +410,96 @@ def test_function_parameter_shadowing_import_is_not_a_sqlite_call():
         "def report(connect):\n    return connect('not sqlite')\n"
     )
     assert not analyze_sources([SourceFile("tools/report.py", source)])
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import sqlite3\ndef unsafe(path):\n"
+        "    return sqlite3.connect.__call__(path)\n",
+        "from functools import partial\nimport sqlite3\ndef unsafe(path):\n"
+        "    return partial(sqlite3.connect, path)()\n",
+        "import sqlite3\ndef unsafe(path):\n"
+        "    return vars(sqlite3)['connect'](path)\n",
+    ],
+)
+def test_equivalent_sqlite_opener_invocations_are_detected(source):
+    assert "engine-db-direct-write" in _rules(source, "tools/adversarial.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def unsafe(connection):\n"
+        "    connection.execute('CREATE VIRTUAL TABLE secrets USING fts5(body)')\n",
+        "def unsafe(connection):\n"
+        "    connection.execute('PRAGMA schema_version = 999')\n",
+    ],
+)
+def test_virtual_schema_and_writable_pragma_are_detected(source):
+    assert "unapproved-persistent-sql" in _rules(source, "tools/adversarial.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "def backup_before_save(skip=True):\n"
+            "    if skip:\n        return\n"
+            "    create_verified_audio_backup()\n"
+            "def write_audio_tags(tags):\n"
+            "    backup_before_save()\n    tags.save()\n"
+        ),
+        (
+            "def backup_before_save():\n"
+            "    callback = lambda: create_verified_audio_backup()\n"
+            "def write_audio_tags(tags):\n"
+            "    backup_before_save()\n    tags.save()\n"
+        ),
+    ],
+)
+def test_early_return_and_uninvoked_lambda_do_not_authorize_backup(source):
+    assert "audio-backup-call-required" in _rules(
+        source, "tools/engine_write_tags.py"
+    )
+
+
+def test_local_safe_write_lookalike_is_rejected():
+    source = (
+        "def safe_engine_db_write(*args, **kwargs):\n    return None, None\n"
+        "def update_genre():\n"
+        "    safe_engine_db_write(None, None, 'update_track_genre', write_genre)\n"
+        "    _submit_post_commit_audio_tags([])\n"
+    )
+    assert "engine-db-safe-write-origin" in _rules(source)
+
+
+def test_conditional_safe_write_does_not_authorize_unconditional_queue():
+    source = (
+        "from engine_db_write import safe_engine_db_write\n"
+        "def update_genre(do_write=False):\n"
+        "    if do_write:\n"
+        "        safe_engine_db_write(None, None, 'update_track_genre', write_genre)\n"
+        "    _submit_post_commit_audio_tags([])\n"
+    )
+    violations = analyze_sources([SourceFile("set_app/set_app.py", source)])
+    assert any(
+        item.rule == "post-commit-queue-required" and item.call == "update_genre"
+        for item in violations
+    )
+
+
+def test_exact_allowlist_detects_changed_sql_with_same_operation_and_table():
+    changed = []
+    for item in production_sources(REPO_ROOT):
+        source = item.source
+        if item.path == "set_app/set_app.py":
+            source = source.replace(
+                "UPDATE Track SET lastEditTime = ? WHERE id = ?",
+                "UPDATE Track SET rating = 0 WHERE id = ?",
+                1,
+            )
+        changed.append(SourceFile(item.path, source))
+    assert "allowlist-sql-fingerprint-mismatch" in {
+        violation.rule for violation in analyze_sources(changed)
+    }
