@@ -888,6 +888,36 @@ def _static_constant_string(node: ast.AST) -> str | None:
     return None
 
 
+_UNKNOWN_STATIC_VALUE = object()
+
+
+def _static_format_value(
+    analysis: _SourceAnalysis,
+    node: ast.AST,
+    context: ast.AST,
+    seen: frozenset[str],
+) -> object:
+    """Resolve only inert constants that Python string formatting can consume."""
+    if isinstance(node, ast.Constant) and isinstance(
+        node.value, (str, bytes, int, float, complex, bool, type(None))
+    ):
+        return node.value
+    if isinstance(node, ast.Name) and node.id not in seen:
+        binding = analysis._binding(node.id, context)
+        if binding is not None:
+            return _static_format_value(
+                analysis, binding, context, seen | {node.id}
+            )
+    if isinstance(node, ast.Tuple):
+        values = [
+            _static_format_value(analysis, item, context, seen)
+            for item in node.elts
+        ]
+        if all(value is not _UNKNOWN_STATIC_VALUE for value in values):
+            return tuple(values)
+    return _UNKNOWN_STATIC_VALUE
+
+
 def _is_read_only_connect(node: ast.Call) -> bool:
     rendered = " ".join(ast.unparse(arg) for arg in node.args)
     rendered += " " + " ".join(ast.unparse(item.value) for item in node.keywords)
@@ -915,28 +945,141 @@ def _static_string(
         if binding is not None:
             return _static_string(analysis, binding, context, seen | {node.id})
     if isinstance(node, ast.JoinedStr):
-        return "".join(
-            value.value if isinstance(value, ast.Constant) and isinstance(value.value, str) else "?"
-            for value in node.values
-        )
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+                continue
+            if not isinstance(value, ast.FormattedValue):
+                return None
+            resolved = _static_format_value(
+                analysis, value.value, context, seen
+            )
+            if resolved is _UNKNOWN_STATIC_VALUE:
+                return None
+            if value.conversion == ord("s"):
+                resolved = str(resolved)
+            elif value.conversion == ord("r"):
+                resolved = repr(resolved)
+            elif value.conversion == ord("a"):
+                resolved = ascii(resolved)
+            elif value.conversion != -1:
+                return None
+            format_spec = (
+                ""
+                if value.format_spec is None
+                else _static_string(
+                    analysis, value.format_spec, context, seen
+                )
+            )
+            if format_spec is None:
+                return None
+            try:
+                parts.append(format(resolved, format_spec))
+            except (OverflowError, TypeError, ValueError):
+                return None
+        return "".join(parts)
     if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
         left = _static_string(analysis, node.left, context, seen)
-        right = _static_string(analysis, node.right, context, seen)
-        if isinstance(node.op, ast.Add) and left is not None and right is not None:
-            return left + right
-        if isinstance(node.op, ast.Mod) and left is not None:
-            return left
+        if isinstance(node.op, ast.Add):
+            right = _static_string(analysis, node.right, context, seen)
+            if left is not None and right is not None:
+                return left + right
+        elif left is not None:
+            right = _static_format_value(
+                analysis, node.right, context, seen
+            )
+            if right is not _UNKNOWN_STATIC_VALUE:
+                try:
+                    result = left % right
+                except (OverflowError, TypeError, ValueError):
+                    return None
+                return result if isinstance(result, str) else None
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "format"
     ):
-        return _static_string(analysis, node.func.value, context, seen)
+        template = _static_string(
+            analysis, node.func.value, context, seen
+        )
+        if template is None or any(
+            isinstance(argument, ast.Starred) for argument in node.args
+        ) or any(keyword.arg is None for keyword in node.keywords):
+            return None
+        arguments = [
+            _static_format_value(analysis, argument, context, seen)
+            for argument in node.args
+        ]
+        keywords = {
+            keyword.arg: _static_format_value(
+                analysis, keyword.value, context, seen
+            )
+            for keyword in node.keywords
+            if keyword.arg is not None
+        }
+        if any(
+            value is _UNKNOWN_STATIC_VALUE
+            for value in (*arguments, *keywords.values())
+        ):
+            return None
+        try:
+            return template.format(*arguments, **keywords)
+        except (
+            AttributeError,
+            IndexError,
+            KeyError,
+            OverflowError,
+            TypeError,
+            ValueError,
+        ):
+            return None
+    return None
+
+
+def _sql_template(
+    analysis: _SourceAnalysis,
+    node: ast.AST,
+    context: ast.AST,
+    seen: frozenset[str] = frozenset(),
+) -> str | None:
+    """Resolve SQL structure while marking non-constant substitutions as unknown."""
+    exact = _static_string(analysis, node, context, seen)
+    if exact is not None:
+        return exact
+    if isinstance(node, ast.Name) and node.id not in seen:
+        binding = analysis._binding(node.id, context)
+        if binding is not None:
+            return _sql_template(
+                analysis, binding, context, seen | {node.id}
+            )
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            value.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            else "?"
+            for value in node.values
+        )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+        left = _sql_template(analysis, node.left, context, seen)
+        if isinstance(node.op, ast.Mod):
+            return left
+        right = _sql_template(analysis, node.right, context, seen)
+        if left is not None and right is not None:
+            return left + right
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "format"
+    ):
+        return _sql_template(
+            analysis, node.func.value, context, seen
+        )
     return None
 
 
 def _literal_sql(analysis: _SourceAnalysis, node: ast.AST, context: ast.AST) -> str | None:
-    return _static_string(analysis, node, context)
+    return _sql_template(analysis, node, context)
 
 
 def _normalized_sql(sql: str) -> str:

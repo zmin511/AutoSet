@@ -789,6 +789,81 @@ def test_reflective_callable_construction_is_fail_closed(source):
 
 
 @pytest.mark.parametrize(
+    ("attribute", "source_template", "rule"),
+    [
+        (
+            "f\"{'con'}nect\"",
+            "import sqlite3\ndef unsafe(path):\n    return getattr(sqlite3, {attribute})(path)\n",
+            "engine-db-direct-write",
+        ),
+        (
+            "'con{}ect'.format('n')",
+            "import sqlite3\ndef unsafe(path):\n    return getattr(sqlite3, {attribute})(path)\n",
+            "engine-db-direct-write",
+        ),
+        (
+            "'con%sect' % 'n'",
+            "import sqlite3\ndef unsafe(path):\n    return getattr(sqlite3, {attribute})(path)\n",
+            "engine-db-direct-write",
+        ),
+        (
+            "f\"{'exe'}cute\"",
+            "def unsafe(connection):\n    getattr(connection, {attribute})('DELETE FROM Track')\n",
+            "unapproved-persistent-sql",
+        ),
+        (
+            "'ex{}ute'.format('ec')",
+            "def unsafe(connection):\n    getattr(connection, {attribute})('DELETE FROM Track')\n",
+            "unapproved-persistent-sql",
+        ),
+        (
+            "'ex%scute' % 'e'",
+            "def unsafe(connection):\n    getattr(connection, {attribute})('DELETE FROM Track')\n",
+            "unapproved-persistent-sql",
+        ),
+        (
+            "f\"{'sa'}ve\"",
+            "def unsafe(tags):\n    getattr(tags, {attribute})()\n",
+            "audio-save-without-approved-backup-writer",
+        ),
+        (
+            "'s{}e'.format('av')",
+            "def unsafe(tags):\n    getattr(tags, {attribute})()\n",
+            "audio-save-without-approved-backup-writer",
+        ),
+        (
+            "'s%se' % 'av'",
+            "def unsafe(tags):\n    getattr(tags, {attribute})()\n",
+            "audio-save-without-approved-backup-writer",
+        ),
+    ],
+)
+def test_constant_computed_persistence_attributes_are_resolved(
+    attribute, source_template, rule
+):
+    source = source_template.format(attribute=attribute)
+    assert rule in _rules(source, "tools/adversarial.py")
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    [
+        "f\"{prefix}cute\"",
+        "'ex{}ute'.format(suffix)",
+        "'ex%scute' % middle",
+    ],
+)
+def test_incompletely_computed_attributes_are_denied(attribute):
+    source = (
+        "def unsafe(connection, prefix, suffix, middle):\n"
+        f"    getattr(connection, {attribute})('DELETE FROM Track')\n"
+    )
+    assert "unreviewed-dynamic-getattr" in _rules(
+        source, "tools/adversarial.py"
+    )
+
+
+@pytest.mark.parametrize(
     "source",
     [
         (
