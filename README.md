@@ -113,10 +113,13 @@ tools/review_new_genres.py  нормализация жанров, семейс�
 `tests/test_persistent_write_guardrails.py` проверяет эти границы через AST.
 Разрешение символов учитывает `import`/`from import`, лексические области,
 затенение параметрами и определениями функций, callable в значениях параметров
-по умолчанию, цепочки простых присваиваний, `getattr()`, `__import__()`,
-`__call__`, `functools.partial()` и `vars()`. Прямым SQLite opener считаются как
-`sqlite3.connect`, так и `sqlite3.Connection`; safe-write признаётся только при
-разрешении имени к импортированному `engine_db_write.safe_engine_db_write`.
+по умолчанию у функций и lambda, цепочки присваиваний, распаковку, одноэлементные
+и многовариантные циклы/comprehension, условные callable и callable внутри
+индексируемых контейнеров, `getattr()`, `__import__()`,
+`__call__`, `functools.partial()` и `vars()`. Прямым SQLite opener считаются
+`sqlite3.connect`, `sqlite3.Connection` и их `sqlite3.dbapi2`-эквиваленты;
+safe-write признаётся только при разрешении имени к импортированному
+`engine_db_write.safe_engine_db_write`.
 SQL восстанавливается из констант, переменных, f-string, конкатенации и
 `.format()`; проверяются `execute`, `executemany`, `executescript`, DML после
 комментариев и CTE, `CREATE VIRTUAL TABLE`, `operator.methodcaller`, а также все
@@ -134,7 +137,10 @@ Backup после возможного раннего выхода, внутри
 не принимается. Post-commit
 queue-вызов должен выполняться после возврата из точного утверждённого
 `safe_engine_db_write()`; перехваченная ошибка safe-write не считается успешным
-commit. Распространённые имена методов у посторонних объектов и SQLite
+commit. Имя queue-helper дополнительно должно разрешаться к утверждённой
+module-level функции, а финальный submit — к импортированному
+`audio_tag_post_commit.submit_audio_tag_jobs`; локальные одноимённые заглушки
+не принимаются. Распространённые имена методов у посторонних объектов и SQLite
 `:memory:` не считаются постоянной записью.
 
 Allowlist задаёт точную пару `файл + функция`, число вызовов и SHA-256 отпечатки

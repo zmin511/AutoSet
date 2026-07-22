@@ -218,6 +218,14 @@ def test_callable_alias_and_dynamic_sql_bypasses_are_detected(source, rule):
             "    backup_before_save()\n"
             "    tags.save()\n"
         ),
+        (
+            "def verified():\n    create_verified_audio_backup()\n"
+            "def noop():\n    pass\n"
+            "def write_audio_tags(tags):\n"
+            "    for backup_before_save in [verified, noop]:\n"
+            "        backup_before_save()\n"
+            "    tags.save()\n"
+        ),
     ],
 )
 def test_backup_must_be_verified_and_dominate_each_save(source):
@@ -571,3 +579,148 @@ def test_unknown_save_receiver_is_denied_by_default():
 def test_reviewed_read_only_pragma_forms_are_not_mutations(sql):
     source = f"def inspect(connection):\n    connection.execute({sql!r})\n"
     assert "unapproved-persistent-sql" not in _rules(source, "tools/report.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "import sqlite3\n"
+            "def unsafe(path):\n"
+            "    for opener in [sqlite3.connect]:\n"
+            "        return opener(path)\n"
+        ),
+        (
+            "import sqlite3\n"
+            "def unsafe(path):\n"
+            "    for opener in [print, sqlite3.connect]:\n"
+            "        opener(path)\n"
+        ),
+        (
+            "import sqlite3\n"
+            "def unsafe(paths):\n"
+            "    return [opener(path) for opener in [sqlite3.connect] "
+            "for path in paths]\n"
+        ),
+        "import sqlite3\nopener, = (sqlite3.connect,)\nopener('unsafe.db')\n",
+        (
+            "import sqlite3\n"
+            "unsafe = lambda path, opener=sqlite3.connect: opener(path)\n"
+        ),
+        "import sqlite3\nsqlite3.dbapi2.connect('unsafe.db')\n",
+        "import sqlite3\n{'open': sqlite3.connect}['open']('unsafe.db')\n",
+        (
+            "import sqlite3\n"
+            "openers = {'open': sqlite3.connect}\n"
+            "openers['open']('unsafe.db')\n"
+        ),
+        (
+            "import sqlite3\n"
+            "getattr(sqlite3, 'con' + 'nect')('unsafe.db')\n"
+        ),
+        (
+            "import sqlite3\n"
+            "def unsafe(path, enabled):\n"
+            "    opener = sqlite3.connect if enabled else print\n"
+            "    opener(path)\n"
+        ),
+    ],
+)
+def test_container_loop_unpack_lambda_and_computed_sqlite_openers_are_detected(source):
+    assert "engine-db-direct-write" in _rules(source, "tools/adversarial.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "def unsafe(connection):\n"
+            "    for run in [connection.execute]:\n"
+            "        run('DELETE FROM Track')\n"
+        ),
+        (
+            "def unsafe(connection):\n"
+            "    for run in [print, connection.execute]:\n"
+            "        run('DELETE FROM Track')\n"
+        ),
+        (
+            "def unsafe(connection):\n"
+            "    getattr(connection, 'ex' + 'ecute')('DELETE FROM Track')\n"
+        ),
+        (
+            "import operator\n"
+            "def unsafe(connection):\n"
+            "    operator.methodcaller(\n"
+            "        'ex' + 'ecute', 'DELETE FROM Track'\n"
+            "    )(connection)\n"
+        ),
+        (
+            "def unsafe(connection, key):\n"
+            "    runners = {'read': print, 'write': connection.execute}\n"
+            "    runners[key]('DELETE FROM Track')\n"
+        ),
+    ],
+)
+def test_aliased_and_computed_sql_invocations_are_detected(source):
+    assert "unapproved-persistent-sql" in _rules(source, "tools/adversarial.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "def unsafe(tags):\n"
+            "    for persist in [tags.save]:\n"
+            "        persist()\n"
+        ),
+        (
+            "def unsafe(tags):\n"
+            "    for persist in [print, tags.save]:\n"
+            "        persist()\n"
+        ),
+        "def unsafe(tags):\n    getattr(tags, 'sa' + 've')()\n",
+        (
+            "def unsafe(tags, enabled):\n"
+            "    persist = tags.save if enabled else print\n"
+            "    persist()\n"
+        ),
+    ],
+)
+def test_aliased_and_computed_audio_saves_are_detected(source):
+    assert "audio-save-without-approved-backup-writer" in _rules(
+        source, "tools/adversarial.py"
+    )
+
+
+def test_nested_post_commit_helper_lookalike_is_rejected():
+    source = (
+        "from engine_db_write import safe_engine_db_write\n"
+        "def update_genre():\n"
+        "    def _submit_post_commit_audio_tags(_jobs):\n"
+        "        return None, []\n"
+        "    safe_engine_db_write(None, None, 'update_track_genre', write_genre)\n"
+        "    _submit_post_commit_audio_tags([])\n"
+    )
+    assert "post-commit-queue-required" in _rules(source)
+
+
+def test_nested_durable_queue_submitter_lookalike_is_rejected():
+    source = (
+        "def _submit_post_commit_audio_tags(jobs):\n"
+        "    def submit_audio_tag_jobs(_jobs):\n"
+        "        return None, []\n"
+        "    return submit_audio_tag_jobs(jobs)\n"
+    )
+    assert "post-commit-queue-required" in _rules(source)
+
+
+def test_aliased_internal_audio_writer_requires_verified_backup_callback():
+    source = (
+        "from engine_write_tags import _set_tags_mp3\n"
+        "def unsafe(path):\n"
+        "    for writer in [_set_tags_mp3]:\n"
+        "        writer(path, '128', '8A', True, before_save=lambda: None)\n"
+    )
+    assert "audio-backup-callback-required" in _rules(
+        source, "tools/adversarial.py"
+    )

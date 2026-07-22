@@ -386,6 +386,11 @@ POST_COMMIT_QUEUE_CALLS = {
     "_submit_post_commit_audio_tags": "submit_audio_tag_jobs",
 }
 
+POST_COMMIT_QUEUE_ORIGINS = {
+    "_submit_post_commit_audio_tags": "_submit_post_commit_audio_tags",
+    "submit_audio_tag_jobs": "audio_tag_post_commit.submit_audio_tag_jobs",
+}
+
 AUDIO_CALLBACK_WRITERS = {
     "_set_tags_mp3": 4,
     "_set_bitrate_tag_mp3": 3,
@@ -480,6 +485,25 @@ class _SourceAnalysis:
                     aliases[name.asname or name.name] = qualified
         return aliases
 
+    @staticmethod
+    def _target_bindings(target: ast.AST, value: ast.AST) -> list[tuple[str, ast.AST]]:
+        """Pair assignment targets with the value expression they receive."""
+        if isinstance(target, ast.Name):
+            return [(target.id, value)]
+        if isinstance(target, (ast.Tuple, ast.List)) and isinstance(
+            value, (ast.Tuple, ast.List)
+        ):
+            if len(target.elts) == len(value.elts):
+                result: list[tuple[str, ast.AST]] = []
+                for child_target, child_value in zip(
+                    target.elts, value.elts, strict=True
+                ):
+                    result.extend(
+                        _SourceAnalysis._target_bindings(child_target, child_value)
+                    )
+                return result
+        return []
+
     def _bindings(self) -> dict[tuple[str, str], list[tuple[int, ast.AST]]]:
         bindings: dict[tuple[str, str], list[tuple[int, ast.AST]]] = {}
         for node in ast.walk(self.tree):
@@ -491,19 +515,35 @@ class _SourceAnalysis:
                 value, targets = node.value, [node.target]
             elif isinstance(node, ast.NamedExpr):
                 value, targets = node.value, [node.target]
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                value = node.iter
+                targets = [node.target]
+            elif isinstance(node, ast.comprehension):
+                value = node.iter
+                targets = [node.target]
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 value, targets = node, [ast.Name(id=node.name)]
             if value is None:
                 continue
             for target in targets:
-                if isinstance(target, ast.Name):
-                    bindings.setdefault((self.symbol(node), target.id), []).append(
-                        (node.lineno, value)
-                    )
+                values = (
+                    value.elts
+                    if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension))
+                    and isinstance(value, (ast.List, ast.Tuple, ast.Set))
+                    else [value]
+                )
+                for candidate in values:
+                    for name, bound_value in self._target_bindings(target, candidate):
+                        bindings.setdefault((self.symbol(node), name), []).append(
+                            (
+                                getattr(node, "lineno", getattr(target, "lineno", 1)),
+                                bound_value,
+                            )
+                        )
         return bindings
 
-    def _binding(self, name: str, context: ast.AST) -> ast.AST | None:
-        """Return the latest simple assignment visible before *context*."""
+    def _binding_candidates(self, name: str, context: ast.AST) -> list[ast.AST]:
+        """Return every value a nearest visible binding may produce."""
         line = getattr(context, "lineno", 10**9)
         symbol = self.symbol(context)
         scopes = []
@@ -514,16 +554,22 @@ class _SourceAnalysis:
         for scope in scopes:
             candidates = self.bindings.get((scope, name), [])
             if scope != "<module>" or symbol == "<module>":
-                candidates = [item for item in candidates if item[0] < line]
+                candidates = [item for item in candidates if item[0] <= line]
             if candidates:
-                return max(candidates, key=lambda item: item[0])[1]
-        return None
+                latest = max(item[0] for item in candidates)
+                return [value for binding_line, value in candidates if binding_line == latest]
+        return []
+
+    def _binding(self, name: str, context: ast.AST) -> ast.AST | None:
+        """Return the latest simple assignment visible before *context*."""
+        candidates = self._binding_candidates(name, context)
+        return candidates[0] if candidates else None
 
     def _parameter_default(self, name: str, context: ast.AST) -> ast.AST | None:
         current = context
         while current in self.parents:
             current = self.parents[current]
-            if not isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
                 continue
             positional = [*current.args.posonlyargs, *current.args.args]
             defaulted_positional = (
@@ -555,7 +601,7 @@ class _SourceAnalysis:
         current = context
         while current in self.parents:
             current = self.parents[current]
-            if not isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
                 continue
             arguments = (
                 *current.args.posonlyargs,
@@ -606,10 +652,14 @@ class _SourceAnalysis:
         if isinstance(node, ast.Attribute):
             base = self.expression_name(node.value, context, seen)
             return f"{base}.{node.attr}" if base else node.attr
+        if isinstance(node, ast.Subscript):
+            selected = self._subscript_value(node, context)
+            if selected is not None:
+                return self.expression_name(selected, context, seen)
         if isinstance(node, ast.Call):
             called = self.expression_name(node.func, context, seen)
             if called == "getattr" and len(node.args) >= 2:
-                attribute = _static_constant_string(node.args[1])
+                attribute = _static_string(self, node.args[1], context)
                 if attribute is not None:
                     base = self.expression_name(node.args[0], context, seen)
                     return f"{base}.{attribute}"
@@ -620,8 +670,107 @@ class _SourceAnalysis:
             return f"{called}()"
         return ast.unparse(node)
 
+    def expression_names(
+        self,
+        node: ast.AST,
+        context: ast.AST | None = None,
+        seen: frozenset[str] = frozenset(),
+    ) -> set[str]:
+        """Resolve every statically possible callable name conservatively."""
+        context = context or node
+        if isinstance(node, ast.Name):
+            if node.id not in seen:
+                bindings = self._binding_candidates(node.id, context)
+                if bindings:
+                    return {
+                        name
+                        for binding in bindings
+                        for name in self.expression_names(
+                            binding, context, seen | {node.id}
+                        )
+                    }
+                default = self._parameter_default(node.id, context)
+                if default is not None and not (
+                    isinstance(default, ast.Constant) and default.value is None
+                ):
+                    return self.expression_names(default, context, seen | {node.id})
+            if node.id in self.imports and not self._parameter_shadows_import(
+                node.id, context
+            ):
+                return {self.imports[node.id]}
+            return {node.id}
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            owner = self.symbol(node)
+            return {f"{owner}.{node.name}" if owner != "<module>" else node.name}
+        if isinstance(node, ast.Attribute):
+            return {
+                f"{base}.{node.attr}" if base else node.attr
+                for base in self.expression_names(node.value, context, seen)
+            }
+        if isinstance(node, ast.IfExp):
+            return self.expression_names(
+                node.body, context, seen
+            ) | self.expression_names(node.orelse, context, seen)
+        if isinstance(node, ast.BoolOp):
+            return {
+                name
+                for value in node.values
+                for name in self.expression_names(value, context, seen)
+            }
+        if isinstance(node, ast.Subscript):
+            selected = self._subscript_values(node, context)
+            if selected:
+                return {
+                    name
+                    for value in selected
+                    for name in self.expression_names(value, context, seen)
+                }
+        if isinstance(node, ast.Call):
+            called_names = self.expression_names(node.func, context, seen)
+            if "getattr" in called_names and len(node.args) >= 2:
+                attribute = _static_string(self, node.args[1], context)
+                if attribute is not None:
+                    return {
+                        f"{base}.{attribute}"
+                        for base in self.expression_names(node.args[0], context, seen)
+                    }
+            if "__import__" in called_names and node.args:
+                module = _static_constant_string(node.args[0])
+                if module is not None:
+                    return {module}
+            return {f"{called}()" for called in called_names}
+        return {ast.unparse(node)}
+
+    def _subscript_value(self, node: ast.Subscript, context: ast.AST) -> ast.AST | None:
+        values = self._subscript_values(node, context)
+        return values[0] if values else None
+
+    def _subscript_values(self, node: ast.Subscript, context: ast.AST) -> list[ast.AST]:
+        container = node.value
+        if isinstance(container, ast.Name):
+            container = self._binding(container.id, context) or container
+        key = _static_string(self, node.slice, context)
+        if isinstance(container, ast.Dict) and key is not None:
+            for item_key, item_value in zip(
+                container.keys, container.values, strict=True
+            ):
+                if item_key is not None and _static_string(self, item_key, context) == key:
+                    return [item_value]
+        if isinstance(container, ast.Dict) and key is None:
+            return list(container.values)
+        if isinstance(container, (ast.List, ast.Tuple)):
+            index = node.slice.value if isinstance(node.slice, ast.Constant) else None
+            if isinstance(index, int) and -len(container.elts) <= index < len(container.elts):
+                return [container.elts[index]]
+            if index is None:
+                return list(container.elts)
+        return []
+
     def call_name(self, node: ast.Call) -> str:
         return self.expression_name(node.func, node)
+
+    def call_names(self, node: ast.Call) -> set[str]:
+        return self.expression_names(node.func, node)
 
     def calls(self) -> list[ast.Call]:
         return [node for node in ast.walk(self.tree) if isinstance(node, ast.Call)]
@@ -642,6 +791,11 @@ def production_sources(repo_root: Path) -> list[SourceFile]:
 
 def _last_name(name: str) -> str:
     return name.rsplit(".", 1)[-1]
+
+
+def _only_last_name(analysis: _SourceAnalysis, node: ast.AST, context: ast.AST) -> str:
+    names = {_last_name(name) for name in analysis.expression_names(node, context)}
+    return next(iter(names)) if len(names) == 1 else ""
 
 
 def _static_constant_string(node: ast.AST) -> str | None:
@@ -743,14 +897,19 @@ def _is_sqlite_opener_expression(
     context: ast.AST,
 ) -> bool:
     """Recognize equivalent ways of invoking sqlite3's writable openers."""
-    resolved = analysis.expression_name(node, context)
-    if resolved in {"sqlite3.connect", "sqlite3.Connection"}:
+    resolved = analysis.expression_names(node, context)
+    if resolved & {
+        "sqlite3.connect",
+        "sqlite3.Connection",
+        "sqlite3.dbapi2.connect",
+        "sqlite3.dbapi2.Connection",
+    }:
         return True
     if isinstance(node, ast.Attribute) and node.attr == "__call__":
         return _is_sqlite_opener_expression(analysis, node.value, context)
     if isinstance(node, ast.Call):
-        called = analysis.expression_name(node.func, context)
-        if _last_name(called) == "partial" and node.args:
+        called = analysis.expression_names(node.func, context)
+        if any(_last_name(name) == "partial" for name in called) and node.args:
             return _is_sqlite_opener_expression(analysis, node.args[0], context)
     if (
         isinstance(node, ast.Subscript)
@@ -758,7 +917,7 @@ def _is_sqlite_opener_expression(
         and isinstance(node.value, ast.Call)
         and _last_name(analysis.expression_name(node.value.func, context)) == "vars"
         and node.value.args
-        and analysis.expression_name(node.value.args[0], context) == "sqlite3"
+        and "sqlite3" in analysis.expression_names(node.value.args[0], context)
     ):
         return True
     return False
@@ -769,24 +928,21 @@ def _is_sqlite_opener_call(analysis: _SourceAnalysis, call: ast.Call) -> bool:
 
 
 def _is_approved_safe_write_call(analysis: _SourceAnalysis, call: ast.Call) -> bool:
-    return analysis.call_name(call) == "engine_db_write.safe_engine_db_write"
+    return analysis.call_names(call) == {"engine_db_write.safe_engine_db_write"}
 
 
 def _sql_invocation(
     analysis: _SourceAnalysis, call: ast.Call
 ) -> tuple[str, ast.AST] | None:
     """Return the SQL method and expression for direct and methodcaller calls."""
-    name = _last_name(analysis.call_name(call))
-    if name in {"execute", "executemany", "executescript"} and call.args:
-        return name, call.args[0]
+    names = {_last_name(name) for name in analysis.call_names(call)}
+    methods = names & {"execute", "executemany", "executescript"}
+    if methods and call.args:
+        return sorted(methods)[0], call.args[0]
     if isinstance(call.func, ast.Call):
-        factory = analysis.expression_name(call.func.func, call)
-        method = (
-            _static_constant_string(call.func.args[0])
-            if call.func.args
-            else None
-        )
-        if factory == "operator.methodcaller" and method in {
+        factories = analysis.expression_names(call.func.func, call)
+        method = _static_string(analysis, call.func.args[0], call) if call.func.args else None
+        if "operator.methodcaller" in factories and method in {
             "execute",
             "executemany",
             "executescript",
@@ -828,7 +984,7 @@ def _safe_write_signature(
         else None
     )
     callback = (
-        _last_name(analysis.expression_name(call.args[3], call))
+        _only_last_name(analysis, call.args[3], call)
         if len(call.args) >= 4
         else None
     )
@@ -863,8 +1019,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
     save_calls: dict[tuple[str, str], list[ast.Call]] = {}
 
     for call in analysis.calls():
-        full_name = analysis.call_name(call)
-        name = _last_name(full_name)
+        names = {_last_name(name) for name in analysis.call_names(call)}
         symbol = analysis.symbol(call)
         key = (analysis.item.path, symbol)
 
@@ -888,7 +1043,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                     )
                 )
 
-        if name == "safe_engine_db_write":
+        if "safe_engine_db_write" in names:
             if not _is_approved_safe_write_call(analysis, call):
                 violations.append(
                     _violation(
@@ -914,7 +1069,9 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                     )
                 )
 
-        if name == "commit" and _looks_like_db_receiver(full_name):
+        if "commit" in names and any(
+            _looks_like_db_receiver(name) for name in analysis.call_names(call)
+        ):
             commit_counts[key] += 1
             allowed = COMMIT_ALLOWLIST.get(key)
             if allowed is None or commit_counts[key] > allowed[0]:
@@ -953,13 +1110,13 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                             "unapproved-persistent-sql",
                             analysis,
                             call,
-                        f"{sql_method}({sql[:80]!r})",
+                            f"{sql_method}({sql[:80]!r})",
                             "mutating SQL is outside an exact reviewed persistence symbol",
                             "a safe Engine callback or documented analysis/queue storage function",
                         )
                     )
 
-        if name == "save":
+        if "save" in names:
             save_counts[key] += 1
             first_save.setdefault(key, call)
             save_calls.setdefault(key, []).append(call)
@@ -976,8 +1133,8 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                     )
                 )
 
-        if name in {"write_audio_tags", "write_tags"}:
-            writer_key = (analysis.item.path, symbol, name)
+        for writer_name in names & {"write_audio_tags", "write_tags"}:
+            writer_key = (analysis.item.path, symbol, writer_name)
             if writer_key not in DIRECT_AUDIO_WRITER_ALLOWLIST:
                 violations.append(
                     _violation(
@@ -1012,8 +1169,14 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
             )
 
     for call in analysis.calls():
-        writer = _last_name(analysis.call_name(call))
-        callback_position = AUDIO_CALLBACK_WRITERS.get(writer)
+        writers = {
+            writer
+            for writer in map(_last_name, analysis.call_names(call))
+            if writer in AUDIO_CALLBACK_WRITERS
+        }
+        if not writers:
+            continue
+        callback_position = AUDIO_CALLBACK_WRITERS[sorted(writers)[0]]
         if callback_position is None:
             continue
         callback = next(
@@ -1026,11 +1189,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
             if len(call.args) > callback_position
             else None,
         )
-        callback_name = (
-            _last_name(analysis.expression_name(callback, call))
-            if callback is not None
-            else ""
-        )
+        callback_name = _only_last_name(analysis, callback, call) if callback else ""
         if callback is None or not _callable_provides_verified_backup(
             analysis, callback_name, context=call
         ):
@@ -1090,7 +1249,7 @@ def _callable_provides_verified_backup(
         elif isinstance(statement, ast.Return) and isinstance(statement.value, ast.Call):
             call = statement.value
         if call is not None:
-            called = _last_name(analysis.call_name(call))
+            called = _only_last_name(analysis, call.func, call)
             if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
                 analysis, called, seen | {name}, call
             ):
@@ -1105,7 +1264,7 @@ def _callable_provides_verified_backup(
                 and isinstance(node.value, ast.Call)
             ]
             if calls:
-                called = _last_name(analysis.call_name(calls[0]))
+                called = _only_last_name(analysis, calls[0].func, calls[0])
                 if called == "create_verified_audio_backup" or _callable_provides_verified_backup(
                     analysis, called, seen | {name}, calls[0]
                 ):
@@ -1193,7 +1352,10 @@ def _direct_call_in_statement(
     return (
         isinstance(statement, ast.Expr)
         and isinstance(statement.value, ast.Call)
-        and _last_name(analysis.call_name(statement.value)) == required_call
+        and {
+            _last_name(name) for name in analysis.call_names(statement.value)
+        }
+        == {required_call}
     )
 
 
@@ -1400,6 +1562,7 @@ def _check_post_commit(analysis: _SourceAnalysis) -> list[Violation]:
             call
             for call in calls
             if _last_name(analysis.call_name(call)) == required_call
+            and analysis.call_names(call) == {POST_COMMIT_QUEUE_ORIGINS[required_call]}
             and not _statically_unreachable(analysis, call)
         ]
         safe_calls = [
@@ -1522,12 +1685,13 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
     observed_sql_fingerprints: dict[tuple[str, str], Counter[str]] = {}
     for analysis in analyses:
         for call in analysis.calls():
-            full_name = analysis.call_name(call)
-            name = _last_name(full_name)
+            names = {_last_name(name) for name in analysis.call_names(call)}
             key = (analysis.item.path, analysis.symbol(call))
             if _is_sqlite_opener_call(analysis, call) and not _is_memory_connect(call):
                 observed["sqlite-connect"][key] += 1
-            if name == "commit" and _looks_like_db_receiver(full_name):
+            if "commit" in names and any(
+                _looks_like_db_receiver(name) for name in analysis.call_names(call)
+            ):
                 observed["commit"][key] += 1
             sql_invocation = _sql_invocation(analysis, call)
             if sql_invocation is not None:
@@ -1540,9 +1704,11 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
                     observed_sql_fingerprints.setdefault(key, Counter())[
                         _sql_fingerprint(sql)
                     ] += 1
-            if name == "save":
+            if "save" in names:
                 observed["audio-save"][key] += 1
-            if name == "safe_engine_db_write" and _is_approved_safe_write_call(analysis, call):
+            if "safe_engine_db_write" in names and _is_approved_safe_write_call(
+                analysis, call
+            ):
                 observed["safe-engine-write"][key] += 1
 
     violations: list[Violation] = []
