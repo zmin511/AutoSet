@@ -906,3 +906,169 @@ def test_wildcard_import_cannot_hide_sqlite_opener_origin():
     assert "unreviewed-wildcard-import" in _rules(
         source, "tools/adversarial.py"
     )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        'f"{fragment} FROM Track"',
+        '"{} FROM Track".format(fragment)',
+        '"%s FROM Track" % fragment',
+        'fragment + " FROM Track"',
+        'part + " FROM Track"',
+        'f"SELECT {fragment} Track"',
+        '"SELECT {} Track".format(fragment)',
+        '"SELECT %s Track" % fragment',
+        '"SELECT " + fragment + " Track"',
+        '"SELECT " + part + " Track"',
+        'f"SELECT * FROM Track {fragment}"',
+        '"SELECT * FROM Track {}".format(fragment)',
+        '"SELECT * FROM Track %s" % fragment',
+        '"SELECT * FROM Track " + fragment',
+        '"SELECT * FROM Track " + part',
+    ],
+)
+def test_incomplete_sql_is_fail_closed_at_every_position(expression):
+    source = (
+        "def unsafe(connection, fragment):\n"
+        "    part = fragment\n"
+        f"    sql = {expression}\n"
+        "    connection.execute(sql)\n"
+    )
+    assert "unapproved-dynamic-sql" in _rules(
+        source, "tools/adversarial.py"
+    )
+
+
+def test_augmented_sql_concatenation_is_fail_closed():
+    source = (
+        "def unsafe(connection, fragment):\n"
+        '    sql = "SELECT * FROM Track "\n'
+        "    sql += fragment\n"
+        "    connection.execute(sql)\n"
+    )
+    assert "unapproved-dynamic-sql" in _rules(
+        source, "tools/adversarial.py"
+    )
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        'sql = f"{operation} * FROM Track"',
+        'sql = "{} * FROM Track".format(operation)',
+        'sql = "%s * FROM Track" % operation',
+        'sql = operation + " * FROM Track"',
+        "statement = operation\n    sql = statement + ' * FROM Track'",
+    ],
+)
+def test_fully_computable_select_sql_has_no_dynamic_warning(assignment):
+    source = (
+        "def inspect(connection):\n"
+        '    operation = "SELECT"\n'
+        f"    {assignment}\n"
+        "    connection.execute(sql)\n"
+    )
+    rules = _rules(source, "tools/report.py")
+    assert "unapproved-dynamic-sql" not in rules
+    assert "unapproved-persistent-sql" not in rules
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        (
+            '    sql = "DELETE FROM Track"\n'
+            "    if safe:\n"
+            '        sql = "SELECT * FROM Track"\n'
+        ),
+        (
+            "    if safe:\n"
+            '        sql = "SELECT * FROM Track"\n'
+            "    else:\n"
+            '        sql = "UPDATE Track SET genre = NULL"\n'
+        ),
+        (
+            '    sql = "SELECT * FROM Track"\n'
+            "    if outer:\n"
+            "        if safe:\n"
+            '            sql = "SELECT id FROM Track"\n'
+            "        else:\n"
+            '            sql = "DELETE FROM Track"\n'
+        ),
+        (
+            '    sql = "DELETE FROM Track"\n'
+            "    if outer:\n"
+            '        sql = "SELECT * FROM Track"\n'
+            "        if safe:\n"
+            '            sql = "SELECT id FROM Track"\n'
+        ),
+    ],
+)
+def test_conditional_sql_bindings_include_every_reachable_value(body):
+    source = (
+        "def unsafe(connection, safe, outer):\n"
+        f"{body}"
+        "    connection.execute(sql)\n"
+    )
+    rules = _rules(source, "tools/adversarial.py")
+    assert rules & {"unapproved-dynamic-sql", "unapproved-persistent-sql"}
+
+
+def test_unambiguous_sequential_sql_reassignment_uses_latest_value():
+    source = (
+        "def inspect(connection):\n"
+        '    sql = "DELETE FROM Track"\n'
+        '    sql = "SELECT * FROM Track"\n'
+        "    connection.execute(sql)\n"
+    )
+    rules = _rules(source, "tools/report.py")
+    assert "unapproved-dynamic-sql" not in rules
+    assert "unapproved-persistent-sql" not in rules
+
+
+def test_all_reachable_static_select_bindings_are_accepted():
+    source = (
+        "def inspect(connection, detailed):\n"
+        "    if detailed:\n"
+        '        sql = "SELECT * FROM Track"\n'
+        "    else:\n"
+        '        sql = "SELECT id FROM Track"\n'
+        "    connection.execute(sql)\n"
+    )
+    rules = _rules(source, "tools/report.py")
+    assert "unapproved-dynamic-sql" not in rules
+    assert "unapproved-persistent-sql" not in rules
+
+
+def test_binding_on_terminated_branch_is_not_reachable():
+    source = (
+        "def inspect(connection, safe):\n"
+        '    sql = "DELETE FROM Track"\n'
+        "    if safe:\n"
+        '        sql = "SELECT * FROM Track"\n'
+        "    else:\n"
+        "        return\n"
+        "    connection.execute(sql)\n"
+    )
+    rules = _rules(source, "tools/report.py")
+    assert "unapproved-dynamic-sql" not in rules
+    assert "unapproved-persistent-sql" not in rules
+
+
+def test_missing_allowlist_file_does_not_hide_other_fingerprint_mismatch():
+    changed = []
+    for item in production_sources(REPO_ROOT):
+        if item.path == "tools/analysis_db.py":
+            continue
+        source = item.source
+        if item.path == "set_app/set_app.py":
+            source = source.replace(
+                "UPDATE Track SET lastEditTime = ? WHERE id = ?",
+                "UPDATE Track SET rating = 0 WHERE id = ?",
+                1,
+            )
+        changed.append(SourceFile(item.path, source))
+    rules = {violation.rule for violation in analyze_sources(changed)}
+    assert "allowlist-expected-file-missing" in rules
+    assert "allowlist-sql-fingerprint-mismatch" in rules

@@ -294,6 +294,42 @@ SQL_FINGERPRINT_ALLOWLIST = {
     ),
 }
 
+# These production reads necessarily construct identifiers or placeholder lists
+# at runtime.  They are approved by exact path/symbol, call count, and an AST
+# fingerprint of the SQL expression; every other incomplete SQL expression is
+# rejected fail-closed.
+DYNAMIC_SQL_READ_ALLOWLIST = {
+    ("set_app/set_app.py", "engine_db_diagnostics"): (
+        "be3985351f933e9e4f6fc12ef3508b706a8d35bf74b389741b67469d1021e8ad",
+        "2ed59d463efd2dd69cfbb9aaf3e2b58651279513ee79f01aff20b886cfd565f6",
+    ),
+    ("set_app/set_app.py", "_load_track_maps_for_files_from_connection"): (
+        "860e25845fa6f05b9782f20df35338cae29ab6ee1b4e036c99e3988a7310ea07",
+        "a5e922f9e3dac945a73e3d3d6b4679ce20742672358e76f251f9ee004e9ceb7f",
+    ),
+    ("set_app/set_app.py", "attach_energy"): (
+        "0f739f449a8f60a5d39f6483c294f0ed3b8ee2549324e9a66d289d53d3b18182",
+    ),
+    ("set_app/set_app.py", "_table_has_column"): (
+        "fa05afc28c3af0a61df56aaa26d93179aa23573d33ff95899552f89205ae67f6",
+    ),
+    ("tools/audio_tag_post_commit.py", "_candidate_jobs"): (
+        "99027c22c128e26acfc1c34304a443ef48881cb2429267917a1ab36cb37686a0",
+    ),
+    ("tools/audio_tag_post_commit.py", "_jobs_by_id"): (
+        "405ba299eea5d099cf59eedfd689313551eaf5832a01eafe55d28e868eb8df1e",
+    ),
+    ("tools/engine_db_diff_cues.py", "fetch_rows"): (
+        "4f992f2bdc1a43c1164634661f022d6c394199a9f056a0b217136f1649f35887",
+    ),
+    ("tools/engine_db_diff_cues.py", "table_schema"): (
+        "8831a5470d5a5622194e048788ad7a452ff59c9e1f946943b24b6a9a34e4e952",
+    ),
+    ("tools/engine_set_builder.py", "_row_has_column"): (
+        "b41305afb53135356efd4b219f287d6f3b347b597518d8127d9b0cb98f2b2381",
+    ),
+}
+
 COMMIT_ALLOWLIST = {
     ("tools/analysis_db.py", "initialize_schema"): (
         1,
@@ -630,20 +666,200 @@ class _SourceAnalysis:
 
     def _binding_candidates(self, name: str, context: ast.AST) -> list[ast.AST]:
         """Return every value a nearest visible binding may produce."""
+        def merge(*groups: list[ast.AST]) -> list[ast.AST]:
+            result: list[ast.AST] = []
+            for value in (item for group in groups for item in group):
+                if value not in result:
+                    result.append(value)
+            return result
+
+        def assigned_values(node: ast.AST) -> list[ast.AST] | None:
+            value: ast.AST | None = None
+            targets: list[ast.AST] = []
+            if isinstance(node, ast.Assign):
+                value, targets = node.value, node.targets
+            elif isinstance(node, ast.AnnAssign):
+                value, targets = node.value, [node.target]
+            elif isinstance(node, ast.NamedExpr):
+                value, targets = node.value, [node.target]
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                value, targets = node, [ast.Name(id=node.name)]
+            if value is None:
+                return None
+            values = [
+                bound_value
+                for target in targets
+                for bound_name, bound_value in self._target_bindings(target, value)
+                if bound_name == name
+            ]
+            return values or None
+
+        def contains(root: ast.AST, target: ast.AST) -> bool:
+            current = target
+            while current in self.parents:
+                current = self.parents[current]
+                if current is root:
+                    return True
+            return root is target
+
+        def flow_complete(node: ast.stmt, state: list[ast.AST]) -> list[ast.AST]:
+            if (
+                isinstance(node, ast.AugAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == name
+            ):
+                return [
+                    ast.BinOp(left=value, op=node.op, right=node.value)
+                    for value in state
+                ] or [
+                    ast.BinOp(
+                        left=ast.Name(id=name, ctx=ast.Load()),
+                        op=node.op,
+                        right=node.value,
+                    )
+                ]
+            direct = assigned_values(node)
+            if direct is not None:
+                return direct
+            if isinstance(node, ast.If):
+                body = flow_block(node.body, state)
+                orelse = flow_block(node.orelse, state) if node.orelse else state
+                return merge(body, orelse)
+            if isinstance(node, (ast.For, ast.AsyncFor)):
+                loop_values: list[ast.AST] = []
+                candidates = (
+                    node.iter.elts
+                    if isinstance(node.iter, (ast.List, ast.Tuple, ast.Set))
+                    else [node.iter]
+                )
+                for candidate in candidates:
+                    loop_values.extend(
+                        bound_value
+                        for bound_name, bound_value in self._target_bindings(
+                            node.target, candidate
+                        )
+                        if bound_name == name
+                    )
+                body = flow_block(node.body, loop_values or state)
+                result = merge(state, body)
+                return flow_block(node.orelse, result) if node.orelse else result
+            if isinstance(node, ast.While):
+                body = flow_block(node.body, state)
+                result = merge(state, body)
+                return flow_block(node.orelse, result) if node.orelse else result
+            if isinstance(node, (ast.With, ast.AsyncWith)):
+                return flow_block(node.body, state)
+            if isinstance(node, ast.Try):
+                normal = flow_block(node.orelse, flow_block(node.body, state))
+                handlers = [flow_block(handler.body, state) for handler in node.handlers]
+                result = merge(normal, *handlers)
+                return flow_block(node.finalbody, result)
+            if isinstance(node, ast.Match):
+                return merge(
+                    state,
+                    *(flow_block(case.body, state) for case in node.cases),
+                )
+            return state
+
+        def flow_to_target(
+            node: ast.stmt,
+            state: list[ast.AST],
+        ) -> list[ast.AST]:
+            if isinstance(node, ast.If):
+                if contains(node.test, context):
+                    return state
+                branch = node.body if any(contains(item, context) for item in node.body) else node.orelse
+                return flow_block(branch, state, context)
+            if isinstance(node, (ast.For, ast.AsyncFor)):
+                if contains(node.iter, context):
+                    return state
+                loop_state = state
+                candidates = (
+                    node.iter.elts
+                    if isinstance(node.iter, (ast.List, ast.Tuple, ast.Set))
+                    else [node.iter]
+                )
+                values = [
+                    bound_value
+                    for candidate in candidates
+                    for bound_name, bound_value in self._target_bindings(
+                        node.target, candidate
+                    )
+                    if bound_name == name
+                ]
+                if values:
+                    loop_state = values
+                branch = node.body if any(contains(item, context) for item in node.body) else node.orelse
+                return flow_block(branch, loop_state, context)
+            if isinstance(node, ast.While):
+                if contains(node.test, context):
+                    return state
+                branch = node.body if any(contains(item, context) for item in node.body) else node.orelse
+                return flow_block(branch, state, context)
+            if isinstance(node, (ast.With, ast.AsyncWith)):
+                return flow_block(node.body, state, context)
+            if isinstance(node, ast.Try):
+                branches = [node.body, node.orelse, node.finalbody]
+                branches.extend(handler.body for handler in node.handlers)
+                for branch in branches:
+                    if any(contains(item, context) for item in branch):
+                        return flow_block(branch, state, context)
+            if isinstance(node, ast.Match):
+                for case in node.cases:
+                    if any(contains(item, context) for item in case.body):
+                        return flow_block(case.body, state, context)
+            return state
+
+        def flow_block(
+            statements: list[ast.stmt],
+            initial: list[ast.AST],
+            target: ast.AST | None = None,
+        ) -> list[ast.AST]:
+            state = initial
+            for statement in statements:
+                if target is not None and contains(statement, target):
+                    return flow_to_target(statement, state)
+                if isinstance(
+                    statement,
+                    (ast.Return, ast.Raise, ast.Break, ast.Continue),
+                ):
+                    return []
+                state = flow_complete(statement, state)
+            return state
+
+        scopes: list[ast.AST] = []
+        current = context
+        while current in self.parents:
+            current = self.parents[current]
+            if isinstance(
+                current,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.Module),
+            ):
+                scopes.append(current)
+        for scope in scopes:
+            if isinstance(scope, ast.Lambda):
+                continue
+            candidates = flow_block(scope.body, [], context)
+            if candidates:
+                return candidates
         line = getattr(context, "lineno", 10**9)
         symbol = self.symbol(context)
-        scopes = []
-        if symbol != "<module>":
-            parts = symbol.split(".")
-            scopes.extend(".".join(parts[:size]) for size in range(len(parts), 0, -1))
-        scopes.append("<module>")
-        for scope in scopes:
-            candidates = self.bindings.get((scope, name), [])
-            if scope != "<module>" or symbol == "<module>":
-                candidates = [item for item in candidates if item[0] <= line]
-            if candidates:
-                latest = max(item[0] for item in candidates)
-                return [value for binding_line, value in candidates if binding_line == latest]
+        fallback = [
+            value
+            for binding_line, value in self.bindings.get((symbol, name), [])
+            if binding_line <= line
+        ]
+        if fallback:
+            latest = max(
+                binding_line
+                for binding_line, _value in self.bindings[(symbol, name)]
+                if binding_line <= line
+            )
+            return [
+                value
+                for binding_line, value in self.bindings[(symbol, name)]
+                if binding_line == latest
+            ]
         return []
 
     def _binding(self, name: str, context: ast.AST) -> ast.AST | None:
@@ -903,11 +1119,18 @@ def _static_format_value(
     ):
         return node.value
     if isinstance(node, ast.Name) and node.id not in seen:
-        binding = analysis._binding(node.id, context)
-        if binding is not None:
-            return _static_format_value(
-                analysis, binding, context, seen | {node.id}
-            )
+        bindings = analysis._binding_candidates(node.id, context)
+        if bindings:
+            values = [
+                _static_format_value(
+                    analysis, binding, context, seen | {node.id}
+                )
+                for binding in bindings
+            ]
+            if all(value is not _UNKNOWN_STATIC_VALUE for value in values):
+                first = values[0]
+                if all(value == first for value in values[1:]):
+                    return first
     if isinstance(node, ast.Tuple):
         values = [
             _static_format_value(analysis, item, context, seen)
@@ -941,9 +1164,16 @@ def _static_string(
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.Name) and node.id not in seen:
-        binding = analysis._binding(node.id, context)
-        if binding is not None:
-            return _static_string(analysis, binding, context, seen | {node.id})
+        bindings = analysis._binding_candidates(node.id, context)
+        if bindings:
+            values = [
+                _static_string(analysis, binding, context, seen | {node.id})
+                for binding in bindings
+            ]
+            if all(value is not None for value in values):
+                unique = set(values)
+                if len(unique) == 1:
+                    return values[0]
     if isinstance(node, ast.JoinedStr):
         parts: list[str] = []
         for value in node.values:
@@ -1043,16 +1273,19 @@ def _sql_template(
     context: ast.AST,
     seen: frozenset[str] = frozenset(),
 ) -> str | None:
-    """Resolve SQL structure while marking non-constant substitutions as unknown."""
+    """Resolve the visible SQL skeleton while marking unknown substitutions."""
     exact = _static_string(analysis, node, context, seen)
     if exact is not None:
         return exact
     if isinstance(node, ast.Name) and node.id not in seen:
-        binding = analysis._binding(node.id, context)
-        if binding is not None:
-            return _sql_template(
-                analysis, binding, context, seen | {node.id}
-            )
+        bindings = analysis._binding_candidates(node.id, context)
+        templates = {
+            _sql_template(analysis, binding, context, seen | {node.id})
+            for binding in bindings
+        }
+        if len(templates) == 1:
+            return templates.pop()
+        return None
     if isinstance(node, ast.JoinedStr):
         return "".join(
             value.value
@@ -1072,14 +1305,36 @@ def _sql_template(
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "format"
     ):
-        return _sql_template(
-            analysis, node.func.value, context, seen
-        )
+        return _sql_template(analysis, node.func.value, context, seen)
     return None
 
 
 def _literal_sql(analysis: _SourceAnalysis, node: ast.AST, context: ast.AST) -> str | None:
     return _sql_template(analysis, node, context)
+
+
+def _literal_sql_candidates(
+    analysis: _SourceAnalysis,
+    node: ast.AST,
+    context: ast.AST,
+    seen: frozenset[str] = frozenset(),
+) -> list[str | None]:
+    """Return each statically reachable complete SQL value."""
+    if isinstance(node, ast.Name) and node.id not in seen:
+        bindings = analysis._binding_candidates(node.id, context)
+        if bindings:
+            return [
+                candidate
+                for binding in bindings
+                for candidate in _literal_sql_candidates(
+                    analysis, binding, context, seen | {node.id}
+                )
+            ]
+    if isinstance(node, ast.IfExp):
+        return _literal_sql_candidates(
+            analysis, node.body, context, seen
+        ) + _literal_sql_candidates(analysis, node.orelse, context, seen)
+    return [_static_string(analysis, node, context, seen)]
 
 
 def _normalized_sql(sql: str) -> str:
@@ -1116,6 +1371,42 @@ def _sql_write_signature(sql: str) -> str | None:
 
 def _sql_fingerprint(sql: str) -> str:
     return hashlib.sha256(_normalized_sql(sql).encode("utf-8")).hexdigest()
+
+
+def _expression_fingerprint(
+    analysis: _SourceAnalysis,
+    node: ast.AST,
+    context: ast.AST,
+    seen: frozenset[str] = frozenset(),
+) -> str:
+    rendered = ast.dump(node, include_attributes=False)
+    if isinstance(node, ast.Name) and node.id not in seen:
+        bindings = analysis._binding_candidates(node.id, context)
+        rendered += "|" + "|".join(
+            sorted(
+                _expression_fingerprint(
+                    analysis, binding, context, seen | {node.id}
+                )
+                for binding in bindings
+            )
+        )
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _is_approved_incomplete_sql(
+    analysis: _SourceAnalysis,
+    node: ast.AST,
+    context: ast.AST,
+    template: str | None,
+) -> bool:
+    key = (analysis.item.path, analysis.symbol(context))
+    if _expression_fingerprint(
+        analysis, node, context
+    ) in DYNAMIC_SQL_READ_ALLOWLIST.get(key, ()):
+        return True
+    if template is None or _sql_write_signature(template) is None:
+        return False
+    return _sql_fingerprint(template) in SQL_FINGERPRINT_ALLOWLIST.get(key, ())
 
 
 def _is_sqlite_opener_expression(
@@ -1460,7 +1751,24 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
         if sql_invocation is not None:
             sql_method, sql_node = sql_invocation
             sql = _literal_sql(analysis, sql_node, call)
-            if sql is None:
+            exact_candidates = _literal_sql_candidates(
+                analysis, sql_node, call
+            )
+            incomplete = not exact_candidates or any(
+                candidate is None for candidate in exact_candidates
+            )
+            mutation_sql = next(
+                (
+                    candidate
+                    for candidate in exact_candidates
+                    if candidate is not None
+                    and _sql_write_signature(candidate) is not None
+                ),
+                None,
+            )
+            if incomplete and not _is_approved_incomplete_sql(
+                analysis, sql_node, call, sql
+            ):
                 violations.append(
                     _violation(
                         "unapproved-dynamic-sql",
@@ -1471,7 +1779,11 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                         "a static SQL expression or an explicitly reviewed persistence helper",
                     )
                 )
-            elif _sql_write_signature(sql) is not None:
+            reviewed_sql = mutation_sql or sql
+            if (
+                reviewed_sql is not None
+                and _sql_write_signature(reviewed_sql) is not None
+            ):
                 mutation_counts[key] += 1
                 allowed = SQL_MUTATION_ALLOWLIST.get(key)
                 if allowed is None or mutation_counts[key] > allowed[0]:
@@ -1480,7 +1792,7 @@ def _check_calls(analysis: _SourceAnalysis) -> list[Violation]:
                             "unapproved-persistent-sql",
                             analysis,
                             call,
-                            f"{sql_method}({sql[:80]!r})",
+                            f"{sql_method}({reviewed_sql[:80]!r})",
                             "mutating SQL is outside an exact reviewed persistence symbol",
                             "a safe Engine callback or documented analysis/queue storage function",
                         )
@@ -2029,6 +2341,8 @@ def _check_startup(analysis: _SourceAnalysis) -> list[Violation]:
 
 
 def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
+    if len(analyses) <= 1:
+        return []
     by_path = {analysis.item.path: analysis for analysis in analyses}
     expected_paths = {
         path
@@ -2039,12 +2353,24 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
             AUDIO_SAVE_ALLOWLIST,
             SAFE_ENGINE_WRITE_CALLS,
             DYNAMIC_GETATTR_ALLOWLIST,
+            DYNAMIC_SQL_READ_ALLOWLIST,
         )
         for path, _symbol in policy
     }
     expected_paths.update(path for path, _symbol, _attribute in REFLECTIVE_ATTRIBUTE_ALLOWLIST)
-    if not expected_paths.issubset(by_path):
-        return []
+    violations: list[Violation] = []
+    for path in sorted(expected_paths - by_path.keys()):
+        placeholder = _SourceAnalysis(SourceFile(path, ""))
+        violations.append(
+            _violation(
+                "allowlist-expected-file-missing",
+                placeholder,
+                placeholder.tree,
+                path,
+                "an expected allowlist source file is absent from the analysis",
+                "restore the reviewed source file and rerun the complete production scan",
+            )
+        )
 
     observed = {
         "sqlite-connect": Counter(),
@@ -2053,6 +2379,7 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
         "audio-save": Counter(),
         "safe-engine-write": Counter(),
         "dynamic-getattr": Counter(),
+        "dynamic-sql-read": Counter(),
         "reflective-attribute": Counter(),
     }
     observed_sql_operations: dict[tuple[str, str], Counter[str]] = {}
@@ -2078,6 +2405,18 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
             if sql_invocation is not None:
                 _sql_method, sql_node = sql_invocation
                 sql = _literal_sql(analysis, sql_node, call)
+                exact_candidates = _literal_sql_candidates(
+                    analysis, sql_node, call
+                )
+                if (
+                    (
+                        not exact_candidates
+                        or any(candidate is None for candidate in exact_candidates)
+                    )
+                    and _expression_fingerprint(analysis, sql_node, call)
+                    in DYNAMIC_SQL_READ_ALLOWLIST.get(key, ())
+                ):
+                    observed["dynamic-sql-read"][key] += 1
                 signature = _sql_write_signature(sql) if sql is not None else None
                 if signature is not None:
                     observed["mutating-sql"][key] += 1
@@ -2095,17 +2434,25 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
                 if _static_string(analysis, call.args[1], call) is None:
                     observed["dynamic-getattr"][key] += 1
 
-    violations: list[Violation] = []
     policies = (
         ("sqlite-connect", SQLITE_CONNECT_ALLOWLIST),
         ("mutating-sql", SQL_MUTATION_ALLOWLIST),
         ("commit", COMMIT_ALLOWLIST),
         ("audio-save", AUDIO_SAVE_ALLOWLIST),
         ("dynamic-getattr", DYNAMIC_GETATTR_ALLOWLIST),
+        (
+            "dynamic-sql-read",
+            {
+                key: (len(fingerprints), "exact reviewed dynamic read SQL")
+                for key, fingerprints in DYNAMIC_SQL_READ_ALLOWLIST.items()
+            },
+        ),
         ("reflective-attribute", REFLECTIVE_ATTRIBUTE_ALLOWLIST),
     )
     for category, policy in policies:
         for key, (expected, _reason) in policy.items():
+            if key[0] not in by_path:
+                continue
             actual = observed[category][key]
             if actual == expected:
                 continue
@@ -2120,7 +2467,44 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
                     "an explicit architecture review and exact allowlist update",
                 )
             )
+    for key, expected_fingerprints in DYNAMIC_SQL_READ_ALLOWLIST.items():
+        if key[0] not in by_path:
+            continue
+        actual = Counter(
+            _expression_fingerprint(by_path[key[0]], sql_node, call)
+            for call in by_path[key[0]].calls()
+            if by_path[key[0]].symbol(call) == key[1]
+            for invocation in [_sql_invocation(by_path[key[0]], call)]
+            if invocation is not None
+            for _method, sql_node in [invocation]
+            if (
+                not (
+                    candidates := _literal_sql_candidates(
+                        by_path[key[0]], sql_node, call
+                    )
+                )
+                or any(candidate is None for candidate in candidates)
+            )
+            and _expression_fingerprint(by_path[key[0]], sql_node, call)
+            in expected_fingerprints
+        )
+        expected = Counter(expected_fingerprints)
+        if actual == expected:
+            continue
+        analysis = by_path[key[0]]
+        violations.append(
+            _violation(
+                "allowlist-dynamic-sql-fingerprint-mismatch",
+                analysis,
+                analysis.functions.get(key[1].split(".", 1)[0], analysis.tree),
+                f"dynamic read SQL in {key[1]}",
+                "the incomplete SQL expression differs from the reviewed AST fingerprints",
+                "a fully static SQL expression or an explicit architecture review",
+            )
+        )
     for key, expected_operations in SQL_OPERATION_ALLOWLIST.items():
+        if key[0] not in by_path:
+            continue
         actual = observed_sql_operations.get(key, Counter())
         expected = Counter(expected_operations)
         if actual == expected:
@@ -2137,6 +2521,8 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
             )
         )
     for key, expected_fingerprints in SQL_FINGERPRINT_ALLOWLIST.items():
+        if key[0] not in by_path:
+            continue
         actual = observed_sql_fingerprints.get(key, Counter())
         expected = Counter(expected_fingerprints)
         if actual == expected:
@@ -2153,6 +2539,8 @@ def _check_exact_allowlists(analyses: list[_SourceAnalysis]) -> list[Violation]:
             )
         )
     for key in SAFE_ENGINE_WRITE_CALLS:
+        if key[0] not in by_path:
+            continue
         actual = observed["safe-engine-write"][key]
         if actual == 1:
             continue
