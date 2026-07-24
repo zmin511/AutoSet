@@ -1056,6 +1056,72 @@ def test_binding_on_terminated_branch_is_not_reachable():
     assert "unapproved-persistent-sql" not in rules
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        (
+            '    sql = "SELECT * FROM Track"\n'
+            "    try:\n"
+            '        sql = "DELETE FROM Track"\n'
+            '        raise RuntimeError("synthetic")\n'
+            "    except RuntimeError:\n"
+            "        pass\n"
+        ),
+        (
+            '    sql = "SELECT * FROM Track"\n'
+            "    for marker in [1]:\n"
+            '        sql = "DELETE FROM Track"\n'
+            "        break\n"
+        ),
+        (
+            '    sql = "SELECT * FROM Track"\n'
+            "    for marker in [1]:\n"
+            '        sql = "DELETE FROM Track"\n'
+            "        continue\n"
+        ),
+    ],
+)
+def test_abrupt_control_flow_preserves_reachable_mutating_sql(body):
+    source = (
+        "def unsafe(connection):\n"
+        f"{body}"
+        "    connection.execute(sql)\n"
+    )
+    rules = _rules(source, "tools/adversarial.py")
+    assert rules & {"unapproved-dynamic-sql", "unapproved-persistent-sql"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        (
+            '    sql = "DELETE FROM Track"\n'
+            "    try:\n"
+            '        sql = "SELECT * FROM Track"\n'
+            "        raise RuntimeError\n"
+            "    except RuntimeError:\n"
+            "        pass\n"
+        ),
+        (
+            '    sql = "DELETE FROM Track"\n'
+            "    for marker in [1]:\n"
+            "        break\n"
+            '        sql = "SELECT * FROM Track"\n'
+            "    return\n"
+        ),
+    ],
+)
+def test_abrupt_control_flow_does_not_revive_unreachable_bindings(body):
+    source = (
+        "def inspect(connection):\n"
+        f"{body}"
+        "    connection.execute(sql)\n"
+    )
+    rules = _rules(source, "tools/report.py")
+    assert "unapproved-dynamic-sql" not in rules
+    assert "unapproved-persistent-sql" not in rules
+
+
 def test_missing_allowlist_file_does_not_hide_other_fingerprint_mismatch():
     changed = []
     for item in production_sources(REPO_ROOT):

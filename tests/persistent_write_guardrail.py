@@ -673,6 +673,35 @@ class _SourceAnalysis:
                     result.append(value)
             return result
 
+        State = list[ast.AST] | None
+
+        @dataclass
+        class Flow:
+            normal: State
+            returns: State
+            raises: State
+            breaks: State
+            continues: State
+
+        def normal_flow(state: list[ast.AST]) -> Flow:
+            return Flow(state, None, None, None, None)
+
+        def unreachable_flow() -> Flow:
+            return Flow(None, None, None, None, None)
+
+        def merge_states(*states: State) -> State:
+            reachable = [state for state in states if state is not None]
+            return merge(*reachable) if reachable else None
+
+        def merge_flows(*flows: Flow) -> Flow:
+            return Flow(
+                merge_states(*(flow.normal for flow in flows)),
+                merge_states(*(flow.returns for flow in flows)),
+                merge_states(*(flow.raises for flow in flows)),
+                merge_states(*(flow.breaks for flow in flows)),
+                merge_states(*(flow.continues for flow in flows)),
+            )
+
         def assigned_values(node: ast.AST) -> list[ast.AST] | None:
             value: ast.AST | None = None
             targets: list[ast.AST] = []
@@ -702,29 +731,44 @@ class _SourceAnalysis:
                     return True
             return root is target
 
-        def flow_complete(node: ast.stmt, state: list[ast.AST]) -> list[ast.AST]:
+        def flow_complete(node: ast.stmt, state: list[ast.AST]) -> Flow:
+            if isinstance(node, ast.Return):
+                return Flow(None, state, None, None, None)
+            if isinstance(node, ast.Raise):
+                return Flow(None, None, state, None, None)
+            if isinstance(node, ast.Break):
+                return Flow(None, None, None, state, None)
+            if isinstance(node, ast.Continue):
+                return Flow(None, None, None, None, state)
             if (
                 isinstance(node, ast.AugAssign)
                 and isinstance(node.target, ast.Name)
                 and node.target.id == name
             ):
-                return [
-                    ast.BinOp(left=value, op=node.op, right=node.value)
-                    for value in state
-                ] or [
-                    ast.BinOp(
-                        left=ast.Name(id=name, ctx=ast.Load()),
-                        op=node.op,
-                        right=node.value,
-                    )
-                ]
+                return normal_flow(
+                    [
+                        ast.BinOp(left=value, op=node.op, right=node.value)
+                        for value in state
+                    ]
+                    or [
+                        ast.BinOp(
+                            left=ast.Name(id=name, ctx=ast.Load()),
+                            op=node.op,
+                            right=node.value,
+                        )
+                    ]
+                )
             direct = assigned_values(node)
             if direct is not None:
-                return direct
+                return normal_flow(direct)
             if isinstance(node, ast.If):
                 body = flow_block(node.body, state)
-                orelse = flow_block(node.orelse, state) if node.orelse else state
-                return merge(body, orelse)
+                orelse = (
+                    flow_block(node.orelse, state)
+                    if node.orelse
+                    else normal_flow(state)
+                )
+                return merge_flows(body, orelse)
             if isinstance(node, (ast.For, ast.AsyncFor)):
                 loop_values: list[ast.AST] = []
                 candidates = (
@@ -741,38 +785,107 @@ class _SourceAnalysis:
                         if bound_name == name
                     )
                 body = flow_block(node.body, loop_values or state)
-                result = merge(state, body)
-                return flow_block(node.orelse, result) if node.orelse else result
+                exhausted = merge_states(state, body.normal, body.continues)
+                assert exhausted is not None
+                orelse = (
+                    flow_block(node.orelse, exhausted)
+                    if node.orelse
+                    else normal_flow(exhausted)
+                )
+                return Flow(
+                    merge_states(orelse.normal, body.breaks),
+                    merge_states(body.returns, orelse.returns),
+                    merge_states(body.raises, orelse.raises),
+                    orelse.breaks,
+                    orelse.continues,
+                )
             if isinstance(node, ast.While):
                 body = flow_block(node.body, state)
-                result = merge(state, body)
-                return flow_block(node.orelse, result) if node.orelse else result
+                exhausted = merge_states(state, body.normal, body.continues)
+                assert exhausted is not None
+                orelse = (
+                    flow_block(node.orelse, exhausted)
+                    if node.orelse
+                    else normal_flow(exhausted)
+                )
+                return Flow(
+                    merge_states(orelse.normal, body.breaks),
+                    merge_states(body.returns, orelse.returns),
+                    merge_states(body.raises, orelse.raises),
+                    orelse.breaks,
+                    orelse.continues,
+                )
             if isinstance(node, (ast.With, ast.AsyncWith)):
                 return flow_block(node.body, state)
             if isinstance(node, ast.Try):
-                normal = flow_block(node.orelse, flow_block(node.body, state))
-                handlers = [flow_block(handler.body, state) for handler in node.handlers]
-                result = merge(normal, *handlers)
-                return flow_block(node.finalbody, result)
+                body = flow_block(node.body, state)
+                normal = (
+                    flow_block(node.orelse, body.normal)
+                    if body.normal is not None
+                    else unreachable_flow()
+                )
+                handler_state = body.raises if body.raises is not None else state
+                handlers = [
+                    flow_block(handler.body, handler_state)
+                    for handler in node.handlers
+                ]
+                result = merge_flows(
+                    Flow(
+                        normal.normal,
+                        merge_states(body.returns, normal.returns),
+                        merge_states(body.raises, normal.raises),
+                        merge_states(body.breaks, normal.breaks),
+                        merge_states(body.continues, normal.continues),
+                    ),
+                    *handlers,
+                )
+                if not node.finalbody:
+                    return result
+                final = unreachable_flow()
+                for kind in (
+                    "normal",
+                    "returns",
+                    "raises",
+                    "breaks",
+                    "continues",
+                ):
+                    incoming = getattr(result, kind)
+                    if incoming is None:
+                        continue
+                    completed = flow_block(node.finalbody, incoming)
+                    preserved = unreachable_flow()
+                    setattr(preserved, kind, completed.normal)
+                    final = merge_flows(
+                        final,
+                        preserved,
+                        Flow(
+                            None,
+                            completed.returns,
+                            completed.raises,
+                            completed.breaks,
+                            completed.continues,
+                        ),
+                    )
+                return final
             if isinstance(node, ast.Match):
-                return merge(
-                    state,
+                return merge_flows(
+                    normal_flow(state),
                     *(flow_block(case.body, state) for case in node.cases),
                 )
-            return state
+            return normal_flow(state)
 
         def flow_to_target(
             node: ast.stmt,
             state: list[ast.AST],
-        ) -> list[ast.AST]:
+        ) -> Flow:
             if isinstance(node, ast.If):
                 if contains(node.test, context):
-                    return state
+                    return normal_flow(state)
                 branch = node.body if any(contains(item, context) for item in node.body) else node.orelse
                 return flow_block(branch, state, context)
             if isinstance(node, (ast.For, ast.AsyncFor)):
                 if contains(node.iter, context):
-                    return state
+                    return normal_flow(state)
                 loop_state = state
                 candidates = (
                     node.iter.elts
@@ -789,43 +902,76 @@ class _SourceAnalysis:
                 ]
                 if values:
                     loop_state = values
-                branch = node.body if any(contains(item, context) for item in node.body) else node.orelse
-                return flow_block(branch, loop_state, context)
+                if any(contains(item, context) for item in node.body):
+                    return flow_block(node.body, loop_state, context)
+                body = flow_block(node.body, loop_state)
+                exhausted = merge_states(state, body.normal, body.continues)
+                assert exhausted is not None
+                return flow_block(node.orelse, exhausted, context)
             if isinstance(node, ast.While):
                 if contains(node.test, context):
-                    return state
-                branch = node.body if any(contains(item, context) for item in node.body) else node.orelse
-                return flow_block(branch, state, context)
+                    return normal_flow(state)
+                if any(contains(item, context) for item in node.body):
+                    return flow_block(node.body, state, context)
+                body = flow_block(node.body, state)
+                exhausted = merge_states(state, body.normal, body.continues)
+                assert exhausted is not None
+                return flow_block(node.orelse, exhausted, context)
             if isinstance(node, (ast.With, ast.AsyncWith)):
                 return flow_block(node.body, state, context)
             if isinstance(node, ast.Try):
-                branches = [node.body, node.orelse, node.finalbody]
-                branches.extend(handler.body for handler in node.handlers)
-                for branch in branches:
-                    if any(contains(item, context) for item in branch):
-                        return flow_block(branch, state, context)
+                body = flow_block(node.body, state)
+                if any(contains(item, context) for item in node.body):
+                    return flow_block(node.body, state, context)
+                if any(contains(item, context) for item in node.orelse):
+                    if body.normal is None:
+                        return unreachable_flow()
+                    return flow_block(node.orelse, body.normal, context)
+                for handler in node.handlers:
+                    if any(contains(item, context) for item in handler.body):
+                        handler_state = (
+                            body.raises if body.raises is not None else state
+                        )
+                        return flow_block(handler.body, handler_state, context)
+                if any(contains(item, context) for item in node.finalbody):
+                    incoming = merge_states(
+                        body.normal,
+                        body.returns,
+                        body.raises,
+                        body.breaks,
+                        body.continues,
+                    )
+                    if incoming is None:
+                        return unreachable_flow()
+                    return flow_block(node.finalbody, incoming, context)
             if isinstance(node, ast.Match):
                 for case in node.cases:
                     if any(contains(item, context) for item in case.body):
                         return flow_block(case.body, state, context)
-            return state
+            return normal_flow(state)
 
         def flow_block(
             statements: list[ast.stmt],
             initial: list[ast.AST],
             target: ast.AST | None = None,
-        ) -> list[ast.AST]:
-            state = initial
+        ) -> Flow:
+            result = normal_flow(initial)
             for statement in statements:
                 if target is not None and contains(statement, target):
-                    return flow_to_target(statement, state)
-                if isinstance(
-                    statement,
-                    (ast.Return, ast.Raise, ast.Break, ast.Continue),
-                ):
-                    return []
-                state = flow_complete(statement, state)
-            return state
+                    if result.normal is None:
+                        return result
+                    return flow_to_target(statement, result.normal)
+                if result.normal is None:
+                    break
+                completed = flow_complete(statement, result.normal)
+                result = Flow(
+                    completed.normal,
+                    merge_states(result.returns, completed.returns),
+                    merge_states(result.raises, completed.raises),
+                    merge_states(result.breaks, completed.breaks),
+                    merge_states(result.continues, completed.continues),
+                )
+            return result
 
         scopes: list[ast.AST] = []
         current = context
@@ -839,7 +985,7 @@ class _SourceAnalysis:
         for scope in scopes:
             if isinstance(scope, ast.Lambda):
                 continue
-            candidates = flow_block(scope.body, [], context)
+            candidates = flow_block(scope.body, [], context).normal or []
             if candidates:
                 return candidates
         line = getattr(context, "lineno", 10**9)
